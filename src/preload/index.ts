@@ -10,6 +10,7 @@ const agentApi: AgentApi = {
   respondToUserInput: (input) => ipcRenderer.invoke(AGENT_CHANNELS.respondToUserInput, input),
   stopSession: (input) => ipcRenderer.invoke(AGENT_CHANNELS.stopSession, input),
   listProviders: () => ipcRenderer.invoke(AGENT_CHANNELS.listProviders),
+  listModels: () => ipcRenderer.invoke(AGENT_CHANNELS.listModels),
   clearThread: (input) => ipcRenderer.invoke(AGENT_CHANNELS.clearThread, input),
   openWorkspaceFolder: () => ipcRenderer.invoke(AGENT_CHANNELS.openWorkspaceFolder),
   revealPath: (input) => ipcRenderer.invoke(AGENT_CHANNELS.revealPath, input),

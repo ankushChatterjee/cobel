@@ -8,6 +8,7 @@ import type {
   StopSessionInput
 } from '../../../shared/agent'
 import type { ProviderAdapter, SendTurnInput, StartSessionInput } from './types'
+import type { ModelInfo } from './codex/codex-api-types'
 
 export class ProviderService {
   private readonly adapters = new Map<ProviderId, ProviderAdapter>()
@@ -24,6 +25,15 @@ export class ProviderService {
       [...this.adapters.values()].map((adapter) => adapter.getSummary())
     )
     return summaries
+  }
+
+  async listModels(provider: ProviderId): Promise<ModelInfo[]> {
+    const adapter = this.adapters.get(provider)
+    if (!adapter) return []
+    const maybeListModels = (adapter as unknown as { listModels?: () => Promise<ModelInfo[]> })
+      .listModels
+    if (typeof maybeListModels !== 'function') return []
+    return maybeListModels.call(adapter)
   }
 
   async startSession(input: StartSessionInput & { provider: ProviderId }): Promise<unknown> {

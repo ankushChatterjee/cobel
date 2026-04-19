@@ -1,5 +1,17 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ArrowUp,
+  ChevronDown,
+  ChevronRight,
+  FolderOpen,
+  Plus,
+  RotateCcw,
+  Square,
+  ExternalLink,
+  FilePen
+} from 'lucide-react'
 import type {
+  ModelInfo,
   OpenWorkspaceFolderResult,
   OrchestrationMessage,
   OrchestrationThread,
@@ -12,10 +24,12 @@ import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
 const workspaceStorageKey = 'gencode.workspace.v1'
 
 const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
-  { value: 'approval-required', label: 'guarded' },
-  { value: 'auto-accept-edits', label: 'workspace-write' },
-  { value: 'full-access', label: 'full-access' }
+  { value: 'approval-required', label: 'Guarded' },
+  { value: 'auto-accept-edits', label: 'Write' },
+  { value: 'full-access', label: 'Full access' }
 ]
+
+
 
 interface ProjectChat {
   id: string
@@ -43,6 +57,8 @@ export function HomePage(): React.JSX.Element {
   const [providers, setProviders] = useState<ProviderSummary[]>([])
   const [prompt, setPrompt] = useState('')
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>('auto-accept-edits')
+  const [models, setModels] = useState<ModelInfo[]>([])
+  const [model, setModel] = useState<string>('')
   const lastSequenceRef = useRef(0)
   const conversationRef = useRef<HTMLElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
@@ -63,6 +79,7 @@ export function HomePage(): React.JSX.Element {
   const activeProvider = providers[0]
   const sessionStatus = thread?.session?.status ?? 'idle'
   const isRunning = sessionStatus === 'starting' || sessionStatus === 'running'
+  const sessionError = thread?.session?.status === 'error' ? (thread.session.lastError ?? null) : null
   const transcriptItems = useMemo(() => buildTranscriptItems(thread), [thread])
 
   useEffect(() => {
@@ -76,6 +93,21 @@ export function HomePage(): React.JSX.Element {
       .catch((providerError) => {
         setError(providerError instanceof Error ? providerError.message : String(providerError))
       })
+
+    void window.agentApi
+      .listModels()
+      .then((fetched) => {
+        if (fetched.length > 0) {
+          setModels(fetched)
+          setModel((current) => {
+            const found = fetched.find((m) => m.id === current)
+            return found ? current : (fetched.find((m) => m.isDefault)?.id ?? fetched[0]?.id ?? '')
+          })
+        }
+      })
+      .catch((modelError) => {
+        console.error('[gencode:listModels]', modelError)
+      })
   }, [])
 
   useEffect(() => {
@@ -86,27 +118,23 @@ export function HomePage(): React.JSX.Element {
     const unsubscribe = window.agentApi.subscribeThread({ threadId: activeThreadId }, (item) => {
       logUiEvent('ui/thread-stream', item)
       if (item.kind === 'snapshot') {
-        setThread((current) => {
-          if (current && item.snapshot.snapshotSequence < lastSequenceRef.current) {
-            return mergePendingUserMessages(current, pendingUserMessagesRef.current)
-          }
-          lastSequenceRef.current = item.snapshot.snapshotSequence
-          return mergePendingUserMessages(item.snapshot.thread, pendingUserMessagesRef.current)
-        })
+        if (item.snapshot.snapshotSequence < lastSequenceRef.current) return
+        lastSequenceRef.current = item.snapshot.snapshotSequence
+        setThread(mergePendingUserMessages(item.snapshot.thread, pendingUserMessagesRef.current))
         return
       }
 
-      setThread((current) => {
-        if (item.event.sequence <= lastSequenceRef.current) return current
-        lastSequenceRef.current = item.event.sequence
-        if (item.event.type === 'thread.message-upserted') {
-          pendingUserMessagesRef.current.delete(item.event.message.id)
-        }
-        return applyOrchestrationEvent(
+      if (item.event.sequence <= lastSequenceRef.current) return
+      lastSequenceRef.current = item.event.sequence
+      if (item.event.type === 'thread.message-upserted') {
+        pendingUserMessagesRef.current.delete(item.event.message.id)
+      }
+      setThread((current) =>
+        applyOrchestrationEvent(
           current ?? createEmptyThread(item.event.threadId, item.event.createdAt),
           item.event
         )
-      })
+      )
     })
 
     return unsubscribe
@@ -159,6 +187,7 @@ export function HomePage(): React.JSX.Element {
         provider: 'codex',
         input,
         cwd: activeProject.path,
+        model,
         runtimeMode,
         createdAt
       })
@@ -341,10 +370,12 @@ export function HomePage(): React.JSX.Element {
   }
 
   return (
-    <div className="agent-shell" data-theme="swiss-retro-dark">
+    <div className="agent-shell" data-theme="linear-dark">
       <aside className="project-sidebar" aria-label="Projects">
         <div className="sidebar-header">
-          <span>Projects</span>
+          <div className="sidebar-app-name">
+            gencode
+          </div>
           <button
             type="button"
             className="add-project-button"
@@ -352,47 +383,57 @@ export function HomePage(): React.JSX.Element {
             aria-label="Add project"
             onClick={openWorkspaceFolder}
           >
-            +
+            <Plus size={13} strokeWidth={2} />
           </button>
         </div>
-        {workspace.projects.length === 0 ? (
-          <div className="sidebar-empty" aria-label="No projects open">
-            <p>No Projects Open</p>
-          </div>
-        ) : (
-          <nav className="project-list" aria-label="Project list">
-            {workspace.projects.map((project) => (
-              <section key={project.id} className="project-group">
-                <button
-                  type="button"
-                  className={`project-toggle ${project.id === activeProject?.id ? 'active' : ''}`}
-                  aria-expanded={project.open}
-                  onClick={() => selectProject(project)}
-                >
-                  <span className="disclosure">{project.open ? '⌄' : '›'}</span>
-                  <span className="project-name">{project.name}</span>
-                </button>
-                {project.open ? (
-                  <div className="thread-list">
-                    {project.chats.map((chat) => (
-                      <button
-                        key={chat.id}
-                        type="button"
-                        className={`thread-link ${chat.id === activeChat?.id ? 'active' : ''}`}
-                        onClick={() => selectChat(project, chat)}
-                      >
-                        {chat.label}
+
+        <div className="sidebar-scroll">
+          {workspace.projects.length === 0 ? (
+            <div className="sidebar-empty" aria-label="No projects open">
+              <p>No projects open</p>
+            </div>
+          ) : (
+            <nav className="project-list" aria-label="Project list">
+              {workspace.projects.map((project) => (
+                <section key={project.id} className="project-group">
+                  <button
+                    type="button"
+                    className={`project-toggle ${project.id === activeProject?.id ? 'active' : ''}`}
+                    aria-expanded={project.open}
+                    onClick={() => selectProject(project)}
+                  >
+                    <span className="disclosure">
+                      {project.open
+                        ? <ChevronDown size={12} strokeWidth={2} />
+                        : <ChevronRight size={12} strokeWidth={2} />}
+                    </span>
+                    <FolderOpen size={13} strokeWidth={1.8} />
+                    <span className="project-name">{project.name}</span>
+                  </button>
+                  {project.open ? (
+                    <div className="thread-list">
+                      {project.chats.map((chat) => (
+                        <button
+                          key={chat.id}
+                          type="button"
+                          className={`thread-link ${chat.id === activeChat?.id ? 'active' : ''}`}
+                          onClick={() => selectChat(project, chat)}
+                        >
+                          <span className="thread-dot" />
+                          <span className="thread-label">{chat.label}</span>
+                        </button>
+                      ))}
+                      <button type="button" className="thread-link new-thread" onClick={startNewChat}>
+                        <Plus size={11} strokeWidth={2} />
+                        <span>New chat</span>
                       </button>
-                    ))}
-                    <button type="button" className="thread-link new-thread" onClick={startNewChat}>
-                      + New chat
-                    </button>
-                  </div>
-                ) : null}
-              </section>
-            ))}
-          </nav>
-        )}
+                    </div>
+                  ) : null}
+                </section>
+              ))}
+            </nav>
+          )}
+        </div>
       </aside>
 
       <main className="chat-surface">
@@ -411,7 +452,7 @@ export function HomePage(): React.JSX.Element {
               aria-label="New chat"
               onClick={startNewChat}
             >
-              new
+              New
             </button>
             <button
               type="button"
@@ -421,7 +462,7 @@ export function HomePage(): React.JSX.Element {
               onClick={() => void clearCurrentChat()}
               disabled={!activeThreadId}
             >
-              clear
+              Clear
             </button>
             <button
               type="button"
@@ -431,7 +472,7 @@ export function HomePage(): React.JSX.Element {
               onClick={revealWorkspaceFolder}
               disabled={!activeProject}
             >
-              □
+              <ExternalLink size={13} strokeWidth={1.8} />
             </button>
             <button
               type="button"
@@ -440,7 +481,7 @@ export function HomePage(): React.JSX.Element {
               aria-label="Add project"
               onClick={openWorkspaceFolder}
             >
-              ▣
+              <FolderOpen size={13} strokeWidth={1.8} />
             </button>
           </div>
         </header>
@@ -492,6 +533,7 @@ export function HomePage(): React.JSX.Element {
               }
             />
           )}
+          {sessionError ? <SessionErrorBanner message={sessionError} /> : null}
           {error ? <p className="error-line">{error}</p> : null}
           <div ref={bottomRef} />
         </section>
@@ -507,22 +549,17 @@ export function HomePage(): React.JSX.Element {
             onKeyDown={handleComposerKeyDown}
             placeholder={
               activeProject
-                ? 'Ask Codex to edit files, run a command, review a diff, or explain this project...'
-                : 'Open a project folder to start chatting with Codex...'
+                ? 'Ask Codex...'
+                : 'Open a project to start chatting...'
             }
-            rows={2}
+            rows={1}
             disabled={!activeProject}
           />
           <div className="composer-footer">
-            <input
-              aria-label="Workspace path"
-              value={activeProject?.path ?? ''}
-              readOnly
-              className="cwd-input"
-              placeholder="No project selected"
-            />
+            <FilePen size={12} strokeWidth={1.6} className="composer-icon" />
             <select
               aria-label="Runtime mode"
+              className="composer-select"
               value={runtimeMode}
               onChange={(event) => setRuntimeMode(event.target.value as RuntimeMode)}
               disabled={!activeProject}
@@ -533,13 +570,33 @@ export function HomePage(): React.JSX.Element {
                 </option>
               ))}
             </select>
+            <span className="composer-divider" />
+            <select
+              aria-label="Model"
+              className="composer-select model-select"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              disabled={!activeProject || models.length === 0}
+              title={model ? `Model: ${model}` : 'Model list pending'}
+            >
+              {models.length === 0 ? (
+                <option value="">Model list pending</option>
+              ) : (
+                models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name ?? m.id}
+                  </option>
+                ))
+              )}
+            </select>
+            <span style={{ flex: 1 }} />
             {isRunning ? (
               <div className="run-controls">
-                <button type="button" onClick={interruptTurn}>
-                  interrupt
+                <button type="button" onClick={interruptTurn} title="Interrupt">
+                  <RotateCcw size={10} strokeWidth={2} />
                 </button>
-                <button type="button" onClick={stopSession}>
-                  stop
+                <button type="button" onClick={stopSession} title="Stop">
+                  <Square size={10} strokeWidth={2} />
                 </button>
               </div>
             ) : null}
@@ -547,8 +604,9 @@ export function HomePage(): React.JSX.Element {
               type="submit"
               className="send-button"
               disabled={!activeProject || !prompt.trim() || isRunning}
+              title="Send (⌘↵)"
             >
-              send
+              <ArrowUp size={14} strokeWidth={2.5} />
             </button>
           </div>
         </form>
@@ -633,7 +691,10 @@ function TranscriptRow({
   if (isPendingPrompt(activity)) {
     return <PendingPrompt activity={activity} onApprove={onApprove} onAnswer={onAnswer} />
   }
-  if (isThinkingActivity(activity)) return <ThinkingRow />
+  if (isThinkingActivity(activity)) return <ThinkingRow activity={activity} />
+  if (isRuntimeError(activity)) {
+    return <SessionErrorBanner message={activity.summary} />
+  }
   if (isToolActivity(activity)) {
     return (
       <ToolRow
@@ -646,11 +707,15 @@ function TranscriptRow({
   return <ActivityRow activity={activity} />
 }
 
-function ThinkingRow(): React.JSX.Element {
+function ThinkingRow({ activity }: { activity: OrchestrationThreadActivity }): React.JSX.Element {
+  const isComplete = activity.resolved === true
   return (
-    <article className="thinking-row" aria-label="Thinking">
-      <span className="thinking-spinner" aria-hidden="true" />
-      <span>Thinking</span>
+    <article
+      className={`thinking-row ${isComplete ? 'is-complete' : 'is-active'}`}
+      aria-label={isComplete ? 'Thought' : 'Thinking'}
+    >
+      {!isComplete && <span className="thinking-spinner" aria-hidden="true" />}
+      <span>{isComplete ? 'thought' : 'thinking…'}</span>
     </article>
   )
 }
@@ -677,32 +742,41 @@ function ToolRow({
   onToggle: () => void
 }): React.JSX.Element {
   const payload = activity.payload ?? {}
-  const output = readPayloadString(payload, 'output')
-  const detail = readPayloadString(payload, 'detail')
+  const data = readPayloadRecord(payload, 'data')
+  const itemPayload = readBestItemData(data)
+  const output = readPayloadString(payload, 'output') ?? readPayloadString(itemPayload, 'aggregatedOutput')
+  const detail = readPayloadString(payload, 'detail') ?? readPayloadString(itemPayload, 'cwd')
   const title = readPayloadString(payload, 'title') ?? activity.summary
-  const status = readPayloadString(payload, 'status') ?? statusFromActivity(activity)
+  const status = statusFromActivity(activity)
   const statusTone = statusToneForTool(status)
+  const exitCode = itemPayload['exitCode']
+  const durationMs = itemPayload['durationMs']
+  const label = labelForActivity(activity)
   return (
-    <article className={`tool-row ${activity.tone} ${statusTone}`}>
+    <article className={`tool-row ${activity.tone} ${statusTone}`} data-item-type={readPayloadString(payload, 'itemType')}>
       <button
         type="button"
         className="tool-row-summary"
         aria-expanded={expanded}
         onClick={onToggle}
       >
-        <span className="tool-disclosure">{expanded ? '-' : '+'}</span>
-        <span className="tool-kind">{labelForActivity(activity)}</span>
+        <span className="tool-disclosure">
+          {expanded ? <ChevronDown size={11} strokeWidth={2} /> : <ChevronRight size={11} strokeWidth={2} />}
+        </span>
+        <span className="tool-kind">{label}</span>
         <span className="tool-title">{title}</span>
         <span className="tool-status">
           <span aria-hidden="true" className="tool-status-dot" />
           {statusLabel(status)}
+          {typeof exitCode === 'number' ? ` (exit ${exitCode})` : null}
+          {typeof durationMs === 'number' ? ` ${formatDuration(durationMs)}` : null}
         </span>
       </button>
       {expanded ? (
         <div className="tool-details">
-          {detail ? <p>{detail}</p> : null}
-          {output ? <pre>{output}</pre> : null}
-          {!detail && !output ? <pre>{formatPayload(payload)}</pre> : null}
+          {detail ? <p className="tool-cwd">{detail}</p> : null}
+          {output ? <pre className="tool-output">{output}</pre> : null}
+          {!detail && !output ? <pre className="tool-output">{formatPayload(payload)}</pre> : null}
         </div>
       ) : null}
     </article>
@@ -716,6 +790,36 @@ function ActivityRow({ activity }: { activity: OrchestrationThreadActivity }): R
       <code>{activity.summary}</code>
     </article>
   )
+}
+
+function SessionErrorBanner({ message }: { message: string }): React.JSX.Element {
+  return (
+    <div className="session-error-banner" role="alert" aria-live="assertive">
+      <span className="session-error-icon" aria-hidden="true">⚠</span>
+      <div className="session-error-body">
+        <p className="session-error-title">Codex returned an error</p>
+        <p className="session-error-message">{renderTextWithLinks(message)}</p>
+      </div>
+    </div>
+  )
+}
+
+function renderTextWithLinks(text: string): React.ReactNode {
+  const urlRegex = /https?:\/\/[^\s)]+/g
+  const parts: React.ReactNode[] = []
+  let last = 0
+  let match: RegExpExecArray | null
+  while ((match = urlRegex.exec(text)) !== null) {
+    if (match.index > last) parts.push(text.slice(last, match.index))
+    parts.push(
+      <a key={match.index} href={match[0]} target="_blank" rel="noreferrer" className="session-error-link">
+        {match[0]}
+      </a>
+    )
+    last = match.index + match[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return <>{parts}</>
 }
 
 function PendingPrompt({
@@ -939,11 +1043,17 @@ function isToolActivity(activity: OrchestrationThreadActivity): boolean {
   return activity.kind.startsWith('tool.')
 }
 
+function isRuntimeError(activity: OrchestrationThreadActivity): boolean {
+  return activity.kind === 'runtime.error'
+}
+
 function isThinkingActivity(activity: OrchestrationThreadActivity): boolean {
-  return activity.tone === 'thinking' && activity.summary === 'Thinking'
+  return activity.tone === 'thinking'
 }
 
 function isHiddenActivity(activity: OrchestrationThreadActivity): boolean {
+  // Hide resolved thinking activities — they completed and don't need to stay visible.
+  // Unresolved thinking activities stay visible as the active spinner.
   return isThinkingActivity(activity) && activity.resolved === true
 }
 
@@ -951,33 +1061,97 @@ function labelForActivity(activity: OrchestrationThreadActivity): string {
   if (activity.kind.includes('approval')) return 'approval'
   if (activity.kind.includes('user-input')) return 'input'
   const itemType = readPayloadString(activity.payload, 'itemType')
-  if (itemType === 'command_execution') return 'terminal'
-  if (itemType === 'file_change') return 'edit'
-  if (itemType === 'reasoning') return 'thinking'
-  if (itemType === 'web_search') return 'search'
+  switch (itemType) {
+    case 'command_execution':
+      return 'terminal'
+    case 'file_change':
+      return 'edit'
+    case 'reasoning':
+      return 'thinking'
+    case 'web_search':
+      return 'search'
+    case 'mcp_tool_call':
+      return 'mcp'
+    case 'dynamic_tool_call':
+      return 'tool'
+    case 'collab_agent_tool_call':
+      return 'agent'
+    case 'image_view':
+      return 'image'
+    case 'review_entered':
+    case 'review_exited':
+      return 'review'
+    case 'context_compaction':
+      return 'compact'
+    case 'plan':
+      return 'plan'
+    default:
+      break
+  }
   if (activity.summary.toLowerCase().includes('terminal')) return 'terminal'
   if (activity.summary.toLowerCase().includes('edit')) return 'edit'
   return 'tool'
 }
 
 function statusFromActivity(activity: OrchestrationThreadActivity): string {
-  if (activity.kind === 'tool.completed') return 'completed'
-  if (activity.kind === 'tool.started') return 'running'
-  if (activity.kind === 'runtime.error') return 'error'
-  return 'updated'
+  const payloadStatus = readPayloadString(activity.payload, 'status')
+  if (activity.kind === 'tool.completed' || activity.kind === 'task.completed') {
+    if (payloadStatus === 'failed' || payloadStatus === 'declined') return payloadStatus
+    return 'completed'
+  }
+  if (
+    payloadStatus === 'completed' ||
+    payloadStatus === 'success' ||
+    payloadStatus === 'failed' ||
+    payloadStatus === 'declined' ||
+    payloadStatus === 'inProgress'
+  ) {
+    return payloadStatus
+  }
+  if (activity.resolved === true) {
+    if (isToolActivity(activity) || isThinkingActivity(activity)) return 'completed'
+    return 'resolved'
+  }
+
+  switch (activity.kind) {
+    case 'tool.started':
+    case 'task.started':
+      return 'running'
+    case 'tool.updated':
+    case 'task.progress':
+      return 'running'
+    case 'runtime.error':
+      return 'error'
+    case 'approval.requested':
+    case 'user-input.requested':
+      return 'waiting'
+    case 'approval.resolved':
+    case 'user-input.resolved':
+      return 'resolved'
+    default:
+      return 'info'
+  }
 }
 
 function statusToneForTool(status: string): string {
   const normalized = status.toLowerCase()
-  if (normalized === 'completed' || normalized === 'success') return 'is-complete'
+  if (normalized === 'completed' || normalized === 'success' || normalized === 'resolved')
+    return 'is-complete'
   if (normalized === 'failed' || normalized === 'error' || normalized === 'declined')
     return 'is-error'
+  if (normalized === 'waiting') return 'is-waiting'
   return 'is-running'
 }
 
 function statusLabel(status: string): string {
-  if (status === 'inProgress') return 'running'
-  return status
+  switch (status) {
+    case 'inProgress':
+      return 'running'
+    case 'resolved':
+      return 'done'
+    default:
+      return status
+  }
 }
 
 function logUiEvent(label: string, payload: unknown): void {
@@ -990,6 +1164,29 @@ function readPayloadString(
 ): string | undefined {
   const value = payload?.[key]
   return typeof value === 'string' ? value : undefined
+}
+
+function readPayloadRecord(
+  payload: Record<string, unknown> | undefined,
+  key: string
+): Record<string, unknown> {
+  const value = payload?.[key]
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+}
+
+function readBestItemData(data: Record<string, unknown>): Record<string, unknown> {
+  for (const key of ['item', 'normalized']) {
+    const candidate = data[key]
+    if (typeof candidate === 'object' && candidate !== null && Object.keys(candidate).length > 0) {
+      return candidate as Record<string, unknown>
+    }
+  }
+  return data
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
 }
 
 function formatPayload(payload: Record<string, unknown>): string {

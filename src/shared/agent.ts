@@ -371,6 +371,14 @@ export interface OpenWorkspaceFolderResult {
   name: string
 }
 
+export interface ModelInfo {
+  id: string
+  name?: string
+  description?: string
+  hidden?: boolean
+  isDefault?: boolean
+}
+
 export interface AgentApi {
   dispatchCommand(input: ClientOrchestrationCommand): Promise<DispatchResult>
   subscribeThread(
@@ -382,6 +390,7 @@ export interface AgentApi {
   respondToUserInput(input: RespondToUserInputInput): Promise<void>
   stopSession(input: StopSessionInput): Promise<void>
   listProviders(): Promise<ProviderSummary[]>
+  listModels(): Promise<ModelInfo[]>
   clearThread(input: { threadId: string }): Promise<void>
   openWorkspaceFolder(): Promise<OpenWorkspaceFolderResult | null>
   revealPath(input: { path: string }): Promise<void>

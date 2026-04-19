@@ -93,6 +93,7 @@ const agentApiMock: AgentApi = {
       detail: 'codex-cli 0.121.0'
     }
   ]),
+  listModels: vi.fn(async () => []),
   clearThread: vi.fn(async () => {}),
   openWorkspaceFolder: vi.fn(async () => ({
     path: '/Users/ankush/codespace/gencode',

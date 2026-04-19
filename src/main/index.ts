@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow } from 'electron'
+import { app, shell, BrowserWindow, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -10,6 +10,13 @@ const agentBackend = new AgentBackend({
 })
 
 registerAgentIpc(agentBackend)
+
+if (is.dev) {
+  app.commandLine.appendSwitch(
+    'remote-debugging-port',
+    process.env.GENCODE_REMOTE_DEBUG_PORT ?? '9222'
+  )
+}
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -53,6 +60,7 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.electron')
+  Menu.setApplicationMenu(null)
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

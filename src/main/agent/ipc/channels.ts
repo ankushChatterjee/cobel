@@ -7,6 +7,7 @@ export const AGENT_CHANNELS = {
   respondToUserInput: 'agent:respond-to-user-input',
   stopSession: 'agent:stop-session',
   listProviders: 'agent:list-providers',
+  listModels: 'agent:list-models',
   clearThread: 'agent:clear-thread',
   openWorkspaceFolder: 'agent:open-workspace-folder',
   revealPath: 'agent:reveal-path',

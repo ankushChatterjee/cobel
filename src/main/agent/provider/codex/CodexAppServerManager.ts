@@ -8,6 +8,7 @@ import type {
   ProviderSession,
   RuntimeMode
 } from '../../../../shared/agent'
+import type { ModelInfo, ModelListResponse, TurnStartResponse } from './codex-api-types'
 import { createEventId, nowIso } from '../types'
 
 const execFileAsync = promisify(execFile)
@@ -80,6 +81,8 @@ export interface ProviderEvent {
 export class CodexAppServerManager {
   private readonly contexts = new Map<string, CodexSessionContext>()
   private readonly emitter = new EventEmitter()
+  private cachedModels: ModelInfo[] | null = null
+  private modelFetchPromise: Promise<ModelInfo[]> | null = null
 
   constructor(
     private readonly options: {
@@ -94,6 +97,16 @@ export class CodexAppServerManager {
   onEvent(listener: (event: ProviderEvent) => void): () => void {
     this.emitter.on('event', listener)
     return () => this.emitter.off('event', listener)
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    if (this.cachedModels) return this.cachedModels
+    // Deduplicate concurrent calls
+    if (this.modelFetchPromise) return this.modelFetchPromise
+    this.modelFetchPromise = this.fetchModelsViaTempProcess().finally(() => {
+      this.modelFetchPromise = null
+    })
+    return this.modelFetchPromise
   }
 
   async getSummary(): Promise<{ status: 'available' | 'missing' | 'error'; detail?: string }> {
@@ -159,7 +172,7 @@ export class CodexAppServerManager {
     try {
       await this.sendRequest(context, 'initialize', buildCodexInitializeParams())
       this.writeMessage(context, { method: 'initialized' })
-      await this.tryRequest(context, 'model/list', {})
+      await this.tryRequestAndCacheModels(context)
       await this.tryRequest(context, 'account/read', {})
       const mode = mapCodexRuntimeMode(input.runtimeMode)
       const resumeThreadId = readResumeThreadId(input.resumeCursor)
@@ -167,7 +180,7 @@ export class CodexAppServerManager {
         ? await this.resumeOrStartThread(context, resumeThreadId, mode, input)
         : await this.sendRequest<Record<string, unknown>>(context, 'thread/start', {
             cwd: input.cwd,
-            model: input.model,
+            ...optionalModel(input.model),
             ...mode
           })
       const providerThreadId = readProviderThreadId(threadResult) ?? resumeThreadId
@@ -197,6 +210,7 @@ export class CodexAppServerManager {
     threadId: string
     input: string
     attachments?: Array<{ type: 'image'; url: string }>
+    model?: string
   }): Promise<{
     turnId: string
     resumeCursor?: unknown
@@ -207,15 +221,21 @@ export class CodexAppServerManager {
       { type: 'text', text: input.input, text_elements: [] },
       ...(input.attachments ?? []).map((attachment) => ({ type: 'image', url: attachment.url }))
     ]
-    const result = await this.sendRequest<Record<string, unknown>>(context, 'turn/start', {
+    const result = await this.sendRequest<TurnStartResponse>(context, 'turn/start', {
       threadId: providerThreadId,
-      input: turnInput
+      input: turnInput,
+      ...optionalModel(input.model ?? context.session.model)
     })
-    const turnId = readString(result, 'turnId') ?? readString(result, 'id') ?? createEventId('turn')
+    // Codex returns { turn: { id: "turn_xxx", status: "inProgress", ... } }
+    const turnId =
+      result?.turn?.id ??
+      readString(result as unknown as Record<string, unknown>, 'turnId') ??
+      createEventId('turn')
     context.session = {
       ...context.session,
       status: 'running',
       activeTurnId: turnId,
+      model: input.model?.trim() || context.session.model,
       updatedAt: nowIso()
     }
     return { turnId, resumeCursor: context.session.resumeCursor }
@@ -303,6 +323,79 @@ export class CodexAppServerManager {
     this.emitSession(input.threadId, 'session/closed')
   }
 
+  private async tryRequestAndCacheModels(context: CodexSessionContext): Promise<void> {
+    try {
+      const result = await this.sendRequest<ModelListResponse>(
+        context,
+        'model/list',
+        { includeHidden: false },
+        5_000
+      )
+      const models = parseModelList(result)
+      if (models.length > 0) this.cachedModels = models
+    } catch (error) {
+      this.emitError(context.session.threadId, 'model/list failed', error)
+    }
+  }
+
+  private async fetchModelsViaTempProcess(): Promise<ModelInfo[]> {
+    await this.assertVersion()
+    const child = (this.options.spawnProcess ?? spawn)(this.codexBinaryPath(), ['app-server'], {
+      env: {
+        ...process.env,
+        ...(this.options.codexHomePath ? { CODEX_HOME: this.options.codexHomePath } : {})
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: process.platform === 'win32'
+    })
+
+    const sentinel = `__model_probe_${Date.now()}`
+    const context: CodexSessionContext = {
+      session: {
+        provider: 'codex',
+        status: 'connecting',
+        runtimeMode: 'approval-required',
+        threadId: sentinel,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      },
+      child,
+      output: createInterface({ input: child.stdout }),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      nextRequestId: 1,
+      stopping: false
+    }
+
+    this.contexts.set(sentinel, context)
+    this.attachProcessListeners(context)
+
+    try {
+      await this.sendRequest(context, 'initialize', buildCodexInitializeParams())
+      this.writeMessage(context, { method: 'initialized' })
+      const result = await this.sendRequest<ModelListResponse>(
+        context,
+        'model/list',
+        { includeHidden: false },
+        5_000
+      )
+      const models = parseModelList(result)
+      if (models.length > 0) this.cachedModels = models
+      return this.cachedModels ?? []
+    } catch {
+      return this.cachedModels ?? []
+    } finally {
+      context.stopping = true
+      this.contexts.delete(sentinel)
+      try {
+        child.kill()
+      } catch {
+        // best-effort
+      }
+    }
+  }
+
   private async resumeOrStartThread(
     context: CodexSessionContext,
     providerThreadId: string,
@@ -320,7 +413,7 @@ export class CodexAppServerManager {
       if (!isRecoverableMissingThread(message)) throw error
       return this.sendRequest<Record<string, unknown>>(context, 'thread/start', {
         cwd: input.cwd,
-        model: input.model,
+        ...optionalModel(input.model),
         ...mode
       })
     }
@@ -329,8 +422,10 @@ export class CodexAppServerManager {
   private attachProcessListeners(context: CodexSessionContext): void {
     context.output.on('line', (line) => this.handleStdoutLine(context, line))
     context.child.stderr.on('data', (chunk) => {
-      const message = String(chunk).trim()
-      if (message) this.emitError(context.session.threadId, message)
+      for (const message of parseCodexStderr(String(chunk))) {
+        if (message.level === 'ignore') continue
+        this.emitError(context.session.threadId, message.message, message.detail)
+      }
     })
     context.child.on('exit', (code, signal) => {
       if (!context.stopping) {
@@ -363,12 +458,19 @@ export class CodexAppServerManager {
 
     if (isServerNotification(message)) {
       const params = readRecord(message.params)
+      // turn/started and turn/completed carry { threadId, turn: { id, status, ... } }
+      // item/started and item/completed carry { item: { id, type, ... }, threadId, turnId }
+      // delta notifications carry { threadId, turnId, itemId, delta }
+      const turnRecord = readRecord(params['turn'])
+      const itemRecord = readRecord(params['item'])
+      const turnId = readString(params, 'turnId') ?? readString(turnRecord, 'id')
+      const itemId = readString(params, 'itemId') ?? readString(itemRecord, 'id')
       this.emitRaw({
         kind: 'notification',
         threadId: context.session.threadId,
         method: message.method,
-        turnId: readString(params, 'turnId'),
-        itemId: readString(params, 'itemId'),
+        turnId,
+        itemId,
         textDelta: readString(params, 'delta') ?? readString(params, 'textDelta'),
         payload: params
       })
@@ -529,6 +631,32 @@ export function buildCodexInitializeParams(): {
   }
 }
 
+export function parseCodexStderr(
+  chunk: string
+): Array<{ level: 'error' | 'ignore'; message: string; detail?: unknown }> {
+  const messages: Array<{ level: 'error' | 'ignore'; message: string; detail?: unknown }> = []
+  for (const line of chunk.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const parsed = parseJsonRecord(trimmed)
+    if (!parsed) {
+      messages.push({ level: 'error', message: trimmed })
+      continue
+    }
+    const level = readString(parsed, 'level')?.toUpperCase()
+    if (level && level !== 'ERROR') {
+      messages.push({ level: 'ignore', message: readCodexLogMessage(parsed) ?? trimmed })
+      continue
+    }
+    messages.push({
+      level: 'error',
+      message: readCodexLogMessage(parsed) ?? trimmed,
+      detail: parsed
+    })
+  }
+  return messages
+}
+
 function isServerRequest(value: unknown): value is JsonRpcRequest {
   return hasMethod(value) && hasId(value)
 }
@@ -565,6 +693,26 @@ function readString(value: unknown, key: string): string | undefined {
   return typeof candidate === 'string' ? candidate : undefined
 }
 
+function parseJsonRecord(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value)
+    return readRecord(parsed)
+  } catch {
+    return null
+  }
+}
+
+function readCodexLogMessage(value: Record<string, unknown>): string | undefined {
+  const fields = readRecord(value['fields'])
+  return readString(fields, 'message') ?? readString(value, 'message')
+}
+
+function readBoolean(value: unknown, key: string): boolean | undefined {
+  const record = readRecord(value)
+  const candidate = record[key]
+  return typeof candidate === 'boolean' ? candidate : undefined
+}
+
 export function readProviderThreadId(value: unknown): string | undefined {
   const thread = readRecord(value).thread
   return (
@@ -583,6 +731,30 @@ function isRecoverableMissingThread(message: string): boolean {
   return ['not found', 'missing thread', 'no such thread', 'unknown thread', 'does not exist'].some(
     (snippet) => message.includes(snippet)
   )
+}
+
+export function parseModelList(result: unknown): ModelInfo[] {
+  const record = readRecord(result)
+  const raw = Array.isArray(record['data']) ? record['data'] : record['models']
+  if (!Array.isArray(raw)) return []
+  const models: ModelInfo[] = []
+  for (const item of raw) {
+    const id = readString(item, 'id') ?? readString(item, 'model')
+    if (!id) continue
+    models.push({
+      id,
+      name: readString(item, 'displayName') ?? readString(item, 'name'),
+      description: readString(item, 'description'),
+      hidden: readBoolean(item, 'hidden'),
+      isDefault: readBoolean(item, 'isDefault')
+    })
+  }
+  return models
+}
+
+function optionalModel(model: string | undefined): { model?: string } {
+  const trimmed = model?.trim()
+  return trimmed ? { model: trimmed } : {}
 }
 
 function normalizeCodexAnswers(

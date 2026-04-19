@@ -49,8 +49,8 @@ describe('ProviderRuntimeIngestion', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: 'approval:approval-1',
-          kind: 'approval.requested',
-          resolved: false
+          kind: 'approval.resolved',
+          resolved: true
         })
       ])
     )
@@ -102,6 +102,63 @@ describe('ProviderRuntimeIngestion', () => {
     ])
   })
 
+  it('uses final assistant item snapshots to close streamed messages without duplicating text', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'agent-1',
+        payload: { streamKind: 'assistant_text', delta: 'The result is ready.' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'agent-1',
+        raw: { source: 'codex.app-server.notification', method: 'item/completed', payload: {} },
+        payload: { streamKind: 'assistant_text', delta: 'The result is ready.' }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').messages).toEqual([
+      expect.objectContaining({
+        role: 'assistant',
+        text: 'The result is ready.',
+        streaming: false
+      })
+    ])
+  })
+
+  it('still creates a closed assistant message from a final snapshot without prior deltas', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'agent-1',
+        raw: { source: 'codex.app-server.notification', method: 'item/completed', payload: {} },
+        payload: { streamKind: 'assistant_text', delta: 'Only final text.' }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').messages).toEqual([
+      expect.objectContaining({
+        role: 'assistant',
+        text: 'Only final text.',
+        streaming: false
+      })
+    ])
+  })
+
   it('does not let a stale turn completion close a different active turn', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
@@ -119,6 +176,62 @@ describe('ProviderRuntimeIngestion', () => {
     const thread = engine.getThread('thread-1')
     expect(thread.session?.status).toBe('running')
     expect(thread.session?.activeTurnId).toBe('turn-active')
+  })
+
+  it('finalizes activities for a stale completed turn without closing the active turn', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-active', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-stale',
+        itemId: 'tool-stale',
+        payload: {
+          itemType: 'command_execution',
+          status: 'inProgress',
+          title: 'terminal',
+          detail: 'bun test'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-stale',
+        itemId: 'reasoning-stale',
+        payload: {
+          itemType: 'reasoning',
+          status: 'inProgress'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'turn.completed',
+        turnId: 'turn-stale',
+        payload: { state: 'completed' }
+      })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.session?.status).toBe('running')
+    expect(thread.session?.activeTurnId).toBe('turn-active')
+    expect(thread.activities.find((activity) => activity.id === 'tool:tool-stale')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+    expect(thread.activities.find((activity) => activity.id === 'thinking:reasoning-stale')).toEqual(
+      expect.objectContaining({
+        kind: 'task.completed',
+        resolved: true,
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
   })
 
   it('finalizes plan text when a turn completes', async () => {
@@ -248,6 +361,384 @@ describe('ProviderRuntimeIngestion', () => {
           title: '/bin/zsh -lc ls',
           detail: '/bin/zsh -lc ls'
         })
+      })
+    )
+  })
+
+  it('keeps a completed tool completed when late output arrives', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'call-1',
+        payload: {
+          itemType: 'command_execution',
+          status: 'inProgress',
+          title: 'terminal',
+          detail: 'bun test'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.completed',
+        turnId: 'turn-1',
+        itemId: 'call-1',
+        payload: {
+          itemType: 'command_execution',
+          status: 'completed',
+          title: 'terminal'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'call-1',
+        payload: { streamKind: 'command_output', delta: 'done\n' }
+      })
+    )
+    await ingestion.drain()
+
+    const tool = engine
+      .getThread('thread-1')
+      .activities.find((activity) => activity.id === 'tool:call-1')
+    expect(tool).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({
+          status: 'completed',
+          output: 'done\n'
+        })
+      })
+    )
+  })
+
+  it('keeps a completed tool completed when late item updates arrive', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(
+      event({
+        type: 'item.completed',
+        turnId: 'turn-1',
+        itemId: 'call-1',
+        payload: {
+          itemType: 'command_execution',
+          status: 'completed',
+          title: 'terminal',
+          detail: 'bun test'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.updated',
+        turnId: 'turn-1',
+        itemId: 'call-1',
+        payload: {
+          itemType: 'command_execution',
+          status: 'inProgress',
+          title: 'terminal'
+        }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:call-1')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+  })
+
+  it('marks newly seen late item updates for an already completed turn as completed', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.updated',
+        turnId: 'turn-1',
+        itemId: 'late-call',
+        payload: {
+          itemType: 'command_execution',
+          status: 'inProgress',
+          title: 'terminal',
+          detail: 'pwd'
+        }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:late-call')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+  })
+
+  it('marks newly seen late output for an already completed turn as completed', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'late-call',
+        payload: { streamKind: 'command_output', delta: 'done\n' }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:late-call')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({
+          status: 'completed',
+          output: 'done\n'
+        })
+      })
+    )
+  })
+
+  it('keeps resolved thinking resolved when late reasoning updates arrive', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(
+      event({
+        type: 'item.completed',
+        turnId: 'turn-1',
+        itemId: 'reasoning-1',
+        payload: {
+          itemType: 'reasoning',
+          status: 'completed'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.updated',
+        turnId: 'turn-1',
+        itemId: 'reasoning-1',
+        payload: {
+          itemType: 'reasoning',
+          status: 'inProgress'
+        }
+      })
+    )
+    await ingestion.drain()
+
+    expect(
+      engine
+        .getThread('thread-1')
+        .activities.find((activity) => activity.id === 'thinking:reasoning-1')
+    ).toEqual(
+      expect.objectContaining({
+        kind: 'task.completed',
+        resolved: true,
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+  })
+
+  it('marks newly seen late reasoning updates for an already completed turn as resolved', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.updated',
+        turnId: 'turn-1',
+        itemId: 'late-reasoning',
+        payload: {
+          itemType: 'reasoning',
+          status: 'inProgress'
+        }
+      })
+    )
+    await ingestion.drain()
+
+    expect(
+      engine
+        .getThread('thread-1')
+        .activities.find((activity) => activity.id === 'thinking:late-reasoning')
+    ).toEqual(
+      expect.objectContaining({
+        kind: 'task.completed',
+        resolved: true,
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+  })
+
+  it('resolves thinking when the turn completes without a reasoning item completion', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'reasoning-1',
+        payload: {
+          itemType: 'reasoning',
+          status: 'inProgress'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    await ingestion.drain()
+
+    expect(
+      engine
+        .getThread('thread-1')
+        .activities.find((activity) => activity.id === 'thinking:reasoning-1')
+    ).toEqual(
+      expect.objectContaining({
+        kind: 'task.completed',
+        resolved: true,
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+  })
+
+  it('marks still-running terminal tools completed when the turn completes', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'call-1',
+        payload: {
+          itemType: 'command_execution',
+          status: 'inProgress',
+          title: 'terminal',
+          detail: 'bun test'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:call-1')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+  })
+
+  it('marks still-running terminal tools failed when the turn fails', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'call-1',
+        payload: {
+          itemType: 'command_execution',
+          status: 'inProgress',
+          title: 'terminal',
+          detail: 'bun test'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'failed' } })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:call-1')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'failed' })
+      })
+    )
+  })
+
+  it('marks still-running activities failed when the session closes without turn completion', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'call-1',
+        payload: {
+          itemType: 'command_execution',
+          status: 'inProgress',
+          title: 'terminal',
+          detail: 'bun test'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'reasoning-1',
+        payload: {
+          itemType: 'reasoning',
+          status: 'inProgress'
+        }
+      })
+    )
+    ingestion.enqueue(event({ type: 'session.state.changed', payload: { state: 'stopped' } }))
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn).toEqual(
+      expect.objectContaining({
+        id: 'turn-1',
+        status: 'interrupted',
+        completedAt: createdAt
+      })
+    )
+    expect(thread.activities.find((activity) => activity.id === 'tool:call-1')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'failed' })
+      })
+    )
+    expect(thread.activities.find((activity) => activity.id === 'thinking:reasoning-1')).toEqual(
+      expect.objectContaining({
+        kind: 'task.completed',
+        resolved: true,
+        payload: expect.objectContaining({ status: 'completed' })
       })
     )
   })

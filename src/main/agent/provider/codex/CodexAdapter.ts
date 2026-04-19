@@ -9,6 +9,7 @@ import type {
 import { CodexAppServerManager, type ProviderEvent } from './CodexAppServerManager'
 import { ProviderEventBus } from '../types'
 import type { ProviderAdapter, SendTurnInput, StartSessionInput } from '../types'
+import type { ModelInfo } from './codex-api-types'
 
 export class CodexAdapter implements ProviderAdapter {
   readonly id = 'codex' as const
@@ -54,6 +55,10 @@ export class CodexAdapter implements ProviderAdapter {
     answers: Record<string, unknown>
   }): Promise<void> {
     await this.manager.respondToUserInput(input)
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    return this.manager.listModels()
   }
 
   async stopSession(input: { threadId: string }): Promise<void> {
@@ -124,26 +129,35 @@ export function mapProviderEvent(event: ProviderEvent): ProviderRuntimeEvent | n
           providerThreadId: readString(event.payload, 'providerThreadId') ?? event.threadId
         }
       }
-    case 'turn/started':
+    case 'turn/started': {
+      const turnRecord = readRecord(readRecord(event.payload)['turn'])
       return {
         ...base,
+        // Codex: params.turn.id is the canonical turn id
+        turnId: base.turnId ?? readString(turnRecord, 'id'),
         type: 'turn.started',
         payload: {
-          model: readString(event.payload, 'model'),
-          effort: readString(event.payload, 'effort')
+          model: readString(event.payload, 'model') ?? readString(turnRecord, 'model'),
+          effort: readString(event.payload, 'effort') ?? readString(turnRecord, 'effort')
         }
       }
-    case 'turn/completed':
+    }
+    case 'turn/completed': {
+      const turnRecord = readRecord(readRecord(event.payload)['turn'])
       return {
         ...base,
+        turnId: base.turnId ?? readString(turnRecord, 'id'),
         type: 'turn.completed',
         payload: {
           state: readCompletionState(event.payload),
           stopReason: readString(event.payload, 'stopReason'),
-          errorMessage: readString(event.payload, 'errorMessage'),
+          errorMessage:
+            readString(event.payload, 'errorMessage') ??
+            readString(readRecord(turnRecord['error']), 'message'),
           usage: readRecord(event.payload).usage
         }
       }
+    }
     case 'turn/aborted':
       return {
         ...base,
@@ -192,6 +206,16 @@ export function mapProviderEvent(event: ProviderEvent): ProviderRuntimeEvent | n
         payload: {
           requestType: 'unknown',
           decision: readString(event.payload, 'decision'),
+          resolution: event.payload
+        }
+      }
+    case 'serverRequest/resolved':
+      return {
+        ...base,
+        type: 'request.resolved',
+        payload: {
+          requestType: 'unknown',
+          decision: 'resolved',
           resolution: event.payload
         }
       }
@@ -318,17 +342,51 @@ function requestTypeForMethod(method: string): CanonicalRequestType {
   return 'unknown'
 }
 
+const ITEM_TYPE_EXACT: Record<string, CanonicalItemType> = {
+  userMessage: 'user_message',
+  user_message: 'user_message',
+  agentMessage: 'assistant_message',
+  assistantMessage: 'assistant_message',
+  assistant_message: 'assistant_message',
+  commandExecution: 'command_execution',
+  command_execution: 'command_execution',
+  fileChange: 'file_change',
+  file_change: 'file_change',
+  mcpToolCall: 'mcp_tool_call',
+  mcp_tool_call: 'mcp_tool_call',
+  dynamicToolCall: 'dynamic_tool_call',
+  dynamic_tool_call: 'dynamic_tool_call',
+  collabAgentToolCall: 'collab_agent_tool_call',
+  collab_agent_tool_call: 'collab_agent_tool_call',
+  webSearch: 'web_search',
+  web_search: 'web_search',
+  imageView: 'image_view',
+  image_view: 'image_view',
+  enteredReviewMode: 'review_entered',
+  exitedReviewMode: 'review_exited',
+  contextCompaction: 'context_compaction',
+  context_compaction: 'context_compaction',
+  reasoning: 'reasoning',
+  plan: 'plan',
+  error: 'error'
+}
+
 const ITEM_TYPE_RULES: Array<{ includes: string[]; type: CanonicalItemType }> = [
   { includes: ['usermessage', 'user_message'], type: 'user_message' },
   {
     includes: ['agentmessage', 'assistantmessage', 'assistant_message'],
     type: 'assistant_message'
   },
-  { includes: ['command'], type: 'command_execution' },
-  { includes: ['file', 'patch', 'edit'], type: 'file_change' },
+  { includes: ['commandexecution', 'command_execution', 'command'], type: 'command_execution' },
+  { includes: ['filechange', 'file_change', 'file', 'patch', 'edit'], type: 'file_change' },
   { includes: ['mcp'], type: 'mcp_tool_call' },
   { includes: ['dynamic'], type: 'dynamic_tool_call' },
-  { includes: ['web'], type: 'web_search' },
+  { includes: ['collab'], type: 'collab_agent_tool_call' },
+  { includes: ['websearch', 'web_search', 'web'], type: 'web_search' },
+  { includes: ['imageview', 'image_view', 'image'], type: 'image_view' },
+  { includes: ['enteredreview', 'entered_review'], type: 'review_entered' },
+  { includes: ['exitedreview', 'exited_review'], type: 'review_exited' },
+  { includes: ['contextcompaction', 'context_compaction', 'compact'], type: 'context_compaction' },
   { includes: ['assistant', 'agent'], type: 'assistant_message' },
   { includes: ['reason'], type: 'reasoning' },
   { includes: ['plan'], type: 'plan' },
@@ -336,6 +394,9 @@ const ITEM_TYPE_RULES: Array<{ includes: string[]; type: CanonicalItemType }> = 
 ]
 
 function itemTypeForProvider(value: string): CanonicalItemType {
+  // Exact match first (covers Codex camelCase type names)
+  const exact = ITEM_TYPE_EXACT[value]
+  if (exact) return exact
   const normalized = value.toLowerCase()
   return (
     ITEM_TYPE_RULES.find((rule) => rule.includes.some((snippet) => normalized.includes(snippet)))
@@ -365,21 +426,64 @@ function readBestItemPayload(payload: Record<string, unknown>): Record<string, u
 }
 
 function readToolTitle(payload: Record<string, unknown>): string | undefined {
+  // commandExecution: command is the full shell string
+  // mcpToolCall: server + tool
+  // webSearch: query
+  // fileChange: first changed path
+  // dynamicToolCall: tool name
+  const type = readString(payload, 'type')
+  if (type === 'mcpToolCall') {
+    const server = readString(payload, 'server')
+    const tool = readString(payload, 'tool')
+    if (server && tool) return `${server}: ${tool}`
+    return tool ?? server
+  }
+  if (type === 'webSearch') return readString(payload, 'query')
+  if (type === 'fileChange') {
+    const changes = payload['changes']
+    if (Array.isArray(changes) && changes.length > 0) {
+      const first = readRecord(changes[0])
+      const path = readString(first, 'path')
+      if (path) return changes.length > 1 ? `${path} +${changes.length - 1}` : path
+    }
+  }
+  if (type === 'dynamicToolCall') return readString(payload, 'tool')
+  if (type === 'imageView') return readString(payload, 'path')
   return (
     readString(payload, 'title') ??
+    readString(payload, 'tool') ??
     readString(payload, 'toolName') ??
     readString(payload, 'tool_name') ??
     readString(payload, 'name') ??
+    readString(payload, 'query') ??
     readString(payload, 'command') ??
     readString(payload, 'path')
   )
 }
 
 function readToolDetail(payload: Record<string, unknown>): string | undefined {
+  const type = readString(payload, 'type')
+  if (type === 'commandExecution') {
+    const cwd = readString(payload, 'cwd')
+    const output = readString(payload, 'aggregatedOutput')
+    if (output) return output
+    return cwd
+  }
+  if (type === 'mcpToolCall') {
+    const args = payload['arguments']
+    if (args && typeof args === 'object') {
+      try {
+        return JSON.stringify(args)
+      } catch {
+        // ignore
+      }
+    }
+  }
   return (
     readString(payload, 'detail') ??
     readString(payload, 'summary') ??
     readString(payload, 'description') ??
+    readString(payload, 'cwd') ??
     readString(payload, 'path') ??
     readString(payload, 'command')
   )
@@ -400,12 +504,20 @@ function readItemStatus(
 ): 'inProgress' | 'completed' | 'failed' | 'declined' {
   const status = readString(payload, 'status') ?? readString(payload, 'state')
   if (status === 'failed' || status === 'declined') return status
-  if (status === 'completed' || eventType === 'item.completed') return 'completed'
+  if (status === 'completed' || status === 'success' || eventType === 'item.completed')
+    return 'completed'
+  if (status === 'interrupted') return 'failed'
   return 'inProgress'
 }
 
 function readCompletionState(value: unknown): 'completed' | 'failed' | 'cancelled' | 'interrupted' {
-  const state = readString(value, 'state') ?? readString(value, 'status')
+  // Codex turn/completed params: { threadId, turn: { id, status, ... } }
+  const record = readRecord(value)
+  const turnRecord = readRecord(record['turn'])
+  const state =
+    readString(turnRecord, 'status') ??
+    readString(record, 'state') ??
+    readString(record, 'status')
   if (state === 'failed' || state === 'cancelled' || state === 'interrupted') return state
   return 'completed'
 }

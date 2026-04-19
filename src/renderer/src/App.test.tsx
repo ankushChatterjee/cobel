@@ -1,7 +1,9 @@
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router'
-import { render, screen, within } from '@testing-library/react'
+import { StrictMode } from 'react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { OrchestrationThreadStreamItem } from '../../shared/agent'
 import { createAppRouter } from './router'
 import { resetAgentApiMock } from './test/setup'
 
@@ -173,6 +175,214 @@ describe('renderer app', () => {
     expect(screen.getByText(/pass/)).toBeInTheDocument()
   })
 
+  it('renders completed payload status even when a live tool row is still marked updated', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 2,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [],
+            activities: [
+              {
+                id: 'tool:item-1',
+                kind: 'tool.updated',
+                tone: 'tool',
+                summary: 'terminal',
+                payload: {
+                  itemType: 'command_execution',
+                  title: 'terminal',
+                  detail: 'bun test',
+                  status: 'completed'
+                },
+                turnId: 'turn-1',
+                sequence: 1,
+                createdAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            proposedPlans: [],
+            session: null,
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T00:00:00.000Z',
+            updatedAt: '2026-04-19T00:00:01.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    const toolRow = await screen.findByRole('button', { name: /terminal/i })
+    expect(within(toolRow).getByText(/completed/i)).toBeInTheDocument()
+  })
+
+  it('renders completed tool kind as completed even if an older payload says running', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 2,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [],
+            activities: [
+              {
+                id: 'tool:item-1',
+                kind: 'tool.completed',
+                tone: 'tool',
+                summary: 'terminal',
+                payload: {
+                  itemType: 'command_execution',
+                  title: 'terminal',
+                  detail: 'bun test',
+                  status: 'inProgress'
+                },
+                turnId: 'turn-1',
+                sequence: 1,
+                createdAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            proposedPlans: [],
+            session: null,
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T00:00:00.000Z',
+            updatedAt: '2026-04-19T00:00:01.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    const toolRow = await screen.findByRole('button', { name: /terminal/i })
+    expect(within(toolRow).getByText(/completed/i)).toBeInTheDocument()
+    expect(within(toolRow).queryByText(/running/i)).not.toBeInTheDocument()
+  })
+
+  it('applies live activity updates in StrictMode without dropping later completion events', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    let listener: ((item: OrchestrationThreadStreamItem) => void) | null = null
+    let subscribedThreadId = ''
+    window.agentApi.subscribeThread = vi.fn((_input, next) => {
+      subscribedThreadId = _input.threadId
+      listener = next
+      next({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 0,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [],
+            activities: [],
+            proposedPlans: [],
+            session: null,
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T00:00:00.000Z',
+            updatedAt: '2026-04-19T00:00:00.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(
+      <StrictMode>
+        <RouterProvider router={router} />
+      </StrictMode>
+    )
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    expect(listener).not.toBeNull()
+    act(() => {
+      listener?.({
+        kind: 'event',
+        event: {
+          sequence: 1,
+          type: 'thread.activity-upserted',
+          threadId: subscribedThreadId,
+          activity: {
+            id: 'tool:item-1',
+            kind: 'tool.updated',
+            tone: 'tool',
+            summary: 'terminal',
+            payload: {
+              itemType: 'command_execution',
+              title: 'terminal',
+              detail: 'sed -n 1,220p src/App.tsx',
+              status: 'inProgress'
+            },
+            turnId: 'turn-1',
+            sequence: 1,
+            createdAt: '2026-04-19T00:00:01.000Z'
+          },
+          createdAt: '2026-04-19T00:00:01.000Z'
+        }
+      })
+    })
+
+    const runningToolRow = await screen.findByRole('button', { name: /terminal/i })
+    expect(within(runningToolRow).getByText(/running/i)).toBeInTheDocument()
+
+    act(() => {
+      listener?.({
+        kind: 'event',
+        event: {
+          sequence: 2,
+          type: 'thread.activity-upserted',
+          threadId: subscribedThreadId,
+          activity: {
+            id: 'tool:item-1',
+            kind: 'tool.completed',
+            tone: 'tool',
+            summary: 'terminal',
+            payload: {
+              itemType: 'command_execution',
+              title: 'terminal',
+              detail: 'sed -n 1,220p src/App.tsx',
+              status: 'completed'
+            },
+            turnId: 'turn-1',
+            sequence: 1,
+            createdAt: '2026-04-19T00:00:01.000Z'
+          },
+          createdAt: '2026-04-19T00:00:02.000Z'
+        }
+      })
+    })
+
+    const completedToolRow = await screen.findByRole('button', { name: /terminal/i })
+    expect(within(completedToolRow).getByText(/completed/i)).toBeInTheDocument()
+    expect(within(completedToolRow).queryByText(/running/i)).not.toBeInTheDocument()
+  })
+
   it('shows active thinking and hides completed thinking rows', async () => {
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     window.agentApi.subscribeThread = vi.fn((_input, listener) => {
@@ -229,7 +439,8 @@ describe('renderer app', () => {
     await userEvent.click(openFolderButtons[0])
 
     expect(await screen.findByLabelText('Thinking')).toBeInTheDocument()
-    expect(screen.getAllByText('Thinking')).toHaveLength(1)
+    expect(screen.getAllByText('thinking…')).toHaveLength(1)
+    expect(screen.queryByLabelText('Thought')).not.toBeInTheDocument()
   })
 
   it('opens projects and clears the active chat from controls', async () => {

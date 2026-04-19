@@ -8,6 +8,7 @@ import type {
   RespondToUserInputInput,
   StopSessionInput
 } from '../../shared/agent'
+import type { ModelInfo } from './provider/codex/codex-api-types'
 import { OrchestrationEngine } from './orchestration/OrchestrationEngine'
 import { ProviderRuntimeIngestion } from './orchestration/ProviderRuntimeIngestion'
 import { CodexAdapter } from './provider/codex/CodexAdapter'
@@ -32,6 +33,10 @@ export class AgentBackend {
 
   async listProviders(): Promise<ProviderSummary[]> {
     return this.providers.listProviders()
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    return this.providers.listModels('codex')
   }
 
   subscribeThread(
@@ -70,7 +75,7 @@ export class AgentBackend {
           provider: input.provider,
           threadId: input.threadId,
           cwd: input.cwd,
-          model: input.model,
+          model: sanitizeOptionalString(input.model),
           runtimeMode: input.runtimeMode,
           resumeCursor: this.resumeCursors.get(input.threadId)
         })
@@ -79,7 +84,7 @@ export class AgentBackend {
           threadId: input.threadId,
           input: input.input,
           attachments: input.attachments,
-          model: input.model
+          model: sanitizeOptionalString(input.model)
         })
         if (result.resumeCursor) this.resumeCursors.set(input.threadId, result.resumeCursor)
         return {
@@ -140,4 +145,8 @@ function assertCommand(input: ClientOrchestrationCommand): void {
       throw new Error('Prompt input is required.')
     }
   }
+}
+
+function sanitizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
 }

@@ -26,7 +26,9 @@ interface PlanBufferState {
 export class ProviderRuntimeIngestion {
   private readonly queue: ProviderRuntimeEvent[] = []
   private readonly assistantSegments = new Map<string, AssistantSegmentState>()
+  private readonly streamedAssistantItems = new Set<string>()
   private readonly planBuffers = new Map<string, PlanBufferState>()
+  private readonly completedTurns = new Map<string, 'completed' | 'failed'>()
   private draining = false
   private drainPromise: Promise<void> = Promise.resolve()
 
@@ -62,6 +64,7 @@ export class ProviderRuntimeIngestion {
 
     switch (event.type) {
       case 'session.state.changed':
+        this.closeTurnForTerminalSession(event)
         this.engine.setSession({
           threadId: event.threadId,
           status: mapSessionStatus(event.payload.state),
@@ -234,11 +237,24 @@ export class ProviderRuntimeIngestion {
     event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
   ): void {
     if (event.payload.streamKind === 'assistant_text') {
+      const key = this.assistantStateKey(event)
+      const isFinalSnapshot = this.isFinalAssistantItemSnapshot(event)
+      if (isFinalSnapshot) {
+        if (this.streamedAssistantItems.has(key)) {
+          this.flushAssistant(event, { closeSegment: true, streaming: false })
+          return
+        }
+      } else {
+        this.streamedAssistantItems.add(key)
+      }
       const state = this.getAssistantState(event)
       state.buffer += event.payload.delta
-      this.flushAssistant(event, { closeSegment: false })
+      this.flushAssistant(event, {
+        closeSegment: isFinalSnapshot,
+        streaming: !isFinalSnapshot
+      })
       if (state.buffer.length >= MAX_BUFFERED_ASSISTANT_CHARS)
-        this.flushAssistant(event, { closeSegment: true })
+        this.flushAssistant(event, { closeSegment: true, streaming: true })
       return
     }
 
@@ -274,16 +290,22 @@ export class ProviderRuntimeIngestion {
       return
     }
 
-    const kind =
-      event.type === 'item.started'
-        ? 'tool.started'
-        : event.type === 'item.completed' || event.payload.status === 'completed'
-          ? 'tool.completed'
-          : 'tool.updated'
     const id = toolActivityId(event)
     const existing = this.engine
       .getThread(event.threadId)
       .activities.find((activity) => activity.id === id)
+    const existingStatus = readPayloadString(existing?.payload, 'status')
+    const completedTurnStatus = this.completedTurnToolStatus(event)
+    const nextStatus = nextToolStatus(
+      existingStatus,
+      completedTurnStatus ?? event.payload.status
+    )
+    const kind =
+      existing?.kind === 'tool.completed' || isTerminalToolStatus(nextStatus)
+        ? 'tool.completed'
+        : event.type === 'item.started'
+          ? 'tool.started'
+          : 'tool.updated'
     this.engine.upsertActivity(
       {
         id,
@@ -297,7 +319,7 @@ export class ProviderRuntimeIngestion {
         payload: {
           ...existing?.payload,
           itemType: event.payload.itemType ?? readPayloadString(existing?.payload, 'itemType'),
-          status: event.payload.status ?? existing?.payload?.status,
+          status: nextStatus,
           title: event.payload.title ?? readPayloadString(existing?.payload, 'title'),
           detail: event.payload.detail ?? readPayloadString(existing?.payload, 'detail'),
           data: event.payload.data ?? existing?.payload?.data
@@ -319,7 +341,10 @@ export class ProviderRuntimeIngestion {
     if (!text) return
     const state = this.getAssistantState(event)
     state.buffer += text
-    this.flushAssistant(event, { closeSegment: true })
+    this.flushAssistant(event, {
+      closeSegment: true,
+      streaming: event.type !== 'item.completed'
+    })
   }
 
   private ingestThinking(
@@ -329,7 +354,16 @@ export class ProviderRuntimeIngestion {
     >
   ): void {
     const id = `thinking:${event.itemId ?? event.turnId ?? event.eventId}`
-    const completed = event.type === 'item.completed' || event.payload.status === 'completed'
+    const existing = this.engine
+      .getThread(event.threadId)
+      .activities.find((activity) => activity.id === id)
+    const existingStatus = readPayloadString(existing?.payload, 'status')
+    const completed =
+      existing?.resolved === true ||
+      isTerminalToolStatus(existingStatus) ||
+      this.completedTurnToolStatus(event) !== undefined ||
+      event.type === 'item.completed' ||
+      event.payload.status === 'completed'
     this.engine.upsertActivity(
       {
         id,
@@ -357,16 +391,24 @@ export class ProviderRuntimeIngestion {
       .getThread(event.threadId)
       .activities.find((activity) => activity.id === id)
     const output = `${readPayloadString(existing?.payload, 'output') ?? ''}${event.payload.delta}`
+    const existingStatus = readPayloadString(existing?.payload, 'status')
+    const completedTurnStatus = this.completedTurnToolStatus(event)
+    const completed =
+      completedTurnStatus === 'completed' ||
+      existing?.kind === 'tool.completed' ||
+      existingStatus === 'completed' ||
+      existingStatus === 'success'
+    const terminal = completed || completedTurnStatus === 'failed'
     this.engine.upsertActivity(
       {
         id,
-        kind: 'tool.updated',
+        kind: terminal ? 'tool.completed' : 'tool.updated',
         tone: 'tool',
         summary: existing?.summary ?? 'Tool output',
         payload: {
           ...existing?.payload,
           itemType: readPayloadString(existing?.payload, 'itemType') ?? 'unknown',
-          status: existing?.payload?.status ?? 'inProgress',
+          status: completed ? 'completed' : (completedTurnStatus ?? existing?.payload?.status ?? 'inProgress'),
           output,
           streamKind: event.payload.streamKind
         },
@@ -377,8 +419,18 @@ export class ProviderRuntimeIngestion {
     )
   }
 
+  private assistantStateKey(event: ProviderRuntimeEvent): string {
+    return `${event.threadId}:${event.itemId ?? event.turnId ?? event.eventId}`
+  }
+
+  private isFinalAssistantItemSnapshot(
+    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
+  ): boolean {
+    return event.raw?.method === 'item/completed'
+  }
+
   private getAssistantState(event: ProviderRuntimeEvent): AssistantSegmentState {
-    const key = `${event.threadId}:${event.itemId ?? event.turnId ?? event.eventId}`
+    const key = this.assistantStateKey(event)
     const existing = this.assistantSegments.get(key)
     if (existing) return existing
 
@@ -394,13 +446,13 @@ export class ProviderRuntimeIngestion {
 
   private flushAssistant(
     event: ProviderRuntimeEvent,
-    options: { closeSegment: boolean } = { closeSegment: true }
+    options: { closeSegment: boolean; streaming?: boolean } = { closeSegment: true }
   ): void {
     for (const [key, state] of this.assistantSegments) {
       if (!key.startsWith(`${event.threadId}:`)) continue
       if (state.buffer.length === 0) {
         if (options.closeSegment && state.activeMessageId) {
-          this.closeAssistantMessage(event, state.activeMessageId)
+          this.closeAssistantMessage(event, state.activeMessageId, options.streaming)
           state.activeMessageId = null
           state.nextSegmentIndex += 1
         }
@@ -417,7 +469,7 @@ export class ProviderRuntimeIngestion {
         role: 'assistant',
         text: `${existing?.text ?? ''}${state.buffer}`,
         turnId: event.turnId ?? existing?.turnId ?? null,
-        streaming: event.type !== 'turn.completed',
+        streaming: options.streaming ?? event.type !== 'turn.completed',
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
       }
@@ -431,7 +483,11 @@ export class ProviderRuntimeIngestion {
     }
   }
 
-  private closeAssistantMessage(event: ProviderRuntimeEvent, messageId: string): void {
+  private closeAssistantMessage(
+    event: ProviderRuntimeEvent,
+    messageId: string,
+    streaming = event.type !== 'turn.completed'
+  ): void {
     const existing = this.engine
       .getThread(event.threadId)
       .messages.find((message) => message.id === messageId)
@@ -439,7 +495,7 @@ export class ProviderRuntimeIngestion {
     this.engine.upsertMessage(
       {
         ...existing,
-        streaming: event.type !== 'turn.completed',
+        streaming,
         updatedAt: event.createdAt
       },
       event.threadId
@@ -466,6 +522,12 @@ export class ProviderRuntimeIngestion {
   private closeActiveTurn(event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>): void {
     const thread = this.engine.getThread(event.threadId)
     const activeTurnId = thread.session?.activeTurnId
+
+    this.completedTurns.set(
+      this.turnCompletionKey(event.threadId, event.turnId ?? event.eventId),
+      toolStatusForTurnCompletion(event.payload.state)
+    )
+    this.finalizeActivitiesForTurn(event)
     if (activeTurnId && event.turnId && activeTurnId !== event.turnId) return
 
     this.engine.setLatestTurn(event.threadId, {
@@ -490,7 +552,129 @@ export class ProviderRuntimeIngestion {
     })
   }
 
+  private closeTurnForTerminalSession(
+    event: Extract<ProviderRuntimeEvent, { type: 'session.state.changed' }>
+  ): void {
+    if (event.payload.state !== 'stopped' && event.payload.state !== 'error') return
+    const thread = this.engine.getThread(event.threadId)
+    const activeTurnId =
+      thread.session?.activeTurnId ??
+      (thread.latestTurn?.status === 'running' ? thread.latestTurn.id : null)
+    if (!activeTurnId) return
+
+    const state = event.payload.state === 'error' ? 'failed' : 'interrupted'
+    const cleanupEvent: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }> = {
+      ...event,
+      type: 'turn.completed',
+      turnId: activeTurnId,
+      payload: {
+        state,
+        errorMessage: event.payload.reason
+      }
+    }
+    this.completedTurns.set(
+      this.turnCompletionKey(event.threadId, activeTurnId),
+      toolStatusForTurnCompletion(state)
+    )
+    this.finalizeActivitiesForTurn(cleanupEvent)
+    this.engine.setLatestTurn(event.threadId, {
+      id: activeTurnId,
+      status: state,
+      startedAt: thread.latestTurn?.startedAt ?? event.createdAt,
+      completedAt: event.createdAt
+    })
+  }
+
+  private finalizeActivitiesForTurn(event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>): void {
+    this.resolvePendingThinkingForTurn(event)
+    this.resolvePendingToolsForTurn(event)
+    this.resolvePendingPromptsForTurn(event)
+  }
+
+  private resolvePendingThinkingForTurn(
+    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
+  ): void {
+    const thread = this.engine.getThread(event.threadId)
+    for (const activity of thread.activities) {
+      if (activity.resolved) continue
+      if (activity.tone !== 'thinking') continue
+      if (!activityBelongsToTurn(activity, event.turnId)) continue
+      this.engine.upsertActivity(
+        {
+          ...activity,
+          kind: 'task.completed',
+          resolved: true,
+          payload: { ...activity.payload, status: 'completed' },
+          createdAt: activity.createdAt
+        },
+        event.threadId
+      )
+    }
+  }
+
+  private resolvePendingToolsForTurn(
+    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
+  ): void {
+    const thread = this.engine.getThread(event.threadId)
+    const nextStatus = toolStatusForTurnCompletion(event.payload.state)
+    for (const activity of thread.activities) {
+      if (!activity.kind.startsWith('tool.')) continue
+      if (!activityBelongsToTurn(activity, event.turnId)) continue
+      const currentStatus = readPayloadString(activity.payload, 'status')
+      if (activity.kind === 'tool.completed' && isTerminalToolStatus(currentStatus)) continue
+      this.engine.upsertActivity(
+        {
+          ...activity,
+          kind: 'tool.completed',
+          payload: {
+            ...activity.payload,
+            status: isTerminalToolStatus(currentStatus) ? currentStatus : nextStatus
+          },
+          createdAt: activity.createdAt
+        },
+        event.threadId
+      )
+    }
+  }
+
+  private resolvePendingPromptsForTurn(
+    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
+  ): void {
+    const thread = this.engine.getThread(event.threadId)
+    for (const activity of thread.activities) {
+      if (activity.resolved) continue
+      if (
+        activity.kind !== 'approval.requested' &&
+        activity.kind !== 'user-input.requested'
+      )
+        continue
+      if (!activityBelongsToTurn(activity, event.turnId)) continue
+      this.engine.upsertActivity(
+        {
+          ...activity,
+          kind: activity.kind === 'approval.requested' ? 'approval.resolved' : 'user-input.resolved',
+          tone: 'info',
+          summary: `${activity.summary} (cleared by turn end)`,
+          resolved: true,
+          createdAt: activity.createdAt
+        },
+        event.threadId
+      )
+    }
+  }
+
   private planKey(threadId: string, turnId: string): string {
+    return `${threadId}:${turnId}`
+  }
+
+  private completedTurnToolStatus(
+    event: Pick<ProviderRuntimeEvent, 'threadId' | 'turnId'>
+  ): 'completed' | 'failed' | undefined {
+    if (!event.turnId) return undefined
+    return this.completedTurns.get(this.turnCompletionKey(event.threadId, event.turnId))
+  }
+
+  private turnCompletionKey(threadId: string, turnId: string): string {
     return `${threadId}:${turnId}`
   }
 }
@@ -546,6 +730,36 @@ function readNestedPayloadString(value: unknown, ...keys: string[]): string | un
   const item = record.item
   if (typeof item === 'object' && item !== null) return readNestedPayloadString(item, ...keys)
   return undefined
+}
+
+function activityBelongsToTurn(
+  activity: OrchestrationThreadActivity,
+  turnId: string | undefined
+): boolean {
+  return !turnId || !activity.turnId || activity.turnId === turnId
+}
+
+function toolStatusForTurnCompletion(
+  state: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>['payload']['state']
+): 'completed' | 'failed' {
+  return state === 'completed' ? 'completed' : 'failed'
+}
+
+function isTerminalToolStatus(status: string | undefined): boolean {
+  return (
+    status === 'completed' ||
+    status === 'success' ||
+    status === 'failed' ||
+    status === 'declined'
+  )
+}
+
+function nextToolStatus(
+  existingStatus: string | undefined,
+  incomingStatus: string | undefined
+): string {
+  if (isTerminalToolStatus(existingStatus)) return existingStatus ?? 'completed'
+  return incomingStatus ?? existingStatus ?? 'inProgress'
 }
 
 function toneForItem(itemType: CanonicalItemType): OrchestrationThreadActivity['tone'] {
