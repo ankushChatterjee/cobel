@@ -22,13 +22,16 @@
     "build:linux": "electron-vite build && electron-builder --linux",
     "test": "vitest",
     "test:run": "vitest run && vitest run --config vitest.node.config.ts",
-    "test:node": "vitest run --config vitest.node.config.ts",
-    "test:e2e": "bun run build && playwright test"
+    "test:node": "npm rebuild better-sqlite3 && vitest run --config vitest.node.config.ts && npx electron-builder install-app-deps",
+    "test:e2e": "bun run build && playwright test",
+    "rebuild:electron": "rm -f node_modules/better-sqlite3/build/Release/.forge-meta && npx electron-builder install-app-deps",
+    "rebuild:node": "npm rebuild better-sqlite3"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@tanstack/react-router": "^1.168.23",
+    "better-sqlite3": "^12.9.0",
     "lucide-react": "^1.8.0"
   },
   "devDependencies": {
@@ -40,6 +43,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.19.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",

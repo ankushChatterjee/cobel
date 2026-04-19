@@ -31,6 +31,14 @@ export function applyOrchestrationEvent(
       }
     case 'thread.latest-turn-set':
       return { ...thread, latestTurn: event.latestTurn, updatedAt: event.createdAt }
+    case 'thread.created':
+      return { ...thread, title: event.title, cwd: event.cwd, branch: event.branch ?? 'main', updatedAt: event.createdAt }
+    case 'thread.renamed':
+      return { ...thread, title: event.title, updatedAt: event.createdAt }
+    case 'thread.archived':
+      return { ...thread, archivedAt: event.createdAt, updatedAt: event.createdAt }
+    case 'thread.deleted':
+      return thread
   }
 }
 

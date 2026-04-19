@@ -123,6 +123,45 @@ export function registerAgentIpc(backend: AgentBackend): void {
     assertThreadInput(input)
     await backend.stopSession(input)
   })
+
+  ipcMain.handle(AGENT_CHANNELS.getShellSnapshot, async (event) => {
+    validateSender(event)
+    return backend.getShellSnapshot()
+  })
+
+  ipcMain.handle(
+    AGENT_CHANNELS.subscribeShell,
+    async (event, input: { subscriptionId?: unknown }) => {
+      validateSender(event)
+      if (!input || typeof input.subscriptionId !== 'string') {
+        throw new Error('subscriptionId is required.')
+      }
+      const { subscriptionId } = input
+      const webContents = event.sender
+      disposeSubscription(subscriptionId)
+      let skippedInitialSnapshot = false
+      const unsubscribe = backend.subscribeShell((item) => {
+        if (!skippedInitialSnapshot && item.kind === 'snapshot') {
+          skippedInitialSnapshot = true
+          return
+        }
+        if (!webContents.isDestroyed())
+          webContents.send(AGENT_CHANNELS.shellEvent(subscriptionId), item)
+      })
+      subscriptions.set(subscriptionId, unsubscribe)
+      trackWebContentsSubscription(webContents, subscriptionId)
+      return { subscriptionId, snapshot: backend.getShellSnapshot() }
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_CHANNELS.unsubscribeShell,
+    async (event, input: { subscriptionId?: unknown }) => {
+      validateSender(event)
+      if (!input || typeof input.subscriptionId !== 'string') return
+      disposeSubscription(input.subscriptionId)
+    }
+  )
 }
 
 export function validateSender(event: IpcMainInvokeEvent): void {
@@ -156,6 +195,9 @@ export function removeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_CHANNELS.revealPath)
   ipcMain.removeHandler(AGENT_CHANNELS.subscribeThread)
   ipcMain.removeHandler(AGENT_CHANNELS.unsubscribeThread)
+  ipcMain.removeHandler(AGENT_CHANNELS.subscribeShell)
+  ipcMain.removeHandler(AGENT_CHANNELS.unsubscribeShell)
+  ipcMain.removeHandler(AGENT_CHANNELS.getShellSnapshot)
   ipcMain.removeHandler(AGENT_CHANNELS.interruptTurn)
   ipcMain.removeHandler(AGENT_CHANNELS.respondToApproval)
   ipcMain.removeHandler(AGENT_CHANNELS.respondToUserInput)

@@ -14,14 +14,18 @@ import type {
   ModelInfo,
   OpenWorkspaceFolderResult,
   OrchestrationMessage,
+  OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadActivity,
+  ProjectSummary,
   ProviderSummary,
-  RuntimeMode
+  RuntimeMode,
+  ThreadShellSummary
 } from '../../../shared/agent'
 import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
 
-const workspaceStorageKey = 'gencode.workspace.v1'
+const activeSelectionKey = 'gencode.active.v1'
+const legacyWorkspaceKey = 'gencode.workspace.v1'
 
 const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
   { value: 'approval-required', label: 'Guarded' },
@@ -29,30 +33,32 @@ const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
   { value: 'full-access', label: 'Full access' }
 ]
 
-
-
-interface ProjectChat {
-  id: string
-  label: string
-  createdAt: string
-}
-
-interface ProjectGroup {
-  id: string
-  name: string
-  path: string
-  open: boolean
-  chats: ProjectChat[]
-}
-
-interface WorkspaceState {
-  projects: ProjectGroup[]
+interface ActiveSelection {
   activeProjectId: string | null
   activeChatId: string | null
 }
 
+function loadActiveSelection(): ActiveSelection {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(activeSelectionKey) ?? 'null') as ActiveSelection | null
+    if (!parsed) return { activeProjectId: null, activeChatId: null }
+    return {
+      activeProjectId: typeof parsed.activeProjectId === 'string' ? parsed.activeProjectId : null,
+      activeChatId: typeof parsed.activeChatId === 'string' ? parsed.activeChatId : null
+    }
+  } catch {
+    return { activeProjectId: null, activeChatId: null }
+  }
+}
+
+function saveActiveSelection(selection: ActiveSelection): void {
+  localStorage.setItem(activeSelectionKey, JSON.stringify(selection))
+}
+
 export function HomePage(): React.JSX.Element {
-  const [workspace, setWorkspace] = useState<WorkspaceState>(() => loadWorkspaceState())
+  const [shell, setShell] = useState<OrchestrationShellSnapshot>({ projects: [], threads: [] })
+  const [selection, setSelection] = useState<ActiveSelection>(loadActiveSelection)
+  const [openProjectIds, setOpenProjectIds] = useState<Set<string>>(() => new Set())
   const [thread, setThread] = useState<OrchestrationThread | null>(null)
   const [providers, setProviders] = useState<ProviderSummary[]>([])
   const [prompt, setPrompt] = useState('')
@@ -68,12 +74,15 @@ export function HomePage(): React.JSX.Element {
   const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(() => new Set())
 
   const activeProject = useMemo(
-    () => workspace.projects.find((project) => project.id === workspace.activeProjectId) ?? null,
-    [workspace]
+    () => shell.projects.find((p) => p.id === selection.activeProjectId) ?? null,
+    [shell.projects, selection.activeProjectId]
   )
   const activeChat = useMemo(
-    () => activeProject?.chats.find((chat) => chat.id === workspace.activeChatId) ?? null,
-    [activeProject, workspace.activeChatId]
+    () =>
+      shell.threads.find(
+        (t) => t.projectId === selection.activeProjectId && t.id === selection.activeChatId
+      ) ?? null,
+    [shell.threads, selection.activeProjectId, selection.activeChatId]
   )
   const activeThreadId = activeChat?.id ?? null
   const activeProvider = providers[0]
@@ -83,9 +92,54 @@ export function HomePage(): React.JSX.Element {
   const transcriptItems = useMemo(() => buildTranscriptItems(thread), [thread])
 
   useEffect(() => {
-    saveWorkspaceState(workspace)
-  }, [workspace])
+    saveActiveSelection(selection)
+  }, [selection])
 
+  // Shell subscription: drives sidebar state
+  useEffect(() => {
+    const unsubscribe = window.agentApi.subscribeShell((item) => {
+      if (item.kind === 'snapshot') {
+        setShell(item.snapshot)
+        // Auto-open the active project
+        if (item.snapshot.projects.length > 0) {
+          setOpenProjectIds((prev) => {
+            const next = new Set(prev)
+            for (const p of item.snapshot.projects) next.add(p.id)
+            return next
+          })
+        }
+        // After loading shell, run one-time localStorage migration
+        runLegacyMigration(item.snapshot)
+        return
+      }
+      const { event } = item
+      if (event.type === 'shell.project-upserted') {
+        setShell((prev) => ({
+          ...prev,
+          projects: upsertById(prev.projects, event.project)
+        }))
+        setOpenProjectIds((prev) => new Set([...prev, event.project.id]))
+      } else if (event.type === 'shell.project-removed') {
+        setShell((prev) => ({
+          ...prev,
+          projects: prev.projects.filter((p) => p.id !== event.projectId)
+        }))
+      } else if (event.type === 'shell.thread-upserted') {
+        setShell((prev) => ({
+          ...prev,
+          threads: upsertById(prev.threads, event.thread)
+        }))
+      } else if (event.type === 'shell.thread-removed') {
+        setShell((prev) => ({
+          ...prev,
+          threads: prev.threads.filter((t) => t.id !== event.threadId)
+        }))
+      }
+    })
+    return unsubscribe
+  }, [])
+
+  // Provider and model list
   useEffect(() => {
     void window.agentApi
       .listProviders()
@@ -110,6 +164,7 @@ export function HomePage(): React.JSX.Element {
       })
   }, [])
 
+  // Thread subscription for active chat
   useEffect(() => {
     if (!activeThreadId) return undefined
 
@@ -179,6 +234,18 @@ export function HomePage(): React.JSX.Element {
         message: optimisticMessage
       })
     )
+
+    // Rename the chat if it still has the default label
+    if (activeChat && activeChat.title === 'New chat') {
+      void window.agentApi.dispatchCommand({
+        type: 'thread.rename',
+        commandId: `cmd:${createId()}`,
+        threadId: activeThreadId,
+        title: titleFromPrompt(input),
+        createdAt
+      })
+    }
+
     try {
       await window.agentApi.dispatchCommand({
         type: 'thread.turn.start',
@@ -191,7 +258,6 @@ export function HomePage(): React.JSX.Element {
         runtimeMode,
         createdAt
       })
-      renameActiveChatFromPrompt(input)
     } catch (commandError) {
       setError(commandError instanceof Error ? commandError.message : String(commandError))
       setPrompt(input)
@@ -225,14 +291,12 @@ export function HomePage(): React.JSX.Element {
     setError(null)
     try {
       if (typeof window.agentApi.openWorkspaceFolder !== 'function') {
-        setError(
-          'Folder picker is not available yet. Fully restart bun run dev to refresh preload.'
-        )
+        setError('Folder picker is not available yet. Fully restart bun run dev to refresh preload.')
         return
       }
       const folder = await window.agentApi.openWorkspaceFolder()
       if (!folder) return
-      openProject(folder)
+      await openProject(folder)
     } catch (folderError) {
       setError(readOpenProjectError(folderError))
     }
@@ -248,23 +312,23 @@ export function HomePage(): React.JSX.Element {
     }
   }
 
-  function startNewChat(): void {
+  async function startNewChat(): Promise<void> {
     if (!activeProject) {
       void openWorkspaceFolder()
       return
     }
-
-    const chat = createChat(activeProject.id, 'New chat')
-    setWorkspace((current) => ({
-      ...current,
-      activeProjectId: activeProject.id,
-      activeChatId: chat.id,
-      projects: current.projects.map((project) =>
-        project.id === activeProject.id
-          ? { ...project, open: true, chats: [chat, ...project.chats] }
-          : project
-      )
-    }))
+    const chatId = `project:${activeProject.id}:chat:${createId()}`
+    const createdAt = new Date().toISOString()
+    await window.agentApi.dispatchCommand({
+      type: 'thread.create',
+      commandId: `cmd:${createId()}`,
+      threadId: chatId,
+      projectId: activeProject.id,
+      title: 'New chat',
+      cwd: activeProject.path,
+      createdAt
+    })
+    setSelection({ activeProjectId: activeProject.id, activeChatId: chatId })
     setPrompt('')
     setThread(null)
     setError(null)
@@ -281,30 +345,64 @@ export function HomePage(): React.JSX.Element {
     }
   }
 
-  function selectProject(project: ProjectGroup): void {
-    setWorkspace((current) => ({
-      ...current,
+  function selectProject(project: ProjectSummary): void {
+    const isAlreadyActive = selection.activeProjectId === project.id
+    setOpenProjectIds((prev) => {
+      const next = new Set(prev)
+      if (isAlreadyActive) {
+        if (next.has(project.id)) next.delete(project.id)
+        else next.add(project.id)
+      } else {
+        next.add(project.id)
+      }
+      return next
+    })
+    const firstThread = shell.threads.find(
+      (t) => t.projectId === project.id && !t.archivedAt
+    )
+    setSelection({
       activeProjectId: project.id,
-      activeChatId: project.chats[0]?.id ?? null,
-      projects: current.projects.map((candidate) =>
-        candidate.id === project.id
-          ? {
-              ...candidate,
-              open: candidate.id === current.activeProjectId ? !candidate.open : true
-            }
-          : candidate
-      )
-    }))
+      activeChatId: firstThread?.id ?? null
+    })
     setError(null)
   }
 
-  function selectChat(project: ProjectGroup, chat: ProjectChat): void {
-    setWorkspace((current) => ({
-      ...current,
-      activeProjectId: project.id,
-      activeChatId: chat.id
-    }))
+  function selectChat(chat: ThreadShellSummary): void {
+    setSelection({ activeProjectId: chat.projectId, activeChatId: chat.id })
     setError(null)
+  }
+
+  async function openProject(folder: OpenWorkspaceFolderResult): Promise<void> {
+    const projectId = projectIdForPath(folder.path)
+    const existing = shell.projects.find((p) => p.id === projectId)
+    const createdAt = new Date().toISOString()
+    if (!existing) {
+      await window.agentApi.dispatchCommand({
+        type: 'project.create',
+        commandId: `cmd:${createId()}`,
+        projectId,
+        name: folder.name || folder.path,
+        path: folder.path,
+        createdAt
+      })
+      const chatId = `project:${projectId}:chat:${createId()}`
+      await window.agentApi.dispatchCommand({
+        type: 'thread.create',
+        commandId: `cmd:${createId()}`,
+        threadId: chatId,
+        projectId,
+        title: 'New chat',
+        cwd: folder.path,
+        createdAt
+      })
+      setSelection({ activeProjectId: projectId, activeChatId: chatId })
+    } else {
+      const firstThread = shell.threads.find(
+        (t) => t.projectId === projectId && !t.archivedAt
+      )
+      setSelection({ activeProjectId: projectId, activeChatId: firstThread?.id ?? null })
+    }
+    setOpenProjectIds((prev) => new Set([...prev, projectId]))
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
@@ -329,44 +427,59 @@ export function HomePage(): React.JSX.Element {
     })
   }
 
-  function openProject(folder: OpenWorkspaceFolderResult): void {
-    const project = createProject(folder)
-    setWorkspace((current) => {
-      const existing = current.projects.find((candidate) => candidate.id === project.id)
-      if (existing) {
-        return {
-          projects: current.projects.map((candidate) =>
-            candidate.id === project.id ? { ...candidate, open: true } : candidate
-          ),
-          activeProjectId: existing.id,
-          activeChatId: existing.chats[0]?.id ?? null
+  function runLegacyMigration(loadedShell: OrchestrationShellSnapshot): void {
+    const raw = localStorage.getItem(legacyWorkspaceKey)
+    if (!raw) return
+    if (loadedShell.projects.length > 0) {
+      // Backend already has data — just clear the legacy key
+      localStorage.removeItem(legacyWorkspaceKey)
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      localStorage.removeItem(legacyWorkspaceKey)
+      return
+    }
+    const legacy = parsed as {
+      projects?: Array<{ id: string; name: string; path: string; chats?: Array<{ id: string; label: string; createdAt: string }> }>
+      activeProjectId?: string
+      activeChatId?: string
+    }
+    if (!Array.isArray(legacy.projects)) {
+      localStorage.removeItem(legacyWorkspaceKey)
+      return
+    }
+    const migrateAsync = async (): Promise<void> => {
+      const createdAt = new Date().toISOString()
+      for (const project of legacy.projects ?? []) {
+        if (typeof project.id !== 'string' || typeof project.path !== 'string') continue
+        await window.agentApi.dispatchCommand({
+          type: 'project.create',
+          commandId: `cmd:${createId()}`,
+          projectId: project.id,
+          name: project.name ?? project.path,
+          path: project.path,
+          createdAt
+        })
+        for (const chat of project.chats ?? []) {
+          if (typeof chat.id !== 'string') continue
+          await window.agentApi.dispatchCommand({
+            type: 'thread.create',
+            commandId: `cmd:${createId()}`,
+            threadId: chat.id,
+            projectId: project.id,
+            title: chat.label ?? 'New chat',
+            cwd: project.path,
+            createdAt: chat.createdAt ?? createdAt
+          })
         }
       }
-
-      return {
-        projects: [project, ...current.projects],
-        activeProjectId: project.id,
-        activeChatId: project.chats[0]?.id ?? null
-      }
+    }
+    void migrateAsync().finally(() => {
+      localStorage.removeItem(legacyWorkspaceKey)
     })
-  }
-
-  function renameActiveChatFromPrompt(input: string): void {
-    if (!activeProject || !activeChat || activeChat.label !== 'New chat') return
-    const label = titleFromPrompt(input)
-    setWorkspace((current) => ({
-      ...current,
-      projects: current.projects.map((project) =>
-        project.id === activeProject.id
-          ? {
-              ...project,
-              chats: project.chats.map((chat) =>
-                chat.id === activeChat.id ? { ...chat, label } : chat
-              )
-            }
-          : project
-      )
-    }))
   }
 
   return (
@@ -388,49 +501,56 @@ export function HomePage(): React.JSX.Element {
         </div>
 
         <div className="sidebar-scroll">
-          {workspace.projects.length === 0 ? (
+          {shell.projects.length === 0 ? (
             <div className="sidebar-empty" aria-label="No projects open">
               <p>No projects open</p>
             </div>
           ) : (
             <nav className="project-list" aria-label="Project list">
-              {workspace.projects.map((project) => (
-                <section key={project.id} className="project-group">
-                  <button
-                    type="button"
-                    className={`project-toggle ${project.id === activeProject?.id ? 'active' : ''}`}
-                    aria-expanded={project.open}
-                    onClick={() => selectProject(project)}
-                  >
-                    <span className="disclosure">
-                      {project.open
-                        ? <ChevronDown size={12} strokeWidth={2} />
-                        : <ChevronRight size={12} strokeWidth={2} />}
-                    </span>
-                    <FolderOpen size={13} strokeWidth={1.8} />
-                    <span className="project-name">{project.name}</span>
-                  </button>
-                  {project.open ? (
-                    <div className="thread-list">
-                      {project.chats.map((chat) => (
-                        <button
-                          key={chat.id}
-                          type="button"
-                          className={`thread-link ${chat.id === activeChat?.id ? 'active' : ''}`}
-                          onClick={() => selectChat(project, chat)}
-                        >
-                          <span className="thread-dot" />
-                          <span className="thread-label">{chat.label}</span>
+              {shell.projects.map((project) => {
+                const threads = shell.threads.filter(
+                  (t) => t.projectId === project.id && !t.archivedAt
+                )
+                const isOpen = openProjectIds.has(project.id)
+                const isActive = project.id === selection.activeProjectId
+                return (
+                  <section key={project.id} className="project-group">
+                    <button
+                      type="button"
+                      className={`project-toggle ${isActive ? 'active' : ''}`}
+                      aria-expanded={isOpen}
+                      onClick={() => selectProject(project)}
+                    >
+                      <span className="disclosure">
+                        {isOpen
+                          ? <ChevronDown size={12} strokeWidth={2} />
+                          : <ChevronRight size={12} strokeWidth={2} />}
+                      </span>
+                      <FolderOpen size={13} strokeWidth={1.8} />
+                      <span className="project-name">{project.name}</span>
+                    </button>
+                    {isOpen ? (
+                      <div className="thread-list">
+                        {threads.map((chat) => (
+                          <button
+                            key={chat.id}
+                            type="button"
+                            className={`thread-link ${chat.id === activeChat?.id ? 'active' : ''}`}
+                            onClick={() => selectChat(chat)}
+                          >
+                            <span className="thread-dot" />
+                            <span className="thread-label">{chat.title}</span>
+                          </button>
+                        ))}
+                        <button type="button" className="thread-link new-thread" onClick={() => void startNewChat()}>
+                          <Plus size={11} strokeWidth={2} />
+                          <span>New chat</span>
                         </button>
-                      ))}
-                      <button type="button" className="thread-link new-thread" onClick={startNewChat}>
-                        <Plus size={11} strokeWidth={2} />
-                        <span>New chat</span>
-                      </button>
-                    </div>
-                  ) : null}
-                </section>
-              ))}
+                      </div>
+                    ) : null}
+                  </section>
+                )
+              })}
             </nav>
           )}
         </div>
@@ -439,7 +559,7 @@ export function HomePage(): React.JSX.Element {
       <main className="chat-surface">
         <header className="chat-header">
           <div className="chat-title-group">
-            <h1>{activeChat?.label ?? 'Open a project'}</h1>
+            <h1>{activeChat?.title ?? 'Open a project'}</h1>
             <span>
               {activeProject?.name ?? 'no project'} · {sessionStatus}
             </span>
@@ -450,7 +570,7 @@ export function HomePage(): React.JSX.Element {
               className="text-button"
               title="New chat"
               aria-label="New chat"
-              onClick={startNewChat}
+              onClick={() => void startNewChat()}
             >
               New
             </button>
@@ -868,32 +988,6 @@ function PendingPrompt({
   )
 }
 
-function loadWorkspaceState(): WorkspaceState {
-  try {
-    const parsed = JSON.parse(
-      localStorage.getItem(workspaceStorageKey) ?? 'null'
-    ) as WorkspaceState | null
-    if (!parsed || !Array.isArray(parsed.projects)) return emptyWorkspace()
-    const projects = parsed.projects.filter(isProjectGroup)
-    const activeProject =
-      projects.find((project) => project.id === parsed.activeProjectId) ?? projects[0]
-    const activeChat =
-      activeProject?.chats.find((chat) => chat.id === parsed.activeChatId) ??
-      activeProject?.chats[0]
-    return {
-      projects,
-      activeProjectId: activeProject?.id ?? null,
-      activeChatId: activeChat?.id ?? null
-    }
-  } catch {
-    return emptyWorkspace()
-  }
-}
-
-function saveWorkspaceState(workspace: WorkspaceState): void {
-  localStorage.setItem(workspaceStorageKey, JSON.stringify(workspace))
-}
-
 function mergePendingUserMessages(
   thread: OrchestrationThread,
   pendingMessages: Map<string, OrchestrationMessage>
@@ -967,46 +1061,6 @@ function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
   return next
 }
 
-function emptyWorkspace(): WorkspaceState {
-  return { projects: [], activeProjectId: null, activeChatId: null }
-}
-
-function isProjectGroup(value: unknown): value is ProjectGroup {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as ProjectGroup
-  return (
-    typeof candidate.id === 'string' &&
-    typeof candidate.name === 'string' &&
-    typeof candidate.path === 'string' &&
-    Array.isArray(candidate.chats)
-  )
-}
-
-function createProject(folder: OpenWorkspaceFolderResult): ProjectGroup {
-  const id = projectIdForPath(folder.path)
-  return {
-    id,
-    name: folder.name || folder.path,
-    path: folder.path,
-    open: true,
-    chats: [createChat(id, 'New chat')]
-  }
-}
-
-function createChat(projectId: string, label: string): ProjectChat {
-  return {
-    id: `project:${projectId}:chat:${createId()}`,
-    label,
-    createdAt: new Date().toISOString()
-  }
-}
-
-function createId(): string {
-  return typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-}
-
 function buildTranscriptItems(thread: OrchestrationThread | null): TranscriptItem[] {
   if (!thread) return []
   return [
@@ -1052,8 +1106,6 @@ function isThinkingActivity(activity: OrchestrationThreadActivity): boolean {
 }
 
 function isHiddenActivity(activity: OrchestrationThreadActivity): boolean {
-  // Hide resolved thinking activities — they completed and don't need to stay visible.
-  // Unresolved thinking activities stay visible as the active spinner.
   return isThinkingActivity(activity) && activity.resolved === true
 }
 
@@ -1245,4 +1297,10 @@ function readOpenProjectError(error: unknown): string {
     return 'Project picker is not registered in the running desktop process. Fully restart bun run dev.'
   }
   return message
+}
+
+function createId(): string {
+  return typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }

@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import type { AgentApi, OrchestrationThreadStreamItem } from '../shared/agent'
+import type {
+  AgentApi,
+  OrchestrationShellSnapshot,
+  OrchestrationShellStreamItem,
+  OrchestrationThreadStreamItem
+} from '../shared/agent'
 import { AGENT_CHANNELS } from '../main/agent/ipc/channels'
 
 const agentApi: AgentApi = {
@@ -14,6 +19,9 @@ const agentApi: AgentApi = {
   clearThread: (input) => ipcRenderer.invoke(AGENT_CHANNELS.clearThread, input),
   openWorkspaceFolder: () => ipcRenderer.invoke(AGENT_CHANNELS.openWorkspaceFolder),
   revealPath: (input) => ipcRenderer.invoke(AGENT_CHANNELS.revealPath, input),
+  getShellSnapshot: (): Promise<OrchestrationShellSnapshot> =>
+    ipcRenderer.invoke(AGENT_CHANNELS.getShellSnapshot),
+
   subscribeThread: (input, listener) => {
     let disposed = false
     const subscriptionId = `sub:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`
@@ -48,6 +56,39 @@ const agentApi: AgentApi = {
       disposed = true
       ipcRenderer.removeListener(channel, eventListener)
       void ipcRenderer.invoke(AGENT_CHANNELS.unsubscribeThread, { subscriptionId })
+    }
+  },
+
+  subscribeShell: (listener) => {
+    let disposed = false
+    const subscriptionId = `shell:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`
+    const channel = AGENT_CHANNELS.shellEvent(subscriptionId)
+    const eventListener = (
+      _event: IpcRendererEvent,
+      item: OrchestrationShellStreamItem
+    ): void => {
+      listener(item)
+    }
+
+    ipcRenderer.on(channel, eventListener)
+
+    ipcRenderer
+      .invoke(AGENT_CHANNELS.subscribeShell, { subscriptionId })
+      .then(({ snapshot }: { subscriptionId: string; snapshot: OrchestrationShellSnapshot }) => {
+        if (disposed) {
+          void ipcRenderer.invoke(AGENT_CHANNELS.unsubscribeShell, { subscriptionId })
+          return
+        }
+        listener({ kind: 'snapshot', snapshot })
+      })
+      .catch((error) => {
+        console.error('Failed to subscribe to shell', error)
+      })
+
+    return () => {
+      disposed = true
+      ipcRenderer.removeListener(channel, eventListener)
+      void ipcRenderer.invoke(AGENT_CHANNELS.unsubscribeShell, { subscriptionId })
     }
   }
 }

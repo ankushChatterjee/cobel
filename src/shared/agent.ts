@@ -261,49 +261,85 @@ export interface OrchestrationThread {
   archivedAt: string | null
 }
 
+export interface OrchestrationEventMeta {
+  eventId?: string
+  streamVersion?: number
+  commandId?: string
+  actorKind?: string
+}
+
 export type OrchestrationEvent =
-  | {
+  | (OrchestrationEventMeta & {
       sequence: number
       type: 'thread.snapshot.changed'
       threadId: string
       thread: OrchestrationThread
       createdAt: string
-    }
-  | {
+    })
+  | (OrchestrationEventMeta & {
       sequence: number
       type: 'thread.session-set'
       threadId: string
       session: OrchestrationSession | null
       createdAt: string
-    }
-  | {
+    })
+  | (OrchestrationEventMeta & {
       sequence: number
       type: 'thread.message-upserted'
       threadId: string
       message: OrchestrationMessage
       createdAt: string
-    }
-  | {
+    })
+  | (OrchestrationEventMeta & {
       sequence: number
       type: 'thread.activity-upserted'
       threadId: string
       activity: OrchestrationThreadActivity
       createdAt: string
-    }
-  | {
+    })
+  | (OrchestrationEventMeta & {
       sequence: number
       type: 'thread.proposed-plan-upserted'
       threadId: string
       proposedPlan: OrchestrationProposedPlan
       createdAt: string
-    }
-  | {
+    })
+  | (OrchestrationEventMeta & {
       sequence: number
       type: 'thread.latest-turn-set'
       threadId: string
       latestTurn: OrchestrationLatestTurn | null
       createdAt: string
-    }
+    })
+  | (OrchestrationEventMeta & {
+      sequence: number
+      type: 'thread.created'
+      threadId: string
+      projectId: string
+      title: string
+      cwd?: string
+      branch?: string
+      createdAt: string
+    })
+  | (OrchestrationEventMeta & {
+      sequence: number
+      type: 'thread.renamed'
+      threadId: string
+      title: string
+      createdAt: string
+    })
+  | (OrchestrationEventMeta & {
+      sequence: number
+      type: 'thread.archived'
+      threadId: string
+      createdAt: string
+    })
+  | (OrchestrationEventMeta & {
+      sequence: number
+      type: 'thread.deleted'
+      threadId: string
+      createdAt: string
+    })
 
 export type OrchestrationThreadStreamItem =
   | {
@@ -333,6 +369,49 @@ export type ClientOrchestrationCommand =
     }
   | {
       type: 'thread.session.stop'
+      commandId: string
+      threadId: string
+      createdAt: string
+    }
+  | {
+      type: 'project.create'
+      commandId: string
+      projectId: string
+      name: string
+      path: string
+      createdAt: string
+    }
+  | {
+      type: 'project.delete'
+      commandId: string
+      projectId: string
+      createdAt: string
+    }
+  | {
+      type: 'thread.create'
+      commandId: string
+      threadId: string
+      projectId: string
+      title: string
+      cwd?: string
+      branch?: string
+      createdAt: string
+    }
+  | {
+      type: 'thread.rename'
+      commandId: string
+      threadId: string
+      title: string
+      createdAt: string
+    }
+  | {
+      type: 'thread.archive'
+      commandId: string
+      threadId: string
+      createdAt: string
+    }
+  | {
+      type: 'thread.delete'
       commandId: string
       threadId: string
       createdAt: string
@@ -379,12 +458,53 @@ export interface ModelInfo {
   isDefault?: boolean
 }
 
+export interface ProjectSummary {
+  id: string
+  name: string
+  path: string
+  createdAt: string
+  updatedAt: string
+  archivedAt: string | null
+}
+
+export interface ThreadShellSummary {
+  id: string
+  projectId: string
+  title: string
+  cwd?: string
+  branch: string
+  latestTurnId: string | null
+  sessionStatus: OrchestrationSession['status']
+  createdAt: string
+  updatedAt: string
+  archivedAt: string | null
+}
+
+export interface OrchestrationShellSnapshot {
+  projects: ProjectSummary[]
+  threads: ThreadShellSummary[]
+}
+
+export type OrchestrationShellEvent =
+  | { type: 'shell.project-upserted'; project: ProjectSummary }
+  | { type: 'shell.project-removed'; projectId: string }
+  | { type: 'shell.thread-upserted'; thread: ThreadShellSummary }
+  | { type: 'shell.thread-removed'; threadId: string }
+
+export type OrchestrationShellStreamItem =
+  | { kind: 'snapshot'; snapshot: OrchestrationShellSnapshot }
+  | { kind: 'event'; event: OrchestrationShellEvent }
+
 export interface AgentApi {
   dispatchCommand(input: ClientOrchestrationCommand): Promise<DispatchResult>
   subscribeThread(
     input: { threadId: string },
     listener: (item: OrchestrationThreadStreamItem) => void
   ): () => void
+  subscribeShell(
+    listener: (item: OrchestrationShellStreamItem) => void
+  ): () => void
+  getShellSnapshot(): Promise<OrchestrationShellSnapshot>
   interruptTurn(input: InterruptTurnInput): Promise<void>
   respondToApproval(input: RespondToApprovalInput): Promise<void>
   respondToUserInput(input: RespondToUserInputInput): Promise<void>

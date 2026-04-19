@@ -4,9 +4,17 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { AgentBackend } from './agent/AgentBackend'
 import { registerAgentIpc } from './agent/ipc/registerAgentIpc'
+import { openDatabase } from './agent/persistence/Sqlite'
 
+function getDbPath(): string {
+  const userData = app.getPath('userData')
+  return is.dev ? join(userData, 'dev', 'state.sqlite') : join(userData, 'state.sqlite')
+}
+
+const db = openDatabase(getDbPath())
 const agentBackend = new AgentBackend({
-  useFakeProvider: process.env.GENCODE_FAKE_PROVIDER === '1'
+  useFakeProvider: process.env.GENCODE_FAKE_PROVIDER === '1',
+  db
 })
 
 registerAgentIpc(agentBackend)

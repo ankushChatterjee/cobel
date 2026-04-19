@@ -2,6 +2,9 @@ export const AGENT_CHANNELS = {
   dispatchCommand: 'agent:dispatch-command',
   subscribeThread: 'agent:subscribe-thread',
   unsubscribeThread: 'agent:unsubscribe-thread',
+  subscribeShell: 'agent:subscribe-shell',
+  unsubscribeShell: 'agent:unsubscribe-shell',
+  getShellSnapshot: 'agent:get-shell-snapshot',
   interruptTurn: 'agent:interrupt-turn',
   respondToApproval: 'agent:respond-to-approval',
   respondToUserInput: 'agent:respond-to-user-input',
@@ -11,5 +14,6 @@ export const AGENT_CHANNELS = {
   clearThread: 'agent:clear-thread',
   openWorkspaceFolder: 'agent:open-workspace-folder',
   revealPath: 'agent:reveal-path',
-  threadEvent: (subscriptionId: string) => `agent:thread-event:${subscriptionId}`
+  threadEvent: (subscriptionId: string) => `agent:thread-event:${subscriptionId}`,
+  shellEvent: (subscriptionId: string) => `agent:shell-event:${subscriptionId}`
 } as const
