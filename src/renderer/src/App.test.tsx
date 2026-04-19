@@ -1,0 +1,251 @@
+import { RouterProvider, createMemoryHistory } from '@tanstack/react-router'
+import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createAppRouter } from './router'
+import { resetAgentApiMock } from './test/setup'
+
+describe('renderer app', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    resetAgentApiMock()
+  })
+
+  it('renders the home route', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('heading', { name: /open a project/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/no projects open/i)).toHaveTextContent(/no projects open/i)
+    expect(screen.getAllByRole('button', { name: /add project/i })).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: /open folder/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /ask codex/i })).toBeInTheDocument()
+    expect(screen.getByText(/codex-cli 0\.121\.0/i)).toBeInTheDocument()
+  })
+
+  it('dispatches a turn command from the composer', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    const composer = await screen.findByRole('textbox', { name: /ask codex/i })
+    await user.type(composer, 'Build the provider layer')
+    await user.click(screen.getByRole('button', { name: /send/i }))
+
+    expect(window.agentApi.dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'thread.turn.start',
+        provider: 'codex',
+        input: 'Build the provider layer',
+        cwd: '/Users/ankush/codespace/gencode',
+        runtimeMode: 'auto-accept-edits'
+      })
+    )
+    const transcript = await screen.findByLabelText(/conversation transcript/i)
+    expect(within(transcript).getByText('Build the provider layer')).toBeInTheDocument()
+  })
+
+  it('keeps live events that arrive before the initial snapshot resolves', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'event',
+        event: {
+          sequence: 1,
+          type: 'thread.message-upserted',
+          threadId: _input.threadId,
+          message: {
+            id: 'assistant:live',
+            role: 'assistant',
+            text: 'Streaming response',
+            turnId: 'turn-1',
+            streaming: true,
+            sequence: 1,
+            createdAt: '2026-04-19T00:00:01.000Z',
+            updatedAt: '2026-04-19T00:00:01.000Z'
+          },
+          createdAt: '2026-04-19T00:00:01.000Z'
+        }
+      })
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 0,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [],
+            activities: [],
+            proposedPlans: [],
+            session: null,
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T00:00:00.000Z',
+            updatedAt: '2026-04-19T00:00:00.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    expect(await screen.findByText('Streaming response')).toBeInTheDocument()
+  })
+
+  it('renders inline expandable tool rows in transcript order', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 3,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [
+              {
+                id: 'user:cmd-1',
+                role: 'user',
+                text: 'Run tests',
+                turnId: null,
+                streaming: false,
+                sequence: 1,
+                createdAt: '2026-04-19T00:00:00.000Z',
+                updatedAt: '2026-04-19T00:00:00.000Z'
+              }
+            ],
+            activities: [
+              {
+                id: 'tool:item-1',
+                kind: 'tool.completed',
+                tone: 'tool',
+                summary: 'terminal',
+                payload: {
+                  itemType: 'command_execution',
+                  title: 'terminal',
+                  detail: 'bun test',
+                  status: 'completed',
+                  output: 'pass\n'
+                },
+                turnId: 'turn-1',
+                sequence: 2,
+                createdAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            proposedPlans: [],
+            session: null,
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T00:00:00.000Z',
+            updatedAt: '2026-04-19T00:00:01.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    expect(await screen.findByText('Run tests')).toBeInTheDocument()
+    const toolRow = await screen.findByRole('button', { name: /terminal/i })
+    expect(toolRow).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(toolRow)
+    expect(await screen.findByText('bun test')).toBeInTheDocument()
+    expect(screen.getByText(/pass/)).toBeInTheDocument()
+  })
+
+  it('shows active thinking and hides completed thinking rows', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 3,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [],
+            activities: [
+              {
+                id: 'thinking:active',
+                kind: 'task.started',
+                tone: 'thinking',
+                summary: 'Thinking',
+                payload: { status: 'inProgress' },
+                turnId: 'turn-1',
+                sequence: 1,
+                resolved: false,
+                createdAt: '2026-04-19T00:00:00.000Z'
+              },
+              {
+                id: 'thinking:done',
+                kind: 'task.completed',
+                tone: 'thinking',
+                summary: 'Thinking',
+                payload: { status: 'completed' },
+                turnId: 'turn-1',
+                sequence: 2,
+                resolved: true,
+                createdAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            proposedPlans: [],
+            session: null,
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T00:00:00.000Z',
+            updatedAt: '2026-04-19T00:00:01.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    expect(await screen.findByLabelText('Thinking')).toBeInTheDocument()
+    expect(screen.getAllByText('Thinking')).toHaveLength(1)
+  })
+
+  it('opens projects and clears the active chat from controls', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+    expect(window.agentApi.openWorkspaceFolder).toHaveBeenCalled()
+    expect(await screen.findByRole('button', { name: /gencode/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /clear chat/i }))
+    expect(window.agentApi.clearThread).toHaveBeenCalledWith({
+      threadId: expect.stringMatching(/^project:/)
+    })
+  })
+})

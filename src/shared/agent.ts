@@ -1,0 +1,390 @@
+export type ProviderId = 'codex'
+
+export type RuntimeMode = 'approval-required' | 'auto-accept-edits' | 'full-access'
+
+export type ProviderSessionStatus = 'connecting' | 'ready' | 'running' | 'error' | 'closed'
+
+export type RuntimeSessionState = 'starting' | 'ready' | 'running' | 'waiting' | 'stopped' | 'error'
+
+export type RuntimeItemStatus = 'inProgress' | 'completed' | 'failed' | 'declined'
+
+export type RuntimeContentStreamKind =
+  | 'assistant_text'
+  | 'reasoning_text'
+  | 'reasoning_summary_text'
+  | 'plan_text'
+  | 'command_output'
+  | 'file_change_output'
+  | 'unknown'
+
+export type CanonicalItemType =
+  | 'user_message'
+  | 'assistant_message'
+  | 'reasoning'
+  | 'plan'
+  | 'command_execution'
+  | 'file_change'
+  | 'mcp_tool_call'
+  | 'dynamic_tool_call'
+  | 'collab_agent_tool_call'
+  | 'web_search'
+  | 'image_view'
+  | 'review_entered'
+  | 'review_exited'
+  | 'context_compaction'
+  | 'error'
+  | 'unknown'
+
+export type CanonicalRequestType =
+  | 'command_execution_approval'
+  | 'file_read_approval'
+  | 'file_change_approval'
+  | 'apply_patch_approval'
+  | 'exec_command_approval'
+  | 'tool_user_input'
+  | 'dynamic_tool_call'
+  | 'auth_tokens_refresh'
+  | 'unknown'
+
+export type ProviderApprovalDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel'
+
+export interface ProviderSummary {
+  id: ProviderId
+  name: string
+  status: 'available' | 'missing' | 'error'
+  detail?: string
+}
+
+export interface ProviderSession {
+  provider: ProviderId
+  status: ProviderSessionStatus
+  runtimeMode: RuntimeMode
+  cwd?: string
+  model?: string
+  threadId: string
+  resumeCursor?: unknown
+  activeTurnId?: string
+  createdAt: string
+  updatedAt: string
+  lastError?: string
+}
+
+export interface UserInputOption {
+  label: string
+  description?: string
+}
+
+export interface UserInputQuestion {
+  id: string
+  header?: string
+  question: string
+  options?: UserInputOption[]
+}
+
+export interface RuntimeEventBase {
+  eventId: string
+  provider: ProviderId
+  threadId: string
+  turnId?: string
+  itemId?: string
+  requestId?: string
+  createdAt: string
+  providerRefs?: {
+    providerTurnId?: string
+    providerItemId?: string
+    providerRequestId?: string
+  }
+  raw?: {
+    source: 'codex.app-server.notification' | 'codex.app-server.request' | 'fake.provider'
+    method?: string
+    payload: unknown
+  }
+}
+
+export type ProviderRuntimeEvent =
+  | (RuntimeEventBase & {
+      type: 'session.state.changed'
+      payload: { state: RuntimeSessionState; reason?: string }
+    })
+  | (RuntimeEventBase & {
+      type: 'thread.started'
+      payload: { providerThreadId: string }
+    })
+  | (RuntimeEventBase & {
+      type: 'turn.started'
+      payload: { model?: string; effort?: string }
+    })
+  | (RuntimeEventBase & {
+      type: 'turn.completed'
+      payload: {
+        state: 'completed' | 'failed' | 'cancelled' | 'interrupted'
+        stopReason?: string
+        errorMessage?: string
+        usage?: unknown
+      }
+    })
+  | (RuntimeEventBase & {
+      type: 'content.delta'
+      payload: {
+        streamKind: RuntimeContentStreamKind
+        delta: string
+        contentIndex?: number
+        summaryIndex?: number
+      }
+    })
+  | (RuntimeEventBase & {
+      type: 'item.started' | 'item.updated' | 'item.completed'
+      payload: {
+        itemType: CanonicalItemType
+        status?: RuntimeItemStatus
+        title?: string
+        detail?: string
+        data?: unknown
+      }
+    })
+  | (RuntimeEventBase & {
+      type: 'request.opened'
+      payload: {
+        requestType: CanonicalRequestType
+        detail?: string
+        args?: unknown
+      }
+    })
+  | (RuntimeEventBase & {
+      type: 'request.resolved'
+      payload: {
+        requestType: CanonicalRequestType
+        decision?: string
+        resolution?: unknown
+      }
+    })
+  | (RuntimeEventBase & {
+      type: 'user-input.requested'
+      payload: { questions: UserInputQuestion[] }
+    })
+  | (RuntimeEventBase & {
+      type: 'user-input.resolved'
+      payload: { answers: Record<string, unknown> }
+    })
+  | (RuntimeEventBase & {
+      type: 'runtime.error' | 'runtime.warning'
+      payload: { message: string; detail?: unknown }
+    })
+
+export interface ChatAttachment {
+  type: 'image'
+  url: string
+}
+
+export interface OrchestrationMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  text: string
+  attachments?: ChatAttachment[]
+  turnId: string | null
+  streaming: boolean
+  sequence?: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OrchestrationThreadActivity {
+  id: string
+  kind:
+    | 'tool.started'
+    | 'tool.updated'
+    | 'tool.completed'
+    | 'approval.requested'
+    | 'approval.resolved'
+    | 'user-input.requested'
+    | 'user-input.resolved'
+    | 'task.started'
+    | 'task.progress'
+    | 'task.completed'
+    | 'runtime.warning'
+    | 'runtime.error'
+    | 'context-window.updated'
+  tone: 'thinking' | 'tool' | 'info' | 'approval' | 'error'
+  summary: string
+  payload?: Record<string, unknown>
+  turnId: string | null
+  sequence?: number
+  resolved?: boolean
+  createdAt: string
+}
+
+export interface OrchestrationProposedPlan {
+  id: string
+  turnId: string
+  text: string
+  status: 'streaming' | 'proposed' | 'accepted' | 'declined'
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OrchestrationCheckpointSummary {
+  id: string
+  label: string
+  createdAt: string
+}
+
+export interface OrchestrationSession {
+  threadId: string
+  status: 'idle' | 'starting' | 'running' | 'ready' | 'interrupted' | 'stopped' | 'error'
+  providerName: ProviderId | null
+  runtimeMode: RuntimeMode
+  activeTurnId: string | null
+  lastError: string | null
+  updatedAt: string
+}
+
+export interface OrchestrationLatestTurn {
+  id: string
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+  startedAt: string
+  completedAt: string | null
+}
+
+export interface OrchestrationThread {
+  id: string
+  title: string
+  cwd?: string
+  branch?: string
+  messages: OrchestrationMessage[]
+  activities: OrchestrationThreadActivity[]
+  proposedPlans: OrchestrationProposedPlan[]
+  session: OrchestrationSession | null
+  latestTurn: OrchestrationLatestTurn | null
+  checkpoints: OrchestrationCheckpointSummary[]
+  createdAt: string
+  updatedAt: string
+  archivedAt: string | null
+}
+
+export type OrchestrationEvent =
+  | {
+      sequence: number
+      type: 'thread.snapshot.changed'
+      threadId: string
+      thread: OrchestrationThread
+      createdAt: string
+    }
+  | {
+      sequence: number
+      type: 'thread.session-set'
+      threadId: string
+      session: OrchestrationSession | null
+      createdAt: string
+    }
+  | {
+      sequence: number
+      type: 'thread.message-upserted'
+      threadId: string
+      message: OrchestrationMessage
+      createdAt: string
+    }
+  | {
+      sequence: number
+      type: 'thread.activity-upserted'
+      threadId: string
+      activity: OrchestrationThreadActivity
+      createdAt: string
+    }
+  | {
+      sequence: number
+      type: 'thread.proposed-plan-upserted'
+      threadId: string
+      proposedPlan: OrchestrationProposedPlan
+      createdAt: string
+    }
+  | {
+      sequence: number
+      type: 'thread.latest-turn-set'
+      threadId: string
+      latestTurn: OrchestrationLatestTurn | null
+      createdAt: string
+    }
+
+export type OrchestrationThreadStreamItem =
+  | {
+      kind: 'snapshot'
+      snapshot: {
+        snapshotSequence: number
+        thread: OrchestrationThread
+      }
+    }
+  | {
+      kind: 'event'
+      event: OrchestrationEvent
+    }
+
+export type ClientOrchestrationCommand =
+  | {
+      type: 'thread.turn.start'
+      commandId: string
+      threadId: string
+      provider: ProviderId
+      input: string
+      attachments?: ChatAttachment[]
+      cwd?: string
+      model?: string
+      runtimeMode: RuntimeMode
+      createdAt: string
+    }
+  | {
+      type: 'thread.session.stop'
+      commandId: string
+      threadId: string
+      createdAt: string
+    }
+
+export interface DispatchResult {
+  accepted: boolean
+  commandId: string
+  threadId: string
+  turnId?: string
+}
+
+export interface InterruptTurnInput {
+  threadId: string
+  turnId?: string
+}
+
+export interface RespondToApprovalInput {
+  threadId: string
+  requestId: string
+  decision: ProviderApprovalDecision
+}
+
+export interface RespondToUserInputInput {
+  threadId: string
+  requestId: string
+  answers: Record<string, unknown>
+}
+
+export interface StopSessionInput {
+  threadId: string
+}
+
+export interface OpenWorkspaceFolderResult {
+  path: string
+  name: string
+}
+
+export interface AgentApi {
+  dispatchCommand(input: ClientOrchestrationCommand): Promise<DispatchResult>
+  subscribeThread(
+    input: { threadId: string },
+    listener: (item: OrchestrationThreadStreamItem) => void
+  ): () => void
+  interruptTurn(input: InterruptTurnInput): Promise<void>
+  respondToApproval(input: RespondToApprovalInput): Promise<void>
+  respondToUserInput(input: RespondToUserInputInput): Promise<void>
+  stopSession(input: StopSessionInput): Promise<void>
+  listProviders(): Promise<ProviderSummary[]>
+  clearThread(input: { threadId: string }): Promise<void>
+  openWorkspaceFolder(): Promise<OpenWorkspaceFolderResult | null>
+  revealPath(input: { path: string }): Promise<void>
+}
+
+export const DEFAULT_THREAD_ID = 'local:main'

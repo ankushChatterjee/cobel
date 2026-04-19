@@ -1,0 +1,14 @@
+export const AGENT_CHANNELS = {
+  dispatchCommand: 'agent:dispatch-command',
+  subscribeThread: 'agent:subscribe-thread',
+  unsubscribeThread: 'agent:unsubscribe-thread',
+  interruptTurn: 'agent:interrupt-turn',
+  respondToApproval: 'agent:respond-to-approval',
+  respondToUserInput: 'agent:respond-to-user-input',
+  stopSession: 'agent:stop-session',
+  listProviders: 'agent:list-providers',
+  clearThread: 'agent:clear-thread',
+  openWorkspaceFolder: 'agent:open-workspace-folder',
+  revealPath: 'agent:reveal-path',
+  threadEvent: (subscriptionId: string) => `agent:thread-event:${subscriptionId}`
+} as const
