@@ -658,6 +658,7 @@ export function HomePage(): React.JSX.Element {
           <div ref={bottomRef} />
         </section>
 
+        <div className="composer-wrap">
         <form className="composer" onSubmit={sendPrompt}>
           <label className="sr-only" htmlFor="agent-prompt">
             Ask Codex
@@ -730,6 +731,7 @@ export function HomePage(): React.JSX.Element {
             </button>
           </div>
         </form>
+        </div>
       </main>
     </div>
   )
@@ -1081,9 +1083,16 @@ function buildTranscriptItems(thread: OrchestrationThread | null): TranscriptIte
         activity
       }))
   ].sort((left, right) => {
-    if (left.sequence !== right.sequence) return left.sequence - right.sequence
-    return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    const leftCreatedAt = timestampForSort(left.createdAt)
+    const rightCreatedAt = timestampForSort(right.createdAt)
+    if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt
+    return left.sequence - right.sequence
   })
+}
+
+function timestampForSort(value: string): number {
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? timestamp : 0
 }
 
 function isPendingPrompt(activity: OrchestrationThreadActivity): boolean {

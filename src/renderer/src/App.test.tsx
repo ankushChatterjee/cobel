@@ -175,6 +175,92 @@ describe('renderer app', () => {
     expect(screen.getByText(/pass/)).toBeInTheDocument()
   })
 
+  it('orders restored transcript rows by timestamp when event sequences reset', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 2,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [
+              {
+                id: 'user:old',
+                role: 'user',
+                text: 'How can this app be made faster?',
+                turnId: null,
+                streaming: false,
+                sequence: 80,
+                createdAt: '2026-04-19T12:14:00.000Z',
+                updatedAt: '2026-04-19T12:14:00.000Z'
+              },
+              {
+                id: 'assistant:old',
+                role: 'assistant',
+                text: 'I will inspect performance levers first.',
+                turnId: 'turn-old',
+                streaming: false,
+                sequence: 120,
+                createdAt: '2026-04-19T12:15:00.000Z',
+                updatedAt: '2026-04-19T12:15:00.000Z'
+              },
+              {
+                id: 'user:new',
+                role: 'user',
+                text: 'What build system does this app use?',
+                turnId: null,
+                streaming: false,
+                sequence: 1,
+                createdAt: '2026-04-19T19:04:00.000Z',
+                updatedAt: '2026-04-19T19:04:00.000Z'
+              },
+              {
+                id: 'assistant:new',
+                role: 'assistant',
+                text: 'I am checking the project files.',
+                turnId: 'turn-new',
+                streaming: false,
+                sequence: 2,
+                createdAt: '2026-04-19T19:05:00.000Z',
+                updatedAt: '2026-04-19T19:05:00.000Z'
+              }
+            ],
+            activities: [],
+            proposedPlans: [],
+            session: null,
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T12:14:00.000Z',
+            updatedAt: '2026-04-19T19:05:00.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    const transcript = await screen.findByLabelText(/conversation transcript/i)
+    const text = transcript.textContent ?? ''
+    expect(text.indexOf('How can this app be made faster?')).toBeLessThan(
+      text.indexOf('I will inspect performance levers first.')
+    )
+    expect(text.indexOf('I will inspect performance levers first.')).toBeLessThan(
+      text.indexOf('What build system does this app use?')
+    )
+    expect(text.indexOf('What build system does this app use?')).toBeLessThan(
+      text.indexOf('I am checking the project files.')
+    )
+  })
+
   it('renders completed payload status even when a live tool row is still marked updated', async () => {
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     window.agentApi.subscribeThread = vi.fn((_input, listener) => {
