@@ -1,6 +1,8 @@
 import {
   FormEvent,
   KeyboardEvent,
+  memo,
+  useCallback,
   useDeferredValue,
   useEffect,
   useLayoutEffect,
@@ -73,6 +75,7 @@ const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
   { value: 'auto-accept-edits', label: 'Write' },
   { value: 'full-access', label: 'Full access' }
 ]
+const composerSpacerStyle = { flex: 1 }
 
 interface ActiveSelection {
   activeProjectId: string | null
@@ -81,7 +84,8 @@ interface ActiveSelection {
 
 function loadActiveSelection(): ActiveSelection {
   try {
-    const storedSelection = localStorage.getItem(activeSelectionKey) ?? localStorage.getItem(legacyActiveSelectionKey)
+    const storedSelection =
+      localStorage.getItem(activeSelectionKey) ?? localStorage.getItem(legacyActiveSelectionKey)
     const parsed = JSON.parse(storedSelection ?? 'null') as ActiveSelection | null
     if (!parsed) return { activeProjectId: null, activeChatId: null }
     return {
@@ -97,20 +101,79 @@ function saveActiveSelection(selection: ActiveSelection): void {
   localStorage.setItem(activeSelectionKey, JSON.stringify(selection))
 }
 
+function runLegacyMigration(loadedShell: OrchestrationShellSnapshot): void {
+  const raw = localStorage.getItem(legacyWorkspaceKey)
+  if (!raw) return
+  if (loadedShell.projects.length > 0) {
+    // Backend already has data — just clear the legacy key
+    localStorage.removeItem(legacyWorkspaceKey)
+    return
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    localStorage.removeItem(legacyWorkspaceKey)
+    return
+  }
+  const legacy = parsed as {
+    projects?: Array<{
+      id: string
+      name: string
+      path: string
+      chats?: Array<{ id: string; label: string; createdAt: string }>
+    }>
+    activeProjectId?: string
+    activeChatId?: string
+  }
+  if (!Array.isArray(legacy.projects)) {
+    localStorage.removeItem(legacyWorkspaceKey)
+    return
+  }
+  const migrateAsync = async (): Promise<void> => {
+    const createdAt = new Date().toISOString()
+    for (const project of legacy.projects ?? []) {
+      if (typeof project.id !== 'string' || typeof project.path !== 'string') continue
+      await window.agentApi.dispatchCommand({
+        type: 'project.create',
+        commandId: `cmd:${createId()}`,
+        projectId: project.id,
+        name: project.name ?? project.path,
+        path: project.path,
+        createdAt
+      })
+      for (const chat of project.chats ?? []) {
+        if (typeof chat.id !== 'string') continue
+        await window.agentApi.dispatchCommand({
+          type: 'thread.create',
+          commandId: `cmd:${createId()}`,
+          threadId: chat.id,
+          projectId: project.id,
+          title: chat.label ?? 'New chat',
+          cwd: project.path,
+          createdAt: chat.createdAt ?? createdAt
+        })
+      }
+    }
+  }
+  void migrateAsync().finally(() => {
+    localStorage.removeItem(legacyWorkspaceKey)
+  })
+}
+
 export function HomePage(): React.JSX.Element {
   const [shell, setShell] = useState<OrchestrationShellSnapshot>({ projects: [], threads: [] })
   const [selection, setSelection] = useState<ActiveSelection>(loadActiveSelection)
   const [openProjectIds, setOpenProjectIds] = useState<Set<string>>(() => new Set())
   const [thread, setThread] = useState<OrchestrationThread | null>(null)
   const [providers, setProviders] = useState<ProviderSummary[]>([])
-  const [prompt, setPrompt] = useState('')
+  const [composerResetToken, setComposerResetToken] = useState(0)
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>('auto-accept-edits')
   const [models, setModels] = useState<ModelInfo[]>([])
   const [model, setModel] = useState<string>('')
   const lastSequenceRef = useRef(0)
   const conversationRef = useRef<HTMLElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const shouldStickToBottomRef = useRef(true)
   const pendingUserMessagesRef = useRef(new Map<string, OrchestrationMessage>())
   const [error, setError] = useState<string | null>(null)
@@ -131,9 +194,12 @@ export function HomePage(): React.JSX.Element {
   const activeThreadId = activeChat?.id ?? null
   const activeProvider = providers[0]
   const sessionStatus = thread?.session?.status ?? 'idle'
+  const activeTurnId = thread?.session?.activeTurnId
   const isRunning = sessionStatus === 'starting' || sessionStatus === 'running'
-  const sessionError = thread?.session?.status === 'error' ? (thread.session.lastError ?? null) : null
+  const sessionError =
+    thread?.session?.status === 'error' ? (thread.session.lastError ?? null) : null
   const transcriptItems = useMemo(() => buildTranscriptItems(thread), [thread])
+  const showPendingThinking = isPendingThinking && transcriptItems.length === 0 && isRunning
 
   useEffect(() => {
     saveActiveSelection(selection)
@@ -254,85 +320,73 @@ export function HomePage(): React.JSX.Element {
     el.scrollTop = el.scrollHeight
   }, [thread])
 
-  useEffect(() => {
-    if (transcriptItems.length > 0 || !isRunning) {
-      setIsPendingThinking(false)
-    }
-  }, [transcriptItems.length, isRunning])
+  const sendPrompt = useCallback(
+    async (input: string): Promise<boolean> => {
+      if (!input || isRunning) return false
+      if (!activeProject || !activeThreadId) {
+        setError('Open a project before starting a Codex chat.')
+        return false
+      }
 
-  useEffect(() => {
-    const el = textareaRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }, [prompt])
+      shouldStickToBottomRef.current = true
+      setError(null)
+      setIsPendingThinking(true)
+      const commandId = `cmd:${createId()}`
+      const createdAt = new Date().toISOString()
+      const optimisticMessage: OrchestrationMessage = {
+        id: `user:${commandId}`,
+        role: 'user',
+        text: input,
+        turnId: null,
+        streaming: false,
+        sequence: lastSequenceRef.current + 0.5,
+        createdAt,
+        updatedAt: createdAt
+      }
+      pendingUserMessagesRef.current.set(optimisticMessage.id, optimisticMessage)
+      setThread((current) =>
+        upsertOptimisticUserMessage({
+          thread: current,
+          threadId: activeThreadId,
+          cwd: activeProject.path,
+          title: titleFromPrompt(input),
+          message: optimisticMessage
+        })
+      )
 
-  async function sendPrompt(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault()
-    const input = prompt.trim()
-    if (!input || isRunning) return
-    if (!activeProject || !activeThreadId) {
-      setError('Open a project before starting a Codex chat.')
-      return
-    }
+      // Rename the chat if it still has the default label
+      if (activeChat && activeChat.title === 'New chat') {
+        void window.agentApi.dispatchCommand({
+          type: 'thread.rename',
+          commandId: `cmd:${createId()}`,
+          threadId: activeThreadId,
+          title: titleFromPrompt(input),
+          createdAt
+        })
+      }
 
-    shouldStickToBottomRef.current = true
-    setPrompt('')
-    setError(null)
-    setIsPendingThinking(true)
-    const commandId = `cmd:${createId()}`
-    const createdAt = new Date().toISOString()
-    const optimisticMessage: OrchestrationMessage = {
-      id: `user:${commandId}`,
-      role: 'user',
-      text: input,
-      turnId: null,
-      streaming: false,
-      sequence: lastSequenceRef.current + 0.5,
-      createdAt,
-      updatedAt: createdAt
-    }
-    pendingUserMessagesRef.current.set(optimisticMessage.id, optimisticMessage)
-    setThread((current) =>
-      upsertOptimisticUserMessage({
-        thread: current,
-        threadId: activeThreadId,
-        cwd: activeProject.path,
-        title: titleFromPrompt(input),
-        message: optimisticMessage
-      })
-    )
+      try {
+        await window.agentApi.dispatchCommand({
+          type: 'thread.turn.start',
+          commandId,
+          threadId: activeThreadId,
+          provider: 'codex',
+          input,
+          cwd: activeProject.path,
+          model,
+          runtimeMode,
+          createdAt
+        })
+      } catch (commandError) {
+        setError(commandError instanceof Error ? commandError.message : String(commandError))
+        return false
+      }
+      return true
+    },
+    [activeChat, activeProject, activeThreadId, isRunning, model, runtimeMode]
+  )
 
-    // Rename the chat if it still has the default label
-    if (activeChat && activeChat.title === 'New chat') {
-      void window.agentApi.dispatchCommand({
-        type: 'thread.rename',
-        commandId: `cmd:${createId()}`,
-        threadId: activeThreadId,
-        title: titleFromPrompt(input),
-        createdAt
-      })
-    }
-
-    try {
-      await window.agentApi.dispatchCommand({
-        type: 'thread.turn.start',
-        commandId,
-        threadId: activeThreadId,
-        provider: 'codex',
-        input,
-        cwd: activeProject.path,
-        model,
-        runtimeMode,
-        createdAt
-      })
-    } catch (commandError) {
-      setError(commandError instanceof Error ? commandError.message : String(commandError))
-      setPrompt(input)
-    }
-  }
-
-  async function stopSession(): Promise<void> {
+  const stopSession = useCallback(async (): Promise<void> => {
     if (!activeThreadId) return
     setError(null)
     try {
@@ -340,26 +394,28 @@ export function HomePage(): React.JSX.Element {
     } catch (stopError) {
       setError(stopError instanceof Error ? stopError.message : String(stopError))
     }
-  }
+  }, [activeThreadId])
 
-  async function interruptTurn(): Promise<void> {
+  const interruptTurn = useCallback(async (): Promise<void> => {
     if (!activeThreadId) return
     setError(null)
     try {
       await window.agentApi.interruptTurn({
         threadId: activeThreadId,
-        turnId: thread?.session?.activeTurnId ?? undefined
+        turnId: activeTurnId ?? undefined
       })
     } catch (interruptError) {
       setError(interruptError instanceof Error ? interruptError.message : String(interruptError))
     }
-  }
+  }, [activeThreadId, activeTurnId])
 
   async function openWorkspaceFolder(): Promise<void> {
     setError(null)
     try {
       if (typeof window.agentApi.openWorkspaceFolder !== 'function') {
-        setError('Folder picker is not available yet. Fully restart bun run dev to refresh preload.')
+        setError(
+          'Folder picker is not available yet. Fully restart bun run dev to refresh preload.'
+        )
         return
       }
       const folder = await window.agentApi.openWorkspaceFolder()
@@ -397,14 +453,14 @@ export function HomePage(): React.JSX.Element {
       createdAt
     })
     setSelection({ activeProjectId: activeProject.id, activeChatId: chatId })
-    setPrompt('')
+    setComposerResetToken((token) => token + 1)
     setThread(null)
     setError(null)
   }
 
   async function clearCurrentChat(): Promise<void> {
     if (!activeThreadId) return
-    setPrompt('')
+    setComposerResetToken((token) => token + 1)
     setError(null)
     try {
       await window.agentApi.clearThread({ threadId: activeThreadId })
@@ -425,9 +481,7 @@ export function HomePage(): React.JSX.Element {
       }
       return next
     })
-    const firstThread = shell.threads.find(
-      (t) => t.projectId === project.id && !t.archivedAt
-    )
+    const firstThread = shell.threads.find((t) => t.projectId === project.id && !t.archivedAt)
     setSelection({
       activeProjectId: project.id,
       activeChatId: firstThread?.id ?? null
@@ -465,29 +519,10 @@ export function HomePage(): React.JSX.Element {
       })
       setSelection({ activeProjectId: projectId, activeChatId: chatId })
     } else {
-      const firstThread = shell.threads.find(
-        (t) => t.projectId === projectId && !t.archivedAt
-      )
+      const firstThread = shell.threads.find((t) => t.projectId === projectId && !t.archivedAt)
       setSelection({ activeProjectId: projectId, activeChatId: firstThread?.id ?? null })
     }
     setOpenProjectIds((prev) => new Set([...prev, projectId]))
-  }
-
-  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
-    if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
-      event.preventDefault()
-      event.currentTarget.form?.requestSubmit()
-    } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-      event.preventDefault()
-      const el = event.currentTarget
-      const start = el.selectionStart
-      const end = el.selectionEnd
-      const newVal = prompt.slice(0, start) + '\n' + prompt.slice(end)
-      setPrompt(newVal)
-      requestAnimationFrame(() => {
-        el.selectionStart = el.selectionEnd = start + 1
-      })
-    }
   }
 
   function handleConversationScroll(): void {
@@ -497,77 +532,47 @@ export function HomePage(): React.JSX.Element {
     shouldStickToBottomRef.current = distanceFromBottom < 160
   }
 
-  function toggleToolExpanded(activityId: string): void {
+  const toggleToolExpanded = useCallback((activityId: string): void => {
     setExpandedToolIds((current) => {
       const next = new Set(current)
       if (next.has(activityId)) next.delete(activityId)
       else next.add(activityId)
       return next
     })
-  }
+  }, [])
 
-  function runLegacyMigration(loadedShell: OrchestrationShellSnapshot): void {
-    const raw = localStorage.getItem(legacyWorkspaceKey)
-    if (!raw) return
-    if (loadedShell.projects.length > 0) {
-      // Backend already has data — just clear the legacy key
-      localStorage.removeItem(legacyWorkspaceKey)
-      return
-    }
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(raw)
-    } catch {
-      localStorage.removeItem(legacyWorkspaceKey)
-      return
-    }
-    const legacy = parsed as {
-      projects?: Array<{ id: string; name: string; path: string; chats?: Array<{ id: string; label: string; createdAt: string }> }>
-      activeProjectId?: string
-      activeChatId?: string
-    }
-    if (!Array.isArray(legacy.projects)) {
-      localStorage.removeItem(legacyWorkspaceKey)
-      return
-    }
-    const migrateAsync = async (): Promise<void> => {
-      const createdAt = new Date().toISOString()
-      for (const project of legacy.projects ?? []) {
-        if (typeof project.id !== 'string' || typeof project.path !== 'string') continue
-        await window.agentApi.dispatchCommand({
-          type: 'project.create',
-          commandId: `cmd:${createId()}`,
-          projectId: project.id,
-          name: project.name ?? project.path,
-          path: project.path,
-          createdAt
-        })
-        for (const chat of project.chats ?? []) {
-          if (typeof chat.id !== 'string') continue
-          await window.agentApi.dispatchCommand({
-            type: 'thread.create',
-            commandId: `cmd:${createId()}`,
-            threadId: chat.id,
-            projectId: project.id,
-            title: chat.label ?? 'New chat',
-            cwd: project.path,
-            createdAt: chat.createdAt ?? createdAt
+  const respondToApproval = useCallback(
+    (
+      activity: OrchestrationThreadActivity,
+      decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'
+    ) =>
+      activeThreadId
+        ? window.agentApi.respondToApproval({
+            threadId: activeThreadId,
+            requestId: requestIdFromActivity(activity),
+            decision
           })
-        }
-      }
-    }
-    void migrateAsync().finally(() => {
-      localStorage.removeItem(legacyWorkspaceKey)
-    })
-  }
+        : Promise.resolve(),
+    [activeThreadId]
+  )
+
+  const respondToUserInput = useCallback(
+    (activity: OrchestrationThreadActivity, answer: Record<string, unknown>) =>
+      activeThreadId
+        ? window.agentApi.respondToUserInput({
+            threadId: activeThreadId,
+            requestId: requestIdFromActivity(activity),
+            answers: answer
+          })
+        : Promise.resolve(),
+    [activeThreadId]
+  )
 
   return (
     <div className="agent-shell" data-theme="linear-dark">
       <aside className="project-sidebar" aria-label="Projects">
         <div className="sidebar-header">
-          <div className="sidebar-app-name">
-            patronus
-          </div>
+          <div className="sidebar-app-name">patronus</div>
           <button
             type="button"
             className="add-project-button"
@@ -601,9 +606,11 @@ export function HomePage(): React.JSX.Element {
                       onClick={() => selectProject(project)}
                     >
                       <span className="disclosure">
-                        {isOpen
-                          ? <ChevronDown size={12} strokeWidth={2} />
-                          : <ChevronRight size={12} strokeWidth={2} />}
+                        {isOpen ? (
+                          <ChevronDown size={12} strokeWidth={2} />
+                        ) : (
+                          <ChevronRight size={12} strokeWidth={2} />
+                        )}
                       </span>
                       <FolderOpen size={13} strokeWidth={1.8} />
                       <span className="project-name">{project.name}</span>
@@ -621,7 +628,11 @@ export function HomePage(): React.JSX.Element {
                             <span className="thread-label">{chat.title}</span>
                           </button>
                         ))}
-                        <button type="button" className="thread-link new-thread" onClick={() => void startNewChat()}>
+                        <button
+                          type="button"
+                          className="thread-link new-thread"
+                          onClick={() => void startNewChat()}
+                        >
                           <Plus size={11} strokeWidth={2} />
                           <span>New chat</span>
                         </button>
@@ -712,27 +723,11 @@ export function HomePage(): React.JSX.Element {
               items={transcriptItems}
               expandedToolIds={expandedToolIds}
               onToggleTool={toggleToolExpanded}
-              onApprove={(activity, decision) =>
-                activeThreadId
-                  ? window.agentApi.respondToApproval({
-                      threadId: activeThreadId,
-                      requestId: requestIdFromActivity(activity),
-                      decision
-                    })
-                  : Promise.resolve()
-              }
-              onAnswer={(activity, answer) =>
-                activeThreadId
-                  ? window.agentApi.respondToUserInput({
-                      threadId: activeThreadId,
-                      requestId: requestIdFromActivity(activity),
-                      answers: answer
-                    })
-                  : Promise.resolve()
-              }
+              onApprove={respondToApproval}
+              onAnswer={respondToUserInput}
             />
           )}
-          {isPendingThinking && (
+          {showPendingThinking && (
             <article className="thinking-row is-active">
               <span className="thinking-spinner" aria-hidden="true" />
               <span>thinking…</span>
@@ -744,84 +739,167 @@ export function HomePage(): React.JSX.Element {
         </section>
 
         <div className="composer-wrap">
-        <form className="composer" onSubmit={sendPrompt}>
-          <label className="sr-only" htmlFor="agent-prompt">
-            Ask Codex
-          </label>
-          <textarea
-            ref={textareaRef}
-            id="agent-prompt"
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            onKeyDown={handleComposerKeyDown}
-            placeholder={
-              activeProject
-                ? 'Ask Codex...'
-                : 'Open a project to start chatting...'
-            }
-            rows={1}
-            disabled={!activeProject}
+          <ChatComposer
+            key={composerResetToken}
+            enabled={Boolean(activeProject)}
+            isRunning={isRunning}
+            runtimeMode={runtimeMode}
+            models={models}
+            model={model}
+            onRuntimeModeChange={setRuntimeMode}
+            onModelChange={setModel}
+            onSubmitPrompt={sendPrompt}
+            onInterrupt={interruptTurn}
+            onStop={stopSession}
           />
-          <div className="composer-footer">
-            <FilePen size={12} strokeWidth={1.6} className="composer-icon" />
-            <select
-              aria-label="Runtime mode"
-              className="composer-select"
-              value={runtimeMode}
-              onChange={(event) => setRuntimeMode(event.target.value as RuntimeMode)}
-              disabled={!activeProject}
-            >
-              {runtimeModes.map((mode) => (
-                <option key={mode.value} value={mode.value}>
-                  {mode.label}
-                </option>
-              ))}
-            </select>
-            <span className="composer-divider" />
-            <select
-              aria-label="Model"
-              className="composer-select model-select"
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              disabled={!activeProject || models.length === 0}
-              title={model ? `Model: ${model}` : 'Model list pending'}
-            >
-              {models.length === 0 ? (
-                <option value="">Model list pending</option>
-              ) : (
-                models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name ?? m.id}
-                  </option>
-                ))
-              )}
-            </select>
-            <span style={{ flex: 1 }} />
-            {isRunning ? (
-              <div className="run-controls">
-                <button type="button" onClick={interruptTurn} title="Interrupt">
-                  <RotateCcw size={10} strokeWidth={2} />
-                </button>
-                <button type="button" onClick={stopSession} title="Stop">
-                  <Square size={10} strokeWidth={2} />
-                </button>
-              </div>
-            ) : null}
-            <button
-              type="submit"
-              className="send-button"
-              disabled={!activeProject || !prompt.trim() || isRunning}
-              title="Send (↵)"
-            >
-              <ArrowUp size={14} strokeWidth={2.5} />
-            </button>
-          </div>
-        </form>
         </div>
       </main>
     </div>
   )
 }
+
+const ChatComposer = memo(function ChatComposer({
+  enabled,
+  isRunning,
+  runtimeMode,
+  models,
+  model,
+  onRuntimeModeChange,
+  onModelChange,
+  onSubmitPrompt,
+  onInterrupt,
+  onStop
+}: {
+  enabled: boolean
+  isRunning: boolean
+  runtimeMode: RuntimeMode
+  models: ModelInfo[]
+  model: string
+  onRuntimeModeChange: (mode: RuntimeMode) => void
+  onModelChange: (model: string) => void
+  onSubmitPrompt: (input: string) => Promise<boolean>
+  onInterrupt: () => void
+  onStop: () => void
+}): React.JSX.Element {
+  const [prompt, setPrompt] = useState('')
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    const frame = window.requestAnimationFrame(() => {
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [prompt])
+
+  const handleSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+      event.preventDefault()
+      const input = prompt.trim()
+      if (!input || isRunning) return
+      setPrompt('')
+      const accepted = await onSubmitPrompt(input)
+      if (!accepted) setPrompt(input)
+    },
+    [isRunning, onSubmitPrompt, prompt]
+  )
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+      if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+        event.preventDefault()
+        event.currentTarget.form?.requestSubmit()
+        return
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault()
+        const el = event.currentTarget
+        const start = el.selectionStart
+        const end = el.selectionEnd
+        const newVal = prompt.slice(0, start) + '\n' + prompt.slice(end)
+        setPrompt(newVal)
+        requestAnimationFrame(() => {
+          el.selectionStart = el.selectionEnd = start + 1
+        })
+      }
+    },
+    [prompt]
+  )
+
+  return (
+    <form className="composer" onSubmit={handleSubmit}>
+      <label className="sr-only" htmlFor="agent-prompt">
+        Ask Codex
+      </label>
+      <textarea
+        ref={textareaRef}
+        id="agent-prompt"
+        value={prompt}
+        onChange={(event) => setPrompt(event.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder={enabled ? 'Ask Codex...' : 'Open a project to start chatting...'}
+        rows={1}
+        disabled={!enabled}
+      />
+      <div className="composer-footer">
+        <FilePen size={12} strokeWidth={1.6} className="composer-icon" />
+        <select
+          aria-label="Runtime mode"
+          className="composer-select"
+          value={runtimeMode}
+          onChange={(event) => onRuntimeModeChange(event.target.value as RuntimeMode)}
+          disabled={!enabled}
+        >
+          {runtimeModes.map((mode) => (
+            <option key={mode.value} value={mode.value}>
+              {mode.label}
+            </option>
+          ))}
+        </select>
+        <span className="composer-divider" />
+        <select
+          aria-label="Model"
+          className="composer-select model-select"
+          value={model}
+          onChange={(event) => onModelChange(event.target.value)}
+          disabled={!enabled || models.length === 0}
+          title={model ? `Model: ${model}` : 'Model list pending'}
+        >
+          {models.length === 0 ? (
+            <option value="">Model list pending</option>
+          ) : (
+            models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name ?? m.id}
+              </option>
+            ))
+          )}
+        </select>
+        <span style={composerSpacerStyle} />
+        {isRunning ? (
+          <div className="run-controls">
+            <button type="button" onClick={onInterrupt} title="Interrupt">
+              <RotateCcw size={10} strokeWidth={2} />
+            </button>
+            <button type="button" onClick={onStop} title="Stop">
+              <Square size={10} strokeWidth={2} />
+            </button>
+          </div>
+        ) : null}
+        <button
+          type="submit"
+          className="send-button"
+          disabled={!enabled || !prompt.trim() || isRunning}
+          title="Send (↵)"
+        >
+          <ArrowUp size={14} strokeWidth={2.5} />
+        </button>
+      </div>
+    </form>
+  )
+})
 
 type TranscriptItem =
   | {
@@ -839,7 +917,7 @@ type TranscriptItem =
       activity: OrchestrationThreadActivity
     }
 
-function TranscriptList({
+const TranscriptList = memo(function TranscriptList({
   items,
   expandedToolIds,
   onToggleTool,
@@ -872,9 +950,9 @@ function TranscriptList({
       ))}
     </div>
   )
-}
+})
 
-function TranscriptRow({
+const TranscriptRow = memo(function TranscriptRow({
   item,
   expandedToolIds,
   onToggleTool,
@@ -913,9 +991,13 @@ function TranscriptRow({
     )
   }
   return <ActivityRow activity={activity} />
-}
+})
 
-function ThinkingRow({ activity }: { activity: OrchestrationThreadActivity }): React.JSX.Element {
+const ThinkingRow = memo(function ThinkingRow({
+  activity
+}: {
+  activity: OrchestrationThreadActivity
+}): React.JSX.Element {
   const isComplete = activity.resolved === true
   return (
     <article
@@ -926,9 +1008,13 @@ function ThinkingRow({ activity }: { activity: OrchestrationThreadActivity }): R
       <span>{isComplete ? 'thought' : 'thinking…'}</span>
     </article>
   )
-}
+})
 
-function MessageRow({ message }: { message: OrchestrationMessage }): React.JSX.Element {
+const MessageRow = memo(function MessageRow({
+  message
+}: {
+  message: OrchestrationMessage
+}): React.JSX.Element {
   const isAssistant = message.role === 'assistant'
   return (
     <article className={`message ${message.role} ${message.streaming ? 'streaming' : ''}`}>
@@ -943,9 +1029,9 @@ function MessageRow({ message }: { message: OrchestrationMessage }): React.JSX.E
       )}
     </article>
   )
-}
+})
 
-function MarkdownMessage({
+const MarkdownMessage = memo(function MarkdownMessage({
   text,
   isStreaming
 }: {
@@ -983,9 +1069,9 @@ function MarkdownMessage({
       </ReactMarkdown>
     </div>
   )
-}
+})
 
-function CodeBlock({
+const CodeBlock = memo(function CodeBlock({
   code,
   language,
   isStreaming
@@ -1046,9 +1132,9 @@ function CodeBlock({
       </SyntaxHighlighter>
     </div>
   )
-}
+})
 
-function ToolRow({
+const ToolRow = memo(function ToolRow({
   activity,
   expanded,
   onToggle
@@ -1060,7 +1146,8 @@ function ToolRow({
   const payload = activity.payload ?? {}
   const data = readPayloadRecord(payload, 'data')
   const itemPayload = readBestItemData(data)
-  const output = readPayloadString(payload, 'output') ?? readPayloadString(itemPayload, 'aggregatedOutput')
+  const output =
+    readPayloadString(payload, 'output') ?? readPayloadString(itemPayload, 'aggregatedOutput')
   const detail = readPayloadString(payload, 'detail') ?? readPayloadString(itemPayload, 'cwd')
   const title = readPayloadString(payload, 'title') ?? activity.summary
   const status = statusFromActivity(activity)
@@ -1069,7 +1156,10 @@ function ToolRow({
   const durationMs = itemPayload['durationMs']
   const label = labelForActivity(activity)
   return (
-    <article className={`tool-row ${activity.tone} ${statusTone}`} data-item-type={readPayloadString(payload, 'itemType')}>
+    <article
+      className={`tool-row ${activity.tone} ${statusTone}`}
+      data-item-type={readPayloadString(payload, 'itemType')}
+    >
       <button
         type="button"
         className="tool-row-summary"
@@ -1077,7 +1167,11 @@ function ToolRow({
         onClick={onToggle}
       >
         <span className="tool-disclosure">
-          {expanded ? <ChevronDown size={11} strokeWidth={2} /> : <ChevronRight size={11} strokeWidth={2} />}
+          {expanded ? (
+            <ChevronDown size={11} strokeWidth={2} />
+          ) : (
+            <ChevronRight size={11} strokeWidth={2} />
+          )}
         </span>
         <span className="tool-kind">{label}</span>
         <span className="tool-title">{title}</span>
@@ -1097,28 +1191,38 @@ function ToolRow({
       ) : null}
     </article>
   )
-}
+})
 
-function ActivityRow({ activity }: { activity: OrchestrationThreadActivity }): React.JSX.Element {
+const ActivityRow = memo(function ActivityRow({
+  activity
+}: {
+  activity: OrchestrationThreadActivity
+}): React.JSX.Element {
   return (
     <article className={`activity-row ${activity.tone}`}>
       <span>{labelForActivity(activity)}</span>
       <code>{activity.summary}</code>
     </article>
   )
-}
+})
 
-function SessionErrorBanner({ message }: { message: string }): React.JSX.Element {
+const SessionErrorBanner = memo(function SessionErrorBanner({
+  message
+}: {
+  message: string
+}): React.JSX.Element {
   return (
     <div className="session-error-banner" role="alert" aria-live="assertive">
-      <span className="session-error-icon" aria-hidden="true">⚠</span>
+      <span className="session-error-icon" aria-hidden="true">
+        ⚠
+      </span>
       <div className="session-error-body">
         <p className="session-error-title">Codex returned an error</p>
         <p className="session-error-message">{renderTextWithLinks(message)}</p>
       </div>
     </div>
   )
-}
+})
 
 function renderTextWithLinks(text: string): React.ReactNode {
   const urlRegex = /https?:\/\/[^\s)]+/g
@@ -1128,7 +1232,13 @@ function renderTextWithLinks(text: string): React.ReactNode {
   while ((match = urlRegex.exec(text)) !== null) {
     if (match.index > last) parts.push(text.slice(last, match.index))
     parts.push(
-      <a key={match.index} href={match[0]} target="_blank" rel="noreferrer" className="session-error-link">
+      <a
+        key={match.index}
+        href={match[0]}
+        target="_blank"
+        rel="noreferrer"
+        className="session-error-link"
+      >
         {match[0]}
       </a>
     )
@@ -1138,7 +1248,7 @@ function renderTextWithLinks(text: string): React.ReactNode {
   return <>{parts}</>
 }
 
-function PendingPrompt({
+const PendingPrompt = memo(function PendingPrompt({
   activity,
   onApprove,
   onAnswer
@@ -1182,7 +1292,7 @@ function PendingPrompt({
       )}
     </div>
   )
-}
+})
 
 function mergePendingUserMessages(
   thread: OrchestrationThread,
@@ -1509,7 +1619,7 @@ function inferCodeLanguage(code: string): string {
     return 'js'
   }
 
-  if (/^[\[{]/u.test(trimmed)) {
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
       JSON.parse(trimmed)
       return 'json'
