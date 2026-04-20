@@ -77,6 +77,15 @@ const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
   { value: 'full-access', label: 'Full access' }
 ]
 const composerSpacerStyle = { flex: 1 }
+const modelTokenLabels: Record<string, string> = {
+  gpt: 'GPT',
+  codex: 'Codex',
+  mini: 'Mini',
+  max: 'Max',
+  nano: 'Nano',
+  turbo: 'Turbo',
+  preview: 'Preview'
+}
 
 interface ActiveSelection {
   activeProjectId: string | null
@@ -100,6 +109,32 @@ function loadActiveSelection(): ActiveSelection {
 
 function saveActiveSelection(selection: ActiveSelection): void {
   localStorage.setItem(activeSelectionKey, JSON.stringify(selection))
+}
+
+function formatModelId(id: string): string {
+  return id
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((token) => {
+      const lower = token.toLowerCase()
+      const mapped = modelTokenLabels[lower]
+      if (mapped) return mapped
+      if (/^\d+(\.\d+)*$/.test(token)) return token
+      if (/^[a-z]{1,3}\d+(\.\d+)*$/i.test(token)) return token.toUpperCase()
+      if (/^[a-z]{1,3}$/.test(lower)) return token.toUpperCase()
+      return token.charAt(0).toUpperCase() + token.slice(1)
+    })
+    .join(' ')
+}
+
+function canonicalizeModelName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+function getModelDisplayName(modelInfo: Pick<ModelInfo, 'id' | 'name'>): string {
+  const name = modelInfo.name?.trim()
+  if (name && canonicalizeModelName(name) !== canonicalizeModelName(modelInfo.id)) return name
+  return formatModelId(modelInfo.id)
 }
 
 function runLegacyMigration(loadedShell: OrchestrationShellSnapshot): void {
@@ -795,6 +830,15 @@ const ChatComposer = memo(function ChatComposer({
 }): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const activeModel = useMemo(
+    () => models.find((candidate) => candidate.id === model) ?? null,
+    [model, models]
+  )
+  const modelTitle = useMemo(() => {
+    if (!model) return 'Model list pending'
+    if (activeModel) return `Model: ${getModelDisplayName(activeModel)}`
+    return `Model: ${formatModelId(model)}`
+  }, [activeModel, model])
 
   useEffect(() => {
     const el = textareaRef.current
@@ -877,14 +921,14 @@ const ChatComposer = memo(function ChatComposer({
           value={model}
           onChange={(event) => onModelChange(event.target.value)}
           disabled={!enabled || models.length === 0}
-          title={model ? `Model: ${model}` : 'Model list pending'}
+          title={modelTitle}
         >
           {models.length === 0 ? (
             <option value="">Model list pending</option>
           ) : (
             models.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.name ?? m.id}
+                {getModelDisplayName(m)}
               </option>
             ))
           )}
@@ -906,7 +950,7 @@ const ChatComposer = memo(function ChatComposer({
           disabled={!enabled || !prompt.trim() || isRunning}
           title="Send (↵)"
         >
-          <ArrowUp size={14} strokeWidth={2.5} />
+          <ArrowUp size={14} strokeWidth={3} />
         </button>
       </div>
     </form>
