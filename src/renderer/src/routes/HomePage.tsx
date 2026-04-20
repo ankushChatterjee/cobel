@@ -2,6 +2,8 @@ import {
   FormEvent,
   KeyboardEvent,
   memo,
+  PointerEvent,
+  type CSSProperties,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -16,6 +18,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Trash2,
   FolderOpen,
   Plus,
   RotateCcw,
@@ -56,7 +59,11 @@ const activeSelectionKey = 'patronus.active.v1'
 const legacyActiveSelectionKey = 'gencode.active.v1'
 const legacyWorkspaceKey = 'gencode.workspace.v1'
 const threadComposerPreferencesKey = 'patronus.thread-composer-prefs.v1'
+const sidebarWidthKey = 'patronus.sidebar-width.v1'
 const defaultRuntimeMode: RuntimeMode = 'auto-accept-edits'
+const defaultSidebarWidth = 290
+const minSidebarWidth = 184
+const maxSidebarWidth = 420
 
 SyntaxHighlighter.registerLanguage('bash', bash)
 SyntaxHighlighter.registerLanguage('css', css)
@@ -126,15 +133,16 @@ function isRuntimeMode(value: unknown): value is RuntimeMode {
 
 function loadThreadComposerPreferences(): ThreadComposerPreferenceMap {
   try {
-    const parsed = JSON.parse(localStorage.getItem(threadComposerPreferencesKey) ?? 'null') as
-      | Record<string, unknown>
-      | null
+    const parsed = JSON.parse(
+      localStorage.getItem(threadComposerPreferencesKey) ?? 'null'
+    ) as Record<string, unknown> | null
     if (!parsed || typeof parsed !== 'object') return {}
     const preferences: ThreadComposerPreferenceMap = {}
     for (const [threadId, value] of Object.entries(parsed)) {
       if (!threadId || typeof value !== 'object' || !value) continue
       const raw = value as { model?: unknown; runtimeMode?: unknown }
-      const model = typeof raw.model === 'string' && raw.model.trim().length > 0 ? raw.model : undefined
+      const model =
+        typeof raw.model === 'string' && raw.model.trim().length > 0 ? raw.model : undefined
       const runtimeMode = isRuntimeMode(raw.runtimeMode) ? raw.runtimeMode : undefined
       if (!model && !runtimeMode) continue
       preferences[threadId] = { model, runtimeMode }
@@ -147,6 +155,25 @@ function loadThreadComposerPreferences(): ThreadComposerPreferenceMap {
 
 function saveThreadComposerPreferences(preferences: ThreadComposerPreferenceMap): void {
   localStorage.setItem(threadComposerPreferencesKey, JSON.stringify(preferences))
+}
+
+function clampSidebarWidth(width: number): number {
+  return Math.min(maxSidebarWidth, Math.max(minSidebarWidth, Math.round(width)))
+}
+
+function loadSidebarWidth(): number {
+  try {
+    const storedWidth = localStorage.getItem(sidebarWidthKey)
+    if (!storedWidth) return defaultSidebarWidth
+    const parsed = Number(storedWidth)
+    return Number.isFinite(parsed) ? clampSidebarWidth(parsed) : defaultSidebarWidth
+  } catch {
+    return defaultSidebarWidth
+  }
+}
+
+function saveSidebarWidth(width: number): void {
+  localStorage.setItem(sidebarWidthKey, String(clampSidebarWidth(width)))
 }
 
 function pickDefaultModel(models: ModelInfo[]): string {
@@ -242,9 +269,9 @@ function runLegacyMigration(loadedShell: OrchestrationShellSnapshot): void {
 export function HomePage(): React.JSX.Element {
   const [shell, setShell] = useState<OrchestrationShellSnapshot>({ projects: [], threads: [] })
   const [selection, setSelection] = useState<ActiveSelection>(loadActiveSelection)
-  const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferenceMap>(
-    loadThreadComposerPreferences
-  )
+  const [threadComposerPreferences, setThreadComposerPreferences] =
+    useState<ThreadComposerPreferenceMap>(loadThreadComposerPreferences)
+  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [openProjectIds, setOpenProjectIds] = useState<Set<string>>(() => new Set())
   const [thread, setThread] = useState<OrchestrationThread | null>(null)
   const [providers, setProviders] = useState<ProviderSummary[]>([])
@@ -253,6 +280,7 @@ export function HomePage(): React.JSX.Element {
   const [models, setModels] = useState<ModelInfo[]>([])
   const [model, setModel] = useState<string>('')
   const lastSequenceRef = useRef(0)
+  const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const conversationRef = useRef<HTMLElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const shouldStickToBottomRef = useRef(true)
@@ -295,6 +323,10 @@ export function HomePage(): React.JSX.Element {
   useEffect(() => {
     saveThreadComposerPreferences(threadComposerPreferences)
   }, [threadComposerPreferences])
+
+  useEffect(() => {
+    saveSidebarWidth(sidebarWidth)
+  }, [sidebarWidth])
 
   // Shell subscription: drives sidebar state
   useEffect(() => {
@@ -641,6 +673,51 @@ export function HomePage(): React.JSX.Element {
     setError(null)
   }
 
+  async function deleteChat(chat: ThreadShellSummary): Promise<void> {
+    const confirmed = window.confirm(`Delete "${chat.title}"? This cannot be undone.`)
+    if (!confirmed) return
+
+    setError(null)
+    const createdAt = new Date().toISOString()
+    const fallbackThread =
+      shell.threads.find(
+        (candidate) =>
+          candidate.projectId === chat.projectId &&
+          candidate.id !== chat.id &&
+          !candidate.archivedAt
+      ) ?? null
+
+    if (selection.activeChatId === chat.id) {
+      setSelection({
+        activeProjectId: chat.projectId,
+        activeChatId: fallbackThread?.id ?? null
+      })
+      setThread(null)
+      setComposerResetToken((token) => token + 1)
+      setIsPendingThinking(false)
+    }
+
+    setThreadComposerPreferences((current) => {
+      const next = { ...current }
+      delete next[chat.id]
+      return next
+    })
+
+    try {
+      await window.agentApi.dispatchCommand({
+        type: 'thread.delete',
+        commandId: `cmd:${createId()}`,
+        threadId: chat.id,
+        createdAt
+      })
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : String(deleteError))
+      if (selection.activeChatId === chat.id) {
+        setSelection({ activeProjectId: chat.projectId, activeChatId: chat.id })
+      }
+    }
+  }
+
   async function openProject(folder: OpenWorkspaceFolderResult): Promise<void> {
     const projectId = projectIdForPath(folder.path)
     const existing = shell.projects.find((p) => p.id === projectId)
@@ -715,8 +792,42 @@ export function HomePage(): React.JSX.Element {
     [activeThreadId]
   )
 
+  const sidebarStyle = useMemo(
+    () => ({ '--sidebar-width': `${sidebarWidth}px` }) as CSSProperties,
+    [sidebarWidth]
+  )
+
+  const startSidebarResize = useCallback(
+    (event: PointerEvent<HTMLDivElement>): void => {
+      sidebarResizeRef.current = { startX: event.clientX, startWidth: sidebarWidth }
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+      document.body.classList.add('sidebar-resizing')
+    },
+    [sidebarWidth]
+  )
+
+  const resizeSidebar = useCallback((event: PointerEvent<HTMLDivElement>): void => {
+    const resize = sidebarResizeRef.current
+    if (!resize) return
+    setSidebarWidth(clampSidebarWidth(resize.startWidth + event.clientX - resize.startX))
+  }, [])
+
+  const stopSidebarResize = useCallback((event: PointerEvent<HTMLDivElement>): void => {
+    if (!sidebarResizeRef.current) return
+    sidebarResizeRef.current = null
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+    document.body.classList.remove('sidebar-resizing')
+  }, [])
+
+  const handleSidebarResizeKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const direction = event.key === 'ArrowLeft' ? -1 : 1
+    setSidebarWidth((width) => clampSidebarWidth(width + direction * 12))
+  }, [])
+
   return (
-    <div className="agent-shell" data-theme="linear-dark">
+    <div className="agent-shell" data-theme="linear-dark" style={sidebarStyle}>
       <aside className="project-sidebar" aria-label="Projects">
         <div className="sidebar-header">
           <div className="sidebar-app-name">patronus</div>
@@ -765,15 +876,28 @@ export function HomePage(): React.JSX.Element {
                     {isOpen ? (
                       <div className="thread-list">
                         {threads.map((chat) => (
-                          <button
+                          <div
                             key={chat.id}
-                            type="button"
-                            className={`thread-link ${chat.id === activeChat?.id ? 'active' : ''}`}
-                            onClick={() => selectChat(chat)}
+                            className={`thread-row ${chat.id === activeChat?.id ? 'active' : ''}`}
                           >
-                            <span className="thread-dot" />
-                            <span className="thread-label">{chat.title}</span>
-                          </button>
+                            <button
+                              type="button"
+                              className="thread-link"
+                              onClick={() => selectChat(chat)}
+                            >
+                              <span className="thread-dot" />
+                              <span className="thread-label">{chat.title}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="thread-delete-button"
+                              title={`Delete ${chat.title}`}
+                              aria-label={`Delete ${chat.title}`}
+                              onClick={() => void deleteChat(chat)}
+                            >
+                              <Trash2 size={12} strokeWidth={1.9} />
+                            </button>
+                          </div>
                         ))}
                         <button
                           type="button"
@@ -791,6 +915,21 @@ export function HomePage(): React.JSX.Element {
             </nav>
           )}
         </div>
+        <div
+          className="sidebar-resize-handle"
+          role="separator"
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-valuemin={minSidebarWidth}
+          aria-valuemax={maxSidebarWidth}
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          onKeyDown={handleSidebarResizeKeyDown}
+          onPointerDown={startSidebarResize}
+          onPointerMove={resizeSidebar}
+          onPointerUp={stopSidebarResize}
+          onPointerCancel={stopSidebarResize}
+        />
       </aside>
 
       <main className="chat-surface">
@@ -1052,21 +1191,54 @@ const ChatComposer = memo(function ChatComposer({
   )
 })
 
-type TranscriptItem =
-  | {
-      id: string
-      kind: 'message'
-      sequence: number
-      createdAt: string
-      message: OrchestrationMessage
+type MessageTranscriptItem = {
+  id: string
+  kind: 'message'
+  sequence: number
+  createdAt: string
+  workDurationMs: number | null
+  message: OrchestrationMessage
+}
+
+type ActivityTranscriptItem = {
+  id: string
+  kind: 'activity'
+  sequence: number
+  createdAt: string
+  activity: OrchestrationThreadActivity
+}
+
+type TranscriptItem = MessageTranscriptItem | ActivityTranscriptItem
+
+type TranscriptRenderGroup =
+  | { kind: 'non-tool'; item: TranscriptItem }
+  | { kind: 'tool-run'; id: string; activities: ActivityTranscriptItem[] }
+
+function groupTranscriptItems(items: TranscriptItem[]): TranscriptRenderGroup[] {
+  const groups: TranscriptRenderGroup[] = []
+  let toolRun: ActivityTranscriptItem[] = []
+
+  function flushRun(): void {
+    if (toolRun.length === 0) return
+    groups.push({
+      kind: 'tool-run',
+      id: `run:${toolRun[0].id}:${toolRun[toolRun.length - 1].id}`,
+      activities: toolRun
+    })
+    toolRun = []
+  }
+
+  for (const item of items) {
+    if (item.kind === 'activity' && isToolActivity(item.activity)) {
+      toolRun.push(item)
+    } else {
+      flushRun()
+      groups.push({ kind: 'non-tool', item })
     }
-  | {
-      id: string
-      kind: 'activity'
-      sequence: number
-      createdAt: string
-      activity: OrchestrationThreadActivity
-    }
+  }
+  flushRun()
+  return groups
+}
 
 const TranscriptList = memo(function TranscriptList({
   items,
@@ -1089,18 +1261,41 @@ const TranscriptList = memo(function TranscriptList({
     answer: Record<string, unknown>
   ) => Promise<void>
 }): React.JSX.Element {
+  const groups = useMemo(() => groupTranscriptItems(items), [items])
   return (
     <div className="transcript" aria-label="Conversation transcript">
-      {items.map((item) => (
-        <TranscriptRow
-          key={item.id}
-          item={item}
-          expandedToolIds={expandedToolIds}
-          onToggleTool={onToggleTool}
-          onApprove={onApprove}
-          onAnswer={onAnswer}
-        />
-      ))}
+      {groups.map((group) => {
+        if (group.kind === 'non-tool') {
+          return (
+            <TranscriptRow
+              key={group.item.id}
+              item={group.item}
+              onApprove={onApprove}
+              onAnswer={onAnswer}
+            />
+          )
+        }
+        const { id, activities } = group
+        if (activities.length === 1) {
+          const single = activities[0]
+          return (
+            <ToolLine
+              key={single.id}
+              activity={single.activity}
+              expanded={expandedToolIds.has(single.activity.id)}
+              onToggle={() => onToggleTool(single.activity.id)}
+            />
+          )
+        }
+        return (
+          <ToolGroup
+            key={id}
+            activities={activities}
+            expandedToolIds={expandedToolIds}
+            onToggleTool={onToggleTool}
+          />
+        )
+      })}
       {showPendingThinking && (
         <article className="thinking-row is-active" aria-label="Thinking">
           <span className="thinking-spinner" aria-hidden="true" />
@@ -1113,14 +1308,10 @@ const TranscriptList = memo(function TranscriptList({
 
 const TranscriptRow = memo(function TranscriptRow({
   item,
-  expandedToolIds,
-  onToggleTool,
   onApprove,
   onAnswer
 }: {
   item: TranscriptItem
-  expandedToolIds: Set<string>
-  onToggleTool: (activityId: string) => void
   onApprove: (
     activity: OrchestrationThreadActivity,
     decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'
@@ -1130,7 +1321,9 @@ const TranscriptRow = memo(function TranscriptRow({
     answer: Record<string, unknown>
   ) => Promise<void>
 }): React.JSX.Element {
-  if (item.kind === 'message') return <MessageRow message={item.message} />
+  if (item.kind === 'message') {
+    return <MessageRow message={item.message} workDurationMs={item.workDurationMs} />
+  }
 
   const { activity } = item
   if (isPendingPrompt(activity)) {
@@ -1139,15 +1332,6 @@ const TranscriptRow = memo(function TranscriptRow({
   if (isThinkingActivity(activity)) return <ThinkingRow activity={activity} />
   if (isRuntimeError(activity)) {
     return <SessionErrorBanner message={activity.summary} />
-  }
-  if (isToolActivity(activity)) {
-    return (
-      <ToolRow
-        activity={activity}
-        expanded={expandedToolIds.has(activity.id)}
-        onToggle={() => onToggleTool(activity.id)}
-      />
-    )
   }
   return <ActivityRow activity={activity} />
 })
@@ -1170,16 +1354,27 @@ const ThinkingRow = memo(function ThinkingRow({
 })
 
 const MessageRow = memo(function MessageRow({
-  message
+  message,
+  workDurationMs
 }: {
   message: OrchestrationMessage
+  workDurationMs: number | null
 }): React.JSX.Element {
   const isAssistant = message.role === 'assistant'
   return (
     <article className={`message ${message.role} ${message.streaming ? 'streaming' : ''}`}>
       <div className="message-meta">
-        <span>{message.role === 'assistant' ? 'worked' : 'you'}</span>
-        <span>{formatTime(message.createdAt)}</span>
+        {isAssistant ? (
+          <>
+            <span>worked for</span>
+            <span>{formatWorkDuration(workDurationMs)}</span>
+          </>
+        ) : (
+          <>
+            <span>you</span>
+            <span>{formatTime(message.createdAt)}</span>
+          </>
+        )}
       </div>
       {isAssistant ? (
         <MarkdownMessage text={message.text} isStreaming={message.streaming} />
@@ -1293,7 +1488,77 @@ const CodeBlock = memo(function CodeBlock({
   )
 })
 
-const ToolRow = memo(function ToolRow({
+function categorizeToolActivity(activity: OrchestrationThreadActivity): string {
+  const label = labelForActivity(activity)
+  if (label === 'terminal' || label === 'mcp') return label
+  if (label === 'edit') return 'edit'
+  if (label === 'search') return 'search'
+  if (label === 'web') return 'web'
+  if (label === 'image') return 'image'
+  if (label === 'review') return 'review'
+  if (label === 'compact') return 'compact'
+  if (label === 'plan') return 'plan'
+  if (label === 'agent') return 'agent'
+  const payload = activity.payload ?? {}
+  const title = (readPayloadString(payload, 'title') ?? activity.summary).toLowerCase()
+  if (title.startsWith('read') || title.startsWith('glob') || label === 'tool') {
+    if (title.startsWith('read') || title.startsWith('glob')) return 'read'
+  }
+  if (title.startsWith('search') || title.startsWith('grep') || title.includes('search'))
+    return 'search'
+  return label === 'tool' ? 'tool' : label
+}
+
+function verbForActivity(activity: OrchestrationThreadActivity): string {
+  const payload = activity.payload ?? {}
+  const title = readPayloadString(payload, 'title') ?? activity.summary
+  const label = labelForActivity(activity)
+  if (label === 'edit') return 'Edited'
+  if (label === 'terminal') return 'Ran'
+  if (label === 'search') return 'Searched for'
+  if (label === 'web') return 'Searched web for'
+  if (label === 'mcp') return 'Called'
+  if (label === 'image') return 'Viewed'
+  if (label === 'agent') return 'Spawned agent'
+  if (label === 'review') return 'Review'
+  if (label === 'compact') return 'Compacted'
+  if (label === 'plan') return 'Planned'
+  const titleLower = title.toLowerCase()
+  if (titleLower.startsWith('read')) return 'Read'
+  if (titleLower.startsWith('glob')) return 'Listed'
+  if (titleLower.startsWith('search') || titleLower.startsWith('grep')) return 'Searched for'
+  const first = label.charAt(0).toUpperCase() + label.slice(1)
+  return first
+}
+
+function summarizeToolRun(activities: OrchestrationThreadActivity[]): string {
+  const categoryCounts = new Map<string, number>()
+  const seenOrder: string[] = []
+  for (const activity of activities) {
+    const cat = categorizeToolActivity(activity)
+    if (!categoryCounts.has(cat)) {
+      categoryCounts.set(cat, 0)
+      seenOrder.push(cat)
+    }
+    categoryCounts.set(cat, (categoryCounts.get(cat) ?? 0) + 1)
+  }
+  const parts: string[] = []
+  for (const cat of seenOrder) {
+    const n = categoryCounts.get(cat) ?? 0
+    if (cat === 'read') parts.push(`Explored ${n} ${n === 1 ? 'file' : 'files'}`)
+    else if (cat === 'search') parts.push(`${n} ${n === 1 ? 'search' : 'searches'}`)
+    else if (cat === 'terminal') parts.push(`Ran ${n} ${n === 1 ? 'command' : 'commands'}`)
+    else if (cat === 'edit') parts.push(`Edited ${n} ${n === 1 ? 'file' : 'files'}`)
+    else if (cat === 'web') parts.push(`${n} web ${n === 1 ? 'search' : 'searches'}`)
+    else if (cat === 'mcp') parts.push(`${n} MCP ${n === 1 ? 'call' : 'calls'}`)
+    else if (cat === 'image') parts.push(`Viewed ${n} ${n === 1 ? 'image' : 'images'}`)
+    else if (cat === 'agent') parts.push(`${n} ${n === 1 ? 'agent' : 'agents'}`)
+    else parts.push(`${n} tool ${n === 1 ? 'call' : 'calls'}`)
+  }
+  return parts.join(', ')
+}
+
+const ToolLine = memo(function ToolLine({
   activity,
   expanded,
   onToggle
@@ -1313,35 +1578,44 @@ const ToolRow = memo(function ToolRow({
   const statusTone = statusToneForTool(status)
   const exitCode = itemPayload['exitCode']
   const durationMs = itemPayload['durationMs']
-  const label = labelForActivity(activity)
+  const verb = verbForActivity(activity)
+  const hasDetails = Boolean(detail ?? output)
+  const isRunning = statusTone === 'is-running'
+
   return (
     <article
-      className={`tool-row ${activity.tone} ${statusTone}`}
+      className={`tool-line ${statusTone}`}
       data-item-type={readPayloadString(payload, 'itemType')}
     >
       <button
         type="button"
-        className="tool-row-summary"
-        aria-expanded={expanded}
-        onClick={onToggle}
+        className="tool-line-summary"
+        aria-expanded={hasDetails ? expanded : undefined}
+        onClick={hasDetails ? onToggle : undefined}
+        style={hasDetails ? undefined : { cursor: 'default' }}
       >
-        <span className="tool-disclosure">
-          {expanded ? (
-            <ChevronDown size={11} strokeWidth={2} />
-          ) : (
-            <ChevronRight size={11} strokeWidth={2} />
-          )}
+        <span className="tool-line-chevron" aria-hidden="true">
+          {isRunning ? (
+            <span className="tool-line-spinner" />
+          ) : hasDetails ? (
+            expanded ? (
+              <ChevronDown size={10} strokeWidth={2} />
+            ) : (
+              <ChevronRight size={10} strokeWidth={2} />
+            )
+          ) : null}
         </span>
-        <span className="tool-kind">{label}</span>
-        <span className="tool-title">{title}</span>
-        <span className="tool-status">
-          <span aria-hidden="true" className="tool-status-dot" />
-          {statusLabel(status)}
-          {typeof exitCode === 'number' ? ` (exit ${exitCode})` : null}
-          {typeof durationMs === 'number' ? ` ${formatDuration(durationMs)}` : null}
-        </span>
+        <span className="tool-line-verb">{verb}</span>
+        <span className="tool-line-target">{title}</span>
+        <span className="tool-line-meta">{statusLabel(status)}</span>
+        {typeof exitCode === 'number' && exitCode !== 0 ? (
+          <span className="tool-line-meta">exit {exitCode}</span>
+        ) : null}
+        {typeof durationMs === 'number' ? (
+          <span className="tool-line-meta">{formatDuration(durationMs)}</span>
+        ) : null}
       </button>
-      {expanded ? (
+      {expanded && hasDetails ? (
         <div className="tool-details">
           {detail ? <p className="tool-cwd">{detail}</p> : null}
           {output ? <pre className="tool-output">{output}</pre> : null}
@@ -1349,6 +1623,91 @@ const ToolRow = memo(function ToolRow({
         </div>
       ) : null}
     </article>
+  )
+})
+
+const ToolGroup = memo(function ToolGroup({
+  activities,
+  expandedToolIds,
+  onToggleTool
+}: {
+  activities: ActivityTranscriptItem[]
+  expandedToolIds: Set<string>
+  onToggleTool: (activityId: string) => void
+}): React.JSX.Element {
+  const activityList = activities.map((a) => a.activity)
+  const summary = summarizeToolRun(activityList)
+  const allComplete = activityList.every(
+    (a) => statusToneForTool(statusFromActivity(a)) === 'is-complete'
+  )
+  const anyRunning = activityList.some(
+    (a) => statusToneForTool(statusFromActivity(a)) === 'is-running'
+  )
+  const anyError = activityList.some((a) => statusToneForTool(statusFromActivity(a)) === 'is-error')
+  const groupTone = anyError
+    ? 'is-error'
+    : anyRunning
+      ? 'is-running'
+      : allComplete
+        ? 'is-complete'
+        : ''
+
+  // Start open while streaming; auto-collapse when the run finishes.
+  // User can re-open after collapse.
+  const [open, setOpen] = useState(() => anyRunning)
+  const userToggledRef = useRef(false)
+  const prevRunningRef = useRef(anyRunning)
+
+  useEffect(() => {
+    const wasRunning = prevRunningRef.current
+    prevRunningRef.current = anyRunning
+    if (anyRunning && !wasRunning) {
+      // New work started — expand
+      setOpen(true)
+      userToggledRef.current = false
+    } else if (!anyRunning && wasRunning && !userToggledRef.current) {
+      // Run just finished and user hasn't manually toggled — collapse
+      setOpen(false)
+    }
+  }, [anyRunning])
+
+  function handleToggle(): void {
+    userToggledRef.current = true
+    setOpen((v) => !v)
+  }
+
+  return (
+    <div className={`tool-group ${groupTone}`}>
+      <button
+        type="button"
+        className="tool-group-summary"
+        aria-expanded={open}
+        onClick={handleToggle}
+      >
+        <span className="tool-line-chevron" aria-hidden="true">
+          {anyRunning ? (
+            <span className="tool-line-spinner" />
+          ) : open ? (
+            <ChevronDown size={10} strokeWidth={2} />
+          ) : (
+            <ChevronRight size={10} strokeWidth={2} />
+          )}
+        </span>
+        <span className="tool-group-label">{summary}</span>
+      </button>
+      {open ? (
+        <div className="tool-group-body">
+          {activities.map((item) => (
+            <ToolLine
+              key={item.id}
+              activity={item.activity}
+              expanded={expandedToolIds.has(item.activity.id)}
+              onToggle={() => onToggleTool(item.activity.id)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 })
 
@@ -1534,6 +1893,7 @@ function buildTranscriptItems(thread: OrchestrationThread | null): TranscriptIte
       kind: 'message' as const,
       sequence: message.sequence ?? Number.MAX_SAFE_INTEGER,
       createdAt: message.createdAt,
+      workDurationMs: workDurationForMessage(message),
       message
     })),
     ...thread.activities
@@ -1551,6 +1911,18 @@ function buildTranscriptItems(thread: OrchestrationThread | null): TranscriptIte
     if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt
     return left.sequence - right.sequence
   })
+}
+
+function workDurationForMessage(message: OrchestrationMessage): number | null {
+  if (message.role !== 'assistant') return null
+  return durationBetween(message.createdAt, message.updatedAt)
+}
+
+function durationBetween(start: string, end: string): number | null {
+  const startMs = new Date(start).getTime()
+  const endMs = new Date(end).getTime()
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null
+  return Math.max(0, endMs - startMs)
 }
 
 function timestampForSort(value: string): number {
@@ -1741,6 +2113,15 @@ function readBestItemData(data: Record<string, unknown>): Record<string, unknown
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
+}
+
+function formatWorkDuration(ms: number | null): string {
+  if (ms === null) return 'a moment'
+  if (ms < 1000) return '<1s'
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`
+  const minutes = Math.floor(ms / 60_000)
+  const seconds = Math.round((ms % 60_000) / 1000)
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`
 }
 
 function formatPayload(payload: Record<string, unknown>): string {

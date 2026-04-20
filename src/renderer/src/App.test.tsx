@@ -1,6 +1,6 @@
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router'
 import { StrictMode } from 'react'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OrchestrationThreadStreamItem } from '../../shared/agent'
@@ -198,13 +198,18 @@ describe('renderer app', () => {
                 streaming: false,
                 sequence: 1,
                 createdAt: '2026-04-19T00:00:01.000Z',
-                updatedAt: '2026-04-19T00:00:01.000Z'
+                updatedAt: '2026-04-19T00:00:02.000Z'
               }
             ],
             activities: [],
             proposedPlans: [],
             session: null,
-            latestTurn: null,
+            latestTurn: {
+              id: 'turn-1',
+              status: 'completed',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: '2026-04-19T00:00:03.000Z'
+            },
             checkpoints: [],
             createdAt: '2026-04-19T00:00:00.000Z',
             updatedAt: '2026-04-19T00:00:01.000Z',
@@ -221,6 +226,9 @@ describe('renderer app', () => {
     await userEvent.click(openFolderButtons[0])
 
     expect((await screen.findByText('bold text')).tagName).toBe('STRONG')
+    expect(screen.getByText('worked for')).toBeInTheDocument()
+    expect(screen.getByText('1s')).toBeInTheDocument()
+    expect(screen.queryByText('3s')).not.toBeInTheDocument()
     await waitFor(() => {
       const codeBlock = document.querySelector('.markdown-code-block.highlighted')
       expect(codeBlock).toHaveTextContent('const answer = 42')
@@ -663,6 +671,52 @@ describe('renderer app', () => {
     await user.click(screen.getByRole('button', { name: /clear chat/i }))
     expect(window.agentApi.clearThread).toHaveBeenCalledWith({
       threadId: expect.stringMatching(/^project:/)
+    })
+  })
+
+  it('deletes a sidebar thread from the hover action', async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    await user.click(await screen.findByRole('button', { name: /delete new chat/i }))
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Delete "New chat"?'))
+    expect(window.agentApi.dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'thread.delete',
+        threadId: expect.stringMatching(/^project:/)
+      })
+    )
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /delete new chat/i })).not.toBeInTheDocument()
+    })
+    confirmSpy.mockRestore()
+  })
+
+  it('resizes the sidebar without showing a collapse control', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: /open a project/i })
+    const shell = document.querySelector('.agent-shell')
+    const resizeHandle = await screen.findByRole('separator', { name: /resize sidebar/i })
+
+    expect(shell).toHaveStyle({ '--sidebar-width': '290px' })
+    expect(screen.queryByRole('button', { name: /collapse sidebar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /expand sidebar/i })).not.toBeInTheDocument()
+
+    fireEvent.keyDown(resizeHandle, { key: 'ArrowRight' })
+
+    await waitFor(() => {
+      expect(resizeHandle).toHaveAttribute('aria-valuenow', '302')
+      expect(localStorage.getItem('patronus.sidebar-width.v1')).toBe('302')
     })
   })
 })

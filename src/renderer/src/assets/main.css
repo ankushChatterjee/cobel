@@ -95,7 +95,7 @@
 
 .agent-shell {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width, 232px) minmax(0, 1fr);
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -106,10 +106,12 @@
 
 .project-sidebar {
   display: flex;
+  position: relative;
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--border-subtle);
   background: var(--surface-sidebar);
+  overflow: hidden;
 }
 
 .sidebar-header {
@@ -153,13 +155,52 @@
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background 0.15s;
 }
 
 .add-project-button:hover {
   border-color: var(--border-strong);
   color: var(--text-secondary);
   background: var(--surface-hover);
+}
+
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  z-index: 5;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  -webkit-app-region: no-drag;
+}
+
+.sidebar-resize-handle::after {
+  position: absolute;
+  top: 0;
+  right: 3px;
+  width: 1px;
+  height: 100%;
+  background: transparent;
+  content: '';
+  transition:
+    background 0.14s ease,
+    box-shadow 0.14s ease;
+}
+
+.sidebar-resize-handle:hover::after,
+.sidebar-resize-handle:focus-visible::after,
+.sidebar-resizing .sidebar-resize-handle::after {
+  background: var(--accent-primary);
+  box-shadow: 0 0 14px var(--accent-glow);
+}
+
+.sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .sidebar-scroll {
@@ -186,7 +227,6 @@
   display: grid;
 }
 
-
 .project-group {
   display: grid;
 }
@@ -205,7 +245,9 @@
   font-size: 12.5px;
   font-weight: 500;
   text-align: left;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .project-toggle.active {
@@ -249,6 +291,24 @@
   padding: 1px 0 4px;
 }
 
+.thread-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  align-items: center;
+  min-height: 28px;
+  padding-right: 7px;
+  transition: background 0.1s;
+}
+
+.thread-row:hover,
+.thread-row:focus-within {
+  background: var(--surface-hover);
+}
+
+.thread-row.active {
+  background: var(--surface-active);
+}
+
 .thread-link {
   display: flex;
   width: 100%;
@@ -256,7 +316,7 @@
   align-items: center;
   gap: 7px;
   min-height: 28px;
-  padding: 3px 10px 3px 32px;
+  padding: 3px 8px 3px 32px;
   border: 0;
   background: transparent;
   color: var(--text-label);
@@ -264,20 +324,18 @@
   font-size: 12.5px;
   text-align: left;
   overflow: hidden;
-  transition: background 0.1s, color 0.1s;
+  transition: color 0.1s;
 }
 
 .thread-link:hover {
-  background: var(--surface-hover);
   color: var(--text-secondary);
 }
 
-.thread-link.active {
+.thread-row.active .thread-link {
   color: var(--text-primary);
-  background: var(--surface-active);
 }
 
-.thread-link.active .thread-dot {
+.thread-row.active .thread-dot {
   background: var(--accent-primary);
   box-shadow: 0 0 0 2px var(--accent-dim);
 }
@@ -297,6 +355,36 @@
   white-space: nowrap;
   min-width: 0;
   flex: 1;
+}
+
+.thread-delete-button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateX(3px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease,
+    color 0.12s ease,
+    background 0.12s ease;
+}
+
+.thread-row:hover .thread-delete-button,
+.thread-row:focus-within .thread-delete-button {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.thread-delete-button:hover {
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 .thread-link.new-thread {
@@ -381,7 +469,10 @@
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background 0.15s;
 }
 
 .icon-button:hover {
@@ -407,7 +498,10 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background 0.15s;
 }
 
 .text-button:hover {
@@ -462,12 +556,13 @@
 }
 
 .message,
-.tool-row,
+.tool-line,
+.tool-group,
 .activity-row,
 .pending-prompt,
 .thinking-row {
   content-visibility: auto;
-  contain-intrinsic-size: auto 80px;
+  contain-intrinsic-size: auto 22px;
 }
 
 .message {
@@ -497,6 +592,10 @@
 
 .message.user .message-meta {
   justify-content: flex-end;
+}
+
+.message.assistant .message-meta {
+  gap: 4px;
 }
 
 .message p {
@@ -647,8 +746,12 @@
   cursor: pointer;
   opacity: 0;
   transform: translateY(-2px);
-  transition: opacity 0.14s ease, transform 0.14s ease, border-color 0.14s ease,
-    color 0.14s ease, background 0.14s ease;
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease,
+    background 0.14s ease;
 }
 
 .markdown-code-wrap:hover .code-copy-button,
@@ -689,7 +792,9 @@
 }
 
 .message.streaming .markdown-body {
-  transition: opacity 0.16s ease, transform 0.16s ease;
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
 }
 
 @keyframes transcript-item-in {
@@ -791,128 +896,150 @@
   }
 }
 
-/* ── Tool row ─────────────────────────────────────────────── */
+/* ── Tool line (compact) ───────────────────────────────────── */
 
-.tool-row {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--surface-strip);
-  color: var(--text-secondary);
+.tool-line {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  margin-block: 1px;
+  min-width: 0;
   overflow: hidden;
-  transition: border-color 0.15s;
 }
 
-.tool-row.is-running {
-  border-color: rgba(245, 158, 11, 0.3);
-}
-
-.tool-row.is-complete {
-  border-color: rgba(74, 222, 128, 0.2);
-}
-
-.tool-row.is-error {
-  border-color: var(--error-border);
-}
-
-.tool-row.is-waiting {
-  border-color: var(--border-medium);
-}
-
-.tool-row-summary {
-  display: grid;
-  width: 100%;
-  grid-template-columns: 28px 76px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  padding: 0 4px 0 0;
-  text-align: left;
-  transition: background 0.1s;
-}
-
-.tool-row-summary:hover {
-  background: var(--surface-hover);
-}
-
-.tool-disclosure {
-  color: var(--text-muted);
-  text-align: center;
-  font-size: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.tool-kind {
-  color: var(--text-muted);
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.tool-title {
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tool-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding-right: 10px;
-  color: var(--text-muted);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-}
-
-.tool-status-dot {
-  width: 5px;
-  height: 5px;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  flex-shrink: 0;
-}
-
-.tool-row.is-running .tool-status {
+.tool-line.is-running {
   color: var(--accent-primary);
 }
 
-.tool-row.is-running .tool-status-dot {
-  background: currentColor;
-  box-shadow: 0 0 0 2px var(--accent-dim);
-}
-
-.tool-row.is-complete .tool-status {
-  color: var(--tool-edit);
-}
-
-.tool-row.is-complete .tool-status-dot {
-  background: currentColor;
-}
-
-.tool-row.is-error .tool-status {
+.tool-line.is-error {
   color: var(--error);
 }
 
-.tool-row.is-waiting .tool-status {
+.tool-line-summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  text-align: left;
+  padding: 1px 0;
+  line-height: 1.4;
+  overflow: hidden;
+}
+
+.tool-line-summary:where([aria-expanded]) {
+  cursor: pointer;
+}
+
+.tool-line-summary:hover {
+  color: var(--text-secondary);
+}
+
+.tool-line-chevron {
+  flex-shrink: 0;
+  width: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.tool-line-spinner {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: thinking-spin 0.8s linear infinite;
+}
+
+.tool-line-verb {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.tool-line-target {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.tool-line.is-error .tool-line-target {
+  color: var(--error);
+}
+
+.tool-line-meta {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+/* ── Tool group ────────────────────────────────────────────── */
+
+.tool-group {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  margin-block: 2px;
+  min-width: 0;
+}
+
+.tool-group.is-running {
+  color: var(--accent-primary);
+}
+
+.tool-group.is-error {
+  color: var(--error);
+}
+
+.tool-group-summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  text-align: left;
+  padding: 1px 0;
+  cursor: pointer;
+  line-height: 1.4;
+  overflow: hidden;
+}
+
+.tool-group-summary:hover {
+  color: var(--text-secondary);
+}
+
+.tool-group-label {
   color: var(--text-muted);
 }
+
+.tool-group-body {
+  display: grid;
+  gap: 0;
+  padding-left: 14px;
+  margin-top: 2px;
+}
+
+/* ── Tool details (shared) ─────────────────────────────────── */
 
 .tool-details {
   display: grid;
   gap: 8px;
-  border-top: 1px solid var(--border-subtle);
-  padding: 10px 12px 12px 112px;
+  padding: 6px 0 6px 18px;
   color: var(--text-secondary);
   font-size: 11.5px;
-  background: rgba(0, 0, 0, 0.25);
 }
 
 .tool-details p,
@@ -986,7 +1113,10 @@
   cursor: pointer;
   font-size: 11.5px;
   font-weight: 500;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    color 0.15s;
 }
 
 .prompt-actions button:hover {
@@ -1084,7 +1214,9 @@
     0 8px 40px rgba(0, 0, 0, 0.55),
     0 2px 8px rgba(0, 0, 0, 0.3),
     0 1px 0 rgba(255, 255, 255, 0.04) inset;
-  transition: border-color 0.15s, box-shadow 0.2s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.2s;
 }
 
 .composer:focus-within {
@@ -1174,7 +1306,10 @@
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background 0.15s;
 }
 
 .run-controls button:hover {
@@ -1195,7 +1330,10 @@
   background: var(--text-primary);
   color: var(--surface-root);
   cursor: pointer;
-  transition: background 0.15s, opacity 0.15s, transform 0.1s;
+  transition:
+    background 0.15s,
+    opacity 0.15s,
+    transform 0.1s;
 }
 
 .send-button:hover:not(:disabled) {
@@ -1251,14 +1389,6 @@
 
   .composer-footer {
     flex-wrap: wrap;
-  }
-
-  .tool-row-summary {
-    grid-template-columns: 28px minmax(0, 1fr) auto;
-  }
-
-  .tool-kind {
-    display: none;
   }
 
   .tool-details {
