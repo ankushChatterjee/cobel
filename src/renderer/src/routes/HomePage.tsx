@@ -1,5 +1,4 @@
 import {
-  type CSSProperties,
   FormEvent,
   KeyboardEvent,
   useDeferredValue,
@@ -10,8 +9,10 @@ import {
 } from 'react'
 import {
   ArrowUp,
+  Check,
   ChevronDown,
   ChevronRight,
+  Copy,
   FolderOpen,
   Plus,
   RotateCcw,
@@ -21,7 +22,18 @@ import {
 } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { BundledLanguage } from 'shiki'
+import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
+import bash from 'react-syntax-highlighter/dist/esm/languages/hljs/bash'
+import css from 'react-syntax-highlighter/dist/esm/languages/hljs/css'
+import diff from 'react-syntax-highlighter/dist/esm/languages/hljs/diff'
+import javascript from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript'
+import json from 'react-syntax-highlighter/dist/esm/languages/hljs/json'
+import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
+import rust from 'react-syntax-highlighter/dist/esm/languages/hljs/rust'
+import typescript from 'react-syntax-highlighter/dist/esm/languages/hljs/typescript'
+import xml from 'react-syntax-highlighter/dist/esm/languages/hljs/xml'
+import yaml from 'react-syntax-highlighter/dist/esm/languages/hljs/yaml'
+import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import type {
   ModelInfo,
   OpenWorkspaceFolderResult,
@@ -39,7 +51,21 @@ import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
 const activeSelectionKey = 'patronus.active.v1'
 const legacyActiveSelectionKey = 'gencode.active.v1'
 const legacyWorkspaceKey = 'gencode.workspace.v1'
-const shikiTheme = 'github-dark'
+
+SyntaxHighlighter.registerLanguage('bash', bash)
+SyntaxHighlighter.registerLanguage('css', css)
+SyntaxHighlighter.registerLanguage('diff', diff)
+SyntaxHighlighter.registerLanguage('javascript', javascript)
+SyntaxHighlighter.registerLanguage('js', javascript)
+SyntaxHighlighter.registerLanguage('json', json)
+SyntaxHighlighter.registerLanguage('python', python)
+SyntaxHighlighter.registerLanguage('py', python)
+SyntaxHighlighter.registerLanguage('rust', rust)
+SyntaxHighlighter.registerLanguage('typescript', typescript)
+SyntaxHighlighter.registerLanguage('ts', typescript)
+SyntaxHighlighter.registerLanguage('xml', xml)
+SyntaxHighlighter.registerLanguage('yaml', yaml)
+SyntaxHighlighter.registerLanguage('yml', yaml)
 
 const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
   { value: 'approval-required', label: 'Guarded' },
@@ -899,10 +925,10 @@ function MarkdownMessage({
         const language = languageFromClassName(className)
         const isBlock = Boolean(language) || code.includes('\n')
         if (!isBlock) return <code className="markdown-inline-code">{children}</code>
-        return <HighlightedCode code={code} language={language} isStreaming={isStreaming} />
+        return <CodeBlock code={code} language={language} isStreaming={isStreaming} />
       },
       pre({ children }) {
-        return <pre className="markdown-code-pre">{children}</pre>
+        return <>{children}</>
       }
     }),
     [isStreaming]
@@ -917,13 +943,7 @@ function MarkdownMessage({
   )
 }
 
-type HighlightedLine = Array<{
-  content: string
-  color?: string
-  fontStyle?: number
-}>
-
-function HighlightedCode({
+function CodeBlock({
   code,
   language,
   isStreaming
@@ -932,46 +952,57 @@ function HighlightedCode({
   language: string | null
   isStreaming: boolean
 }): React.JSX.Element {
-  const [lines, setLines] = useState<HighlightedLine[] | null>(null)
+  const [copied, setCopied] = useState(false)
+  const copyResetRef = useRef<number | null>(null)
 
   useEffect(() => {
-    setLines(null)
-    if (isStreaming) return undefined
-
-    let cancelled = false
-    const timer = window.setTimeout(() => {
-      void highlightCodeTokens(code, language)
-        .then((tokens) => {
-          if (!cancelled) setLines(tokens)
-        })
-        .catch(() => {
-          if (!cancelled) setLines(null)
-        })
-    }, 90)
-
     return () => {
-      cancelled = true
-      window.clearTimeout(timer)
+      if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current)
     }
-  }, [code, isStreaming, language])
+  }, [])
 
-  if (isStreaming || !lines) {
-    return <code className="markdown-code-block">{code}</code>
+  function copyCode(): void {
+    void navigator.clipboard.writeText(code).then(() => {
+      setCopied(true)
+      if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current)
+      copyResetRef.current = window.setTimeout(() => setCopied(false), 1200)
+    })
   }
 
+  if (isStreaming) return <code className="markdown-code-block">{code}</code>
+
+  const highlightedLanguage = normalizeHighlightLanguage(language ?? inferCodeLanguage(code))
+
   return (
-    <code className="markdown-code-block highlighted" data-language={language ?? 'text'}>
-      {lines.map((line, lineIndex) => (
-        <span className="markdown-code-line" key={`${lineIndex}:${line.map((token) => token.content).join('')}`}>
-          {line.map((token, tokenIndex) => (
-            <span key={`${tokenIndex}:${token.content}`} style={styleForToken(token)}>
-              {token.content}
-            </span>
-          ))}
-          {lineIndex < lines.length - 1 ? '\n' : null}
-        </span>
-      ))}
-    </code>
+    <div className="markdown-code-wrap">
+      <button
+        type="button"
+        className={`code-copy-button ${copied ? 'copied' : ''}`}
+        aria-label={copied ? 'Copied code' : 'Copy code'}
+        title={copied ? 'Copied' : 'Copy code'}
+        onClick={copyCode}
+      >
+        {copied ? <Check size={13} strokeWidth={2.2} /> : <Copy size={13} strokeWidth={2} />}
+      </button>
+      <SyntaxHighlighter
+        PreTag="pre"
+        CodeTag="code"
+        className="markdown-code-pre"
+        codeTagProps={{ className: 'markdown-code-block highlighted' }}
+        customStyle={{
+          margin: 0,
+          background: '#24292e',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '12px 14px'
+        }}
+        language={highlightedLanguage}
+        style={atomOneDark}
+        wrapLongLines={false}
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
   )
 }
 
@@ -1390,31 +1421,64 @@ function languageFromClassName(className: string | undefined): string | null {
   return match?.[1]?.toLowerCase() ?? null
 }
 
-function styleForToken(token: HighlightedLine[number]): CSSProperties {
-  const style: CSSProperties = {}
-  if (token.color) style.color = token.color
-  if (token.fontStyle) {
-    if ((token.fontStyle & 1) === 1) style.fontStyle = 'italic'
-    if ((token.fontStyle & 2) === 2) style.fontWeight = 700
-    if ((token.fontStyle & 4) === 4) style.textDecoration = 'underline'
+function normalizeHighlightLanguage(language: string): string {
+  switch (language.toLowerCase()) {
+    case 'console':
+    case 'shell':
+    case 'shellsession':
+    case 'sh':
+    case 'zsh':
+      return 'bash'
+    case 'tsx':
+    case 'typescript':
+      return 'ts'
+    case 'jsx':
+    case 'javascript':
+      return 'js'
+    case 'html':
+    case 'xml':
+      return 'xml'
+    case 'plaintext':
+    case 'text':
+    case 'txt':
+      return 'plaintext'
+    default:
+      return language.toLowerCase()
   }
-  return style
 }
 
-async function highlightCodeTokens(
-  code: string,
-  language: string | null
-): Promise<HighlightedLine[]> {
-  const { codeToTokens } = await import('shiki')
-  const requestedLanguage = (language ?? 'plaintext') as BundledLanguage | 'plaintext'
+function inferCodeLanguage(code: string): string {
+  const trimmed = code.trim()
+  if (!trimmed) return 'plaintext'
 
-  try {
-    const result = await codeToTokens(code, { lang: requestedLanguage, theme: shikiTheme })
-    return result.tokens
-  } catch {
-    const result = await codeToTokens(code, { lang: 'plaintext', theme: shikiTheme })
-    return result.tokens
+  if (
+    /^(import|export)\s/mu.test(trimmed) ||
+    /\b(type|interface|enum)\s+\w+/u.test(trimmed) ||
+    /:\s*(string|number|boolean|unknown|Promise<|Array<|\w+\[\])/u.test(trimmed) ||
+    /\bReact\.JSX\.Element\b/u.test(trimmed)
+  ) {
+    return 'ts'
   }
+
+  if (
+    /\b(function|const|let|var)\s+\w+/u.test(trimmed) ||
+    /\b(console\.log|document\.|window\.)/u.test(trimmed)
+  ) {
+    return 'js'
+  }
+
+  if (/^[\[{]/u.test(trimmed)) {
+    try {
+      JSON.parse(trimmed)
+      return 'json'
+    } catch {
+      // Keep checking other lightweight signals.
+    }
+  }
+
+  if (/^(bun|npm|pnpm|yarn|git|cd|ls|mkdir|rm|cp|mv|export)\b/mu.test(trimmed)) return 'bash'
+
+  return 'plaintext'
 }
 
 function projectIdForPath(path: string): string {
