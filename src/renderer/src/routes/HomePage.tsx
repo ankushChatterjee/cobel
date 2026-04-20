@@ -24,7 +24,8 @@ import type {
 } from '../../../shared/agent'
 import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
 
-const activeSelectionKey = 'gencode.active.v1'
+const activeSelectionKey = 'patronus.active.v1'
+const legacyActiveSelectionKey = 'gencode.active.v1'
 const legacyWorkspaceKey = 'gencode.workspace.v1'
 
 const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
@@ -40,7 +41,8 @@ interface ActiveSelection {
 
 function loadActiveSelection(): ActiveSelection {
   try {
-    const parsed = JSON.parse(localStorage.getItem(activeSelectionKey) ?? 'null') as ActiveSelection | null
+    const storedSelection = localStorage.getItem(activeSelectionKey) ?? localStorage.getItem(legacyActiveSelectionKey)
+    const parsed = JSON.parse(storedSelection ?? 'null') as ActiveSelection | null
     if (!parsed) return { activeProjectId: null, activeChatId: null }
     return {
       activeProjectId: typeof parsed.activeProjectId === 'string' ? parsed.activeProjectId : null,
@@ -160,7 +162,7 @@ export function HomePage(): React.JSX.Element {
         }
       })
       .catch((modelError) => {
-        console.error('[gencode:listModels]', modelError)
+        console.error('[patronus:listModels]', modelError)
       })
   }, [])
 
@@ -487,7 +489,7 @@ export function HomePage(): React.JSX.Element {
       <aside className="project-sidebar" aria-label="Projects">
         <div className="sidebar-header">
           <div className="sidebar-app-name">
-            gencode
+            patronus
           </div>
           <button
             type="button"
@@ -1216,7 +1218,7 @@ function statusLabel(status: string): string {
 }
 
 function logUiEvent(label: string, payload: unknown): void {
-  console.log(`[gencode:${label}]`, payload)
+  console.log(`[patronus:${label}]`, payload)
 }
 
 function readPayloadString(

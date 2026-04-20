@@ -538,7 +538,7 @@ describe('renderer app', () => {
     const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
     await user.click(openFolderButtons[0])
     expect(window.agentApi.openWorkspaceFolder).toHaveBeenCalled()
-    expect(await screen.findByRole('button', { name: /gencode/i })).toBeInTheDocument()
+    expect(await screen.findByText('patronus')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /clear chat/i }))
     expect(window.agentApi.clearThread).toHaveBeenCalledWith({

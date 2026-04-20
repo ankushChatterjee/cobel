@@ -11,8 +11,8 @@ describe('buildCodexInitializeParams', () => {
   it('sends client info and experimental api capability required by codex app-server', () => {
     expect(buildCodexInitializeParams()).toEqual({
       clientInfo: {
-        name: 'gencode_desktop',
-        title: 'Gencode Desktop',
+        name: 'patronus_desktop',
+        title: 'Patronus Desktop',
         version: '0.1.0'
       },
       capabilities: {

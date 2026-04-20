@@ -560,5 +560,5 @@ function readString(value: unknown, key: string): string | undefined {
 }
 
 function logEvent(label: string, payload: unknown): void {
-  console.log(`[gencode:${label}]`, payload)
+  console.log(`[patronus:${label}]`, payload)
 }

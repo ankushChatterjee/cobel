@@ -1,5 +1,13 @@
 @import 'tailwindcss';
 
+@font-face {
+  font-family: 'Jersey 25';
+  src: url('./fonts/jersey-25.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
 :root,
 [data-theme='linear-dark'] {
   color-scheme: dark;
@@ -108,9 +116,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   flex-shrink: 0;
   height: 48px;
-  padding: 0 12px 0 78px; /* 78px left clears macOS traffic lights */
+  padding: 0 10px 0 96px; /* Left inset clears macOS traffic lights. */
   border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: drag;
 }
@@ -120,14 +129,22 @@
 }
 
 .sidebar-app-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-family: 'Jersey 25', Inter, system-ui, sans-serif;
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1;
 }
 
 .add-project-button {
   display: grid;
+  flex: 0 0 auto;
   width: 26px;
   height: 26px;
   place-items: center;

@@ -1,4 +1,4 @@
-# gencode
+# patronus
 
 An Electron application with React and TypeScript
 

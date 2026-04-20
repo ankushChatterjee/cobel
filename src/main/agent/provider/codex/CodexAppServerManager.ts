@@ -598,7 +598,7 @@ export class CodexAppServerManager {
 }
 
 function logEvent(label: string, payload: unknown): void {
-  console.log(`[gencode:${label}]`, payload)
+  console.log(`[patronus:${label}]`, payload)
 }
 
 export function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
@@ -621,8 +621,8 @@ export function buildCodexInitializeParams(): {
 } {
   return {
     clientInfo: {
-      name: 'gencode_desktop',
-      title: 'Gencode Desktop',
+      name: 'patronus_desktop',
+      title: 'Patronus Desktop',
       version: '0.1.0'
     },
     capabilities: {
