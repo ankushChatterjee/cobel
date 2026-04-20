@@ -1,4 +1,13 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  FormEvent,
+  KeyboardEvent,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import {
   ArrowUp,
   ChevronDown,
@@ -10,6 +19,9 @@ import {
   ExternalLink,
   FilePen
 } from 'lucide-react'
+import ReactMarkdown, { type Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import type { BundledLanguage } from 'shiki'
 import type {
   ModelInfo,
   OpenWorkspaceFolderResult,
@@ -27,6 +39,7 @@ import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
 const activeSelectionKey = 'patronus.active.v1'
 const legacyActiveSelectionKey = 'gencode.active.v1'
 const legacyWorkspaceKey = 'gencode.workspace.v1'
+const shikiTheme = 'github-dark'
 
 const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
   { value: 'approval-required', label: 'Guarded' },
@@ -199,7 +212,10 @@ export function HomePage(): React.JSX.Element {
 
   useEffect(() => {
     if (!shouldStickToBottomRef.current) return
-    bottomRef.current?.scrollIntoView({ block: 'end' })
+    const frame = window.requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
+    })
+    return () => window.cancelAnimationFrame(frame)
   }, [transcriptItems.length, thread?.updatedAt])
 
   async function sendPrompt(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -845,14 +861,117 @@ function ThinkingRow({ activity }: { activity: OrchestrationThreadActivity }): R
 }
 
 function MessageRow({ message }: { message: OrchestrationMessage }): React.JSX.Element {
+  const isAssistant = message.role === 'assistant'
   return (
-    <article className={`message ${message.role}`}>
+    <article className={`message ${message.role} ${message.streaming ? 'streaming' : ''}`}>
       <div className="message-meta">
         <span>{message.role === 'assistant' ? 'worked' : 'you'}</span>
         <span>{formatTime(message.createdAt)}</span>
       </div>
-      <p>{message.text}</p>
+      {isAssistant ? (
+        <MarkdownMessage text={message.text} isStreaming={message.streaming} />
+      ) : (
+        <p>{message.text}</p>
+      )}
     </article>
+  )
+}
+
+function MarkdownMessage({
+  text,
+  isStreaming
+}: {
+  text: string
+  isStreaming: boolean
+}): React.JSX.Element {
+  const deferredText = useDeferredValue(text)
+  const components = useMemo<Components>(
+    () => ({
+      a({ children, href }) {
+        return (
+          <a href={href} target="_blank" rel="noreferrer">
+            {children}
+          </a>
+        )
+      },
+      code({ children, className }) {
+        const code = String(children).replace(/\n$/u, '')
+        const language = languageFromClassName(className)
+        const isBlock = Boolean(language) || code.includes('\n')
+        if (!isBlock) return <code className="markdown-inline-code">{children}</code>
+        return <HighlightedCode code={code} language={language} isStreaming={isStreaming} />
+      },
+      pre({ children }) {
+        return <pre className="markdown-code-pre">{children}</pre>
+      }
+    }),
+    [isStreaming]
+  )
+
+  return (
+    <div className="markdown-body">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {deferredText}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+type HighlightedLine = Array<{
+  content: string
+  color?: string
+  fontStyle?: number
+}>
+
+function HighlightedCode({
+  code,
+  language,
+  isStreaming
+}: {
+  code: string
+  language: string | null
+  isStreaming: boolean
+}): React.JSX.Element {
+  const [lines, setLines] = useState<HighlightedLine[] | null>(null)
+
+  useEffect(() => {
+    setLines(null)
+    if (isStreaming) return undefined
+
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void highlightCodeTokens(code, language)
+        .then((tokens) => {
+          if (!cancelled) setLines(tokens)
+        })
+        .catch(() => {
+          if (!cancelled) setLines(null)
+        })
+    }, 90)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [code, isStreaming, language])
+
+  if (isStreaming || !lines) {
+    return <code className="markdown-code-block">{code}</code>
+  }
+
+  return (
+    <code className="markdown-code-block highlighted" data-language={language ?? 'text'}>
+      {lines.map((line, lineIndex) => (
+        <span className="markdown-code-line" key={`${lineIndex}:${line.map((token) => token.content).join('')}`}>
+          {line.map((token, tokenIndex) => (
+            <span key={`${tokenIndex}:${token.content}`} style={styleForToken(token)}>
+              {token.content}
+            </span>
+          ))}
+          {lineIndex < lines.length - 1 ? '\n' : null}
+        </span>
+      ))}
+    </code>
   )
 }
 
@@ -1264,6 +1383,38 @@ function formatTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(
     new Date(value)
   )
+}
+
+function languageFromClassName(className: string | undefined): string | null {
+  const match = /language-([^\s]+)/u.exec(className ?? '')
+  return match?.[1]?.toLowerCase() ?? null
+}
+
+function styleForToken(token: HighlightedLine[number]): CSSProperties {
+  const style: CSSProperties = {}
+  if (token.color) style.color = token.color
+  if (token.fontStyle) {
+    if ((token.fontStyle & 1) === 1) style.fontStyle = 'italic'
+    if ((token.fontStyle & 2) === 2) style.fontWeight = 700
+    if ((token.fontStyle & 4) === 4) style.textDecoration = 'underline'
+  }
+  return style
+}
+
+async function highlightCodeTokens(
+  code: string,
+  language: string | null
+): Promise<HighlightedLine[]> {
+  const { codeToTokens } = await import('shiki')
+  const requestedLanguage = (language ?? 'plaintext') as BundledLanguage | 'plaintext'
+
+  try {
+    const result = await codeToTokens(code, { lang: requestedLanguage, theme: shikiTheme })
+    return result.tokens
+  } catch {
+    const result = await codeToTokens(code, { lang: 'plaintext', theme: shikiTheme })
+    return result.tokens
+  }
 }
 
 function projectIdForPath(path: string): string {

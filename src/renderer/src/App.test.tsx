@@ -1,6 +1,6 @@
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router'
 import { StrictMode } from 'react'
-import { act, render, screen, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OrchestrationThreadStreamItem } from '../../shared/agent'
@@ -105,6 +105,56 @@ describe('renderer app', () => {
     await userEvent.click(openFolderButtons[0])
 
     expect(await screen.findByText('Streaming response')).toBeInTheDocument()
+  })
+
+  it('renders assistant markdown with highlighted fenced code', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [
+              {
+                id: 'assistant:markdown',
+                role: 'assistant',
+                text: 'Here is **bold text**.\n\n```ts\nconst answer = 42\n```',
+                turnId: 'turn-1',
+                streaming: false,
+                sequence: 1,
+                createdAt: '2026-04-19T00:00:01.000Z',
+                updatedAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            activities: [],
+            proposedPlans: [],
+            session: null,
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T00:00:00.000Z',
+            updatedAt: '2026-04-19T00:00:01.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    expect((await screen.findByText('bold text')).tagName).toBe('STRONG')
+    await waitFor(() => {
+      const codeBlock = document.querySelector('.markdown-code-block.highlighted')
+      expect(codeBlock).toHaveTextContent('const answer = 42')
+    })
   })
 
   it('renders inline expandable tool rows in transcript order', async () => {
