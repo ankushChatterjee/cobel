@@ -15,6 +15,21 @@ const execFileAsync = promisify(execFile)
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000
 
 type JsonRpcId = string | number
+type CodexApprovalPolicy =
+  | 'untrusted'
+  | 'on-failure'
+  | 'on-request'
+  | {
+      granular: {
+        sandbox_approval: boolean
+        rules: boolean
+        skill_approval: boolean
+        request_permissions: boolean
+        mcp_elicitations: boolean
+      }
+    }
+  | 'never'
+type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 
 interface JsonRpcRequest {
   id: JsonRpcId
@@ -602,8 +617,8 @@ function logEvent(label: string, payload: unknown): void {
 }
 
 export function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
-  approvalPolicy: 'untrusted' | 'on-request' | 'never'
-  sandbox: 'read-only' | 'workspace-write' | 'danger-full-access'
+  approvalPolicy: CodexApprovalPolicy
+  sandbox: CodexSandboxMode
 } {
   switch (runtimeMode) {
     case 'approval-required':

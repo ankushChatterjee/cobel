@@ -27,6 +27,18 @@ describe('renderer app', () => {
     expect(screen.getByText(/codex-cli 0\.121\.0/i)).toBeInTheDocument()
   })
 
+  it('defaults to Write permissions and keeps Full access selectable', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    render(<RouterProvider router={router} />)
+
+    const runtimeSelect = (await screen.findByLabelText(/runtime mode/i)) as HTMLSelectElement
+    const optionValues = Array.from(runtimeSelect.options).map((option) => option.value)
+
+    expect(runtimeSelect).toHaveValue('auto-accept-edits')
+    expect(optionValues).toContain('full-access')
+  })
+
   it('dispatches a turn command from the composer', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
