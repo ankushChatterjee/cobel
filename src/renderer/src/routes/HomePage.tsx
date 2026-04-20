@@ -55,11 +55,13 @@ import type {
 } from '../../../shared/agent'
 import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
 
-const activeSelectionKey = 'patronus.active.v1'
-const legacyActiveSelectionKey = 'gencode.active.v1'
+const activeSelectionKey = 'cobel.active.v1'
+const legacyActiveSelectionKeys = ['patronus.active.v1', 'gencode.active.v1']
 const legacyWorkspaceKey = 'gencode.workspace.v1'
-const threadComposerPreferencesKey = 'patronus.thread-composer-prefs.v1'
-const sidebarWidthKey = 'patronus.sidebar-width.v1'
+const threadComposerPreferencesKey = 'cobel.thread-composer-prefs.v1'
+const legacyThreadComposerPreferencesKeys = ['patronus.thread-composer-prefs.v1']
+const sidebarWidthKey = 'cobel.sidebar-width.v1'
+const legacySidebarWidthKeys = ['patronus.sidebar-width.v1']
 const defaultRuntimeMode: RuntimeMode = 'auto-accept-edits'
 const defaultSidebarWidth = 290
 const minSidebarWidth = 184
@@ -111,7 +113,8 @@ type ThreadComposerPreferenceMap = Record<string, ThreadComposerPreference>
 function loadActiveSelection(): ActiveSelection {
   try {
     const storedSelection =
-      localStorage.getItem(activeSelectionKey) ?? localStorage.getItem(legacyActiveSelectionKey)
+      localStorage.getItem(activeSelectionKey) ??
+      legacyActiveSelectionKeys.map((key) => localStorage.getItem(key)).find(Boolean)
     const parsed = JSON.parse(storedSelection ?? 'null') as ActiveSelection | null
     if (!parsed) return { activeProjectId: null, activeChatId: null }
     return {
@@ -133,8 +136,11 @@ function isRuntimeMode(value: unknown): value is RuntimeMode {
 
 function loadThreadComposerPreferences(): ThreadComposerPreferenceMap {
   try {
+    const storedPreferences =
+      localStorage.getItem(threadComposerPreferencesKey) ??
+      legacyThreadComposerPreferencesKeys.map((key) => localStorage.getItem(key)).find(Boolean)
     const parsed = JSON.parse(
-      localStorage.getItem(threadComposerPreferencesKey) ?? 'null'
+      storedPreferences ?? 'null'
     ) as Record<string, unknown> | null
     if (!parsed || typeof parsed !== 'object') return {}
     const preferences: ThreadComposerPreferenceMap = {}
@@ -163,7 +169,9 @@ function clampSidebarWidth(width: number): number {
 
 function loadSidebarWidth(): number {
   try {
-    const storedWidth = localStorage.getItem(sidebarWidthKey)
+    const storedWidth =
+      localStorage.getItem(sidebarWidthKey) ??
+      legacySidebarWidthKeys.map((key) => localStorage.getItem(key)).find(Boolean)
     if (!storedWidth) return defaultSidebarWidth
     const parsed = Number(storedWidth)
     return Number.isFinite(parsed) ? clampSidebarWidth(parsed) : defaultSidebarWidth
@@ -387,7 +395,7 @@ export function HomePage(): React.JSX.Element {
         setModels(fetched)
       })
       .catch((modelError) => {
-        console.error('[patronus:listModels]', modelError)
+        console.error('[cobel:listModels]', modelError)
       })
   }, [])
 
@@ -830,7 +838,7 @@ export function HomePage(): React.JSX.Element {
     <div className="agent-shell" data-theme="linear-dark" style={sidebarStyle}>
       <aside className="project-sidebar" aria-label="Projects">
         <div className="sidebar-header">
-          <div className="sidebar-app-name">patronus</div>
+          <div className="sidebar-app-name">Cobel</div>
           <button
             type="button"
             className="add-project-button"
@@ -2081,7 +2089,7 @@ function statusLabel(status: string): string {
 }
 
 function logUiEvent(label: string, payload: unknown): void {
-  console.log(`[patronus:${label}]`, payload)
+  console.log(`[cobel:${label}]`, payload)
 }
 
 function readPayloadString(

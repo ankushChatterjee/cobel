@@ -11,8 +11,8 @@ describe('buildCodexInitializeParams', () => {
   it('sends client info and experimental api capability required by codex app-server', () => {
     expect(buildCodexInitializeParams()).toEqual({
       clientInfo: {
-        name: 'patronus_desktop',
-        title: 'Patronus Desktop',
+        name: 'cobel_desktop',
+        title: 'cobel Desktop',
         version: '0.1.0'
       },
       capabilities: {

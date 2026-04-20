@@ -11,7 +11,7 @@ test('launches the agent environment and completes a fake Codex turn', async () 
     args: ['.'],
     env: {
       ...process.env,
-      GENCODE_FAKE_PROVIDER: '1'
+      COBEL_FAKE_PROVIDER: '1'
     }
   })
 

@@ -1,5 +1,5 @@
-appId: com.patronus.app
-productName: patronus
+appId: com.cobel.app
+productName: cobel
 directories:
   buildResources: build
 files:
@@ -12,7 +12,7 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: patronus
+  executableName: cobel
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

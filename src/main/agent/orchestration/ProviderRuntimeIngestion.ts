@@ -777,5 +777,5 @@ function titleForRequest(requestType: string): string {
 }
 
 function logEvent(label: string, payload: unknown): void {
-  console.log(`[patronus:${label}]`, payload)
+  console.log(`[cobel:${label}]`, payload)
 }

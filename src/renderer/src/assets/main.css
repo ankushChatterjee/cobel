@@ -107,6 +107,7 @@
 .project-sidebar {
   display: flex;
   position: relative;
+  container-type: inline-size;
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--border-subtle);
@@ -116,9 +117,9 @@
 
 .sidebar-header {
   display: flex;
+  position: relative;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-end;
   flex-shrink: 0;
   height: 48px;
   padding: 0 10px 0 96px; /* Left inset clears macOS traffic lights. */
@@ -131,17 +132,26 @@
 }
 
 .sidebar-app-name {
+  position: absolute;
+  left: 50%;
+  max-width: calc(100% - 132px);
   min-width: 0;
-  flex: 1;
   overflow: hidden;
+  transform: translateX(-50%);
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
   font-family: 'Jersey 25', Inter, system-ui, sans-serif;
-  font-size: 18px;
+  font-size: 26px;
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1;
+}
+
+@container (max-width: 260px) {
+  .sidebar-app-name {
+    display: none;
+  }
 }
 
 .add-project-button {

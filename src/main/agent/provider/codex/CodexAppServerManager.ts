@@ -613,7 +613,7 @@ export class CodexAppServerManager {
 }
 
 function logEvent(label: string, payload: unknown): void {
-  console.log(`[patronus:${label}]`, payload)
+  console.log(`[cobel:${label}]`, payload)
 }
 
 export function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
@@ -636,8 +636,8 @@ export function buildCodexInitializeParams(): {
 } {
   return {
     clientInfo: {
-      name: 'patronus_desktop',
-      title: 'Patronus Desktop',
+      name: 'cobel_desktop',
+      title: 'cobel Desktop',
       version: '0.1.0'
     },
     capabilities: {

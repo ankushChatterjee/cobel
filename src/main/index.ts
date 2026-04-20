@@ -13,7 +13,8 @@ function getDbPath(): string {
 
 const db = openDatabase(getDbPath())
 const agentBackend = new AgentBackend({
-  useFakeProvider: process.env.GENCODE_FAKE_PROVIDER === '1',
+  useFakeProvider:
+    process.env.COBEL_FAKE_PROVIDER === '1' || process.env.GENCODE_FAKE_PROVIDER === '1',
   db
 })
 
@@ -22,7 +23,7 @@ registerAgentIpc(agentBackend)
 if (is.dev) {
   app.commandLine.appendSwitch(
     'remote-debugging-port',
-    process.env.GENCODE_REMOTE_DEBUG_PORT ?? '9222'
+    process.env.COBEL_REMOTE_DEBUG_PORT ?? process.env.GENCODE_REMOTE_DEBUG_PORT ?? '9222'
   )
 }
 
@@ -70,7 +71,8 @@ function createWindow(): void {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.electron')
+  app.setName('cobel')
+  electronApp.setAppUserModelId('com.cobel.app')
   Menu.setApplicationMenu(null)
 
   app.on('browser-window-created', (_, window) => {

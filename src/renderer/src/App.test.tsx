@@ -666,7 +666,7 @@ describe('renderer app', () => {
     const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
     await user.click(openFolderButtons[0])
     expect(window.agentApi.openWorkspaceFolder).toHaveBeenCalled()
-    expect(await screen.findByText('patronus')).toBeInTheDocument()
+    expect(await screen.findByText('Cobel')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /clear chat/i }))
     expect(window.agentApi.clearThread).toHaveBeenCalledWith({
@@ -716,7 +716,7 @@ describe('renderer app', () => {
 
     await waitFor(() => {
       expect(resizeHandle).toHaveAttribute('aria-valuenow', '302')
-      expect(localStorage.getItem('patronus.sidebar-width.v1')).toBe('302')
+      expect(localStorage.getItem('cobel.sidebar-width.v1')).toBe('302')
     })
   })
 })
