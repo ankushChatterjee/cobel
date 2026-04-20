@@ -40,6 +40,7 @@ import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import type {
   ModelInfo,
   OpenWorkspaceFolderResult,
+  OrchestrationEvent,
   OrchestrationMessage,
   OrchestrationShellSnapshot,
   OrchestrationThread,
@@ -199,7 +200,13 @@ export function HomePage(): React.JSX.Element {
   const sessionError =
     thread?.session?.status === 'error' ? (thread.session.lastError ?? null) : null
   const transcriptItems = useMemo(() => buildTranscriptItems(thread), [thread])
-  const showPendingThinking = isPendingThinking && transcriptItems.length === 0 && isRunning
+  const hasActiveThinkingActivity = useMemo(
+    () =>
+      thread?.activities.some((activity) => isThinkingActivity(activity) && !activity.resolved) ??
+      false,
+    [thread]
+  )
+  const showPendingThinking = isPendingThinking && !hasActiveThinkingActivity
 
   useEffect(() => {
     saveActiveSelection(selection)
@@ -279,6 +286,7 @@ export function HomePage(): React.JSX.Element {
     if (!activeThreadId) return undefined
 
     lastSequenceRef.current = 0
+    setIsPendingThinking(false)
     pendingUserMessagesRef.current.clear()
     const unsubscribe = window.agentApi.subscribeThread({ threadId: activeThreadId }, (item) => {
       logUiEvent('ui/thread-stream', item)
@@ -286,11 +294,17 @@ export function HomePage(): React.JSX.Element {
         if (item.snapshot.snapshotSequence < lastSequenceRef.current) return
         lastSequenceRef.current = item.snapshot.snapshotSequence
         setThread(mergePendingUserMessages(item.snapshot.thread, pendingUserMessagesRef.current))
+        if (threadSnapshotHasAssistantResponse(item.snapshot.thread)) {
+          setIsPendingThinking(false)
+        }
         return
       }
 
       if (item.event.sequence <= lastSequenceRef.current) return
       lastSequenceRef.current = item.event.sequence
+      if (eventHasAssistantResponse(item.event)) {
+        setIsPendingThinking(false)
+      }
       if (item.event.type === 'thread.message-upserted') {
         pendingUserMessagesRef.current.delete(item.event.message.id)
       }
@@ -378,6 +392,7 @@ export function HomePage(): React.JSX.Element {
           createdAt
         })
       } catch (commandError) {
+        setIsPendingThinking(false)
         setError(commandError instanceof Error ? commandError.message : String(commandError))
         return false
       }
@@ -455,12 +470,14 @@ export function HomePage(): React.JSX.Element {
     setSelection({ activeProjectId: activeProject.id, activeChatId: chatId })
     setComposerResetToken((token) => token + 1)
     setThread(null)
+    setIsPendingThinking(false)
     setError(null)
   }
 
   async function clearCurrentChat(): Promise<void> {
     if (!activeThreadId) return
     setComposerResetToken((token) => token + 1)
+    setIsPendingThinking(false)
     setError(null)
     try {
       await window.agentApi.clearThread({ threadId: activeThreadId })
@@ -721,17 +738,12 @@ export function HomePage(): React.JSX.Element {
           ) : (
             <TranscriptList
               items={transcriptItems}
+              showPendingThinking={showPendingThinking}
               expandedToolIds={expandedToolIds}
               onToggleTool={toggleToolExpanded}
               onApprove={respondToApproval}
               onAnswer={respondToUserInput}
             />
-          )}
-          {showPendingThinking && (
-            <article className="thinking-row is-active">
-              <span className="thinking-spinner" aria-hidden="true" />
-              <span>thinking…</span>
-            </article>
           )}
           {sessionError ? <SessionErrorBanner message={sessionError} /> : null}
           {error ? <p className="error-line">{error}</p> : null}
@@ -919,12 +931,14 @@ type TranscriptItem =
 
 const TranscriptList = memo(function TranscriptList({
   items,
+  showPendingThinking,
   expandedToolIds,
   onToggleTool,
   onApprove,
   onAnswer
 }: {
   items: TranscriptItem[]
+  showPendingThinking: boolean
   expandedToolIds: Set<string>
   onToggleTool: (activityId: string) => void
   onApprove: (
@@ -948,6 +962,12 @@ const TranscriptList = memo(function TranscriptList({
           onAnswer={onAnswer}
         />
       ))}
+      {showPendingThinking && (
+        <article className="thinking-row is-active" aria-label="Thinking">
+          <span className="thinking-spinner" aria-hidden="true" />
+          <span>thinking…</span>
+        </article>
+      )}
     </div>
   )
 })
@@ -1420,6 +1440,36 @@ function isThinkingActivity(activity: OrchestrationThreadActivity): boolean {
 
 function isHiddenActivity(activity: OrchestrationThreadActivity): boolean {
   return isThinkingActivity(activity) && activity.resolved === true
+}
+
+function threadSnapshotHasAssistantResponse(thread: OrchestrationThread): boolean {
+  return (
+    thread.messages.some((message) => message.role === 'assistant') ||
+    thread.activities.length > 0 ||
+    thread.proposedPlans.length > 0 ||
+    thread.session?.status === 'ready' ||
+    thread.session?.status === 'stopped' ||
+    thread.session?.status === 'interrupted' ||
+    thread.session?.status === 'error'
+  )
+}
+
+function eventHasAssistantResponse(event: OrchestrationEvent): boolean {
+  if (event.type === 'thread.message-upserted') return event.message.role === 'assistant'
+  if (event.type === 'thread.activity-upserted') return true
+  if (event.type === 'thread.proposed-plan-upserted') return true
+  if (event.type === 'thread.latest-turn-set') {
+    return event.latestTurn !== null && event.latestTurn.status !== 'running'
+  }
+  if (event.type === 'thread.session-set') {
+    return (
+      event.session?.status === 'ready' ||
+      event.session?.status === 'stopped' ||
+      event.session?.status === 'interrupted' ||
+      event.session?.status === 'error'
+    )
+  }
+  return false
 }
 
 function labelForActivity(activity: OrchestrationThreadActivity): string {

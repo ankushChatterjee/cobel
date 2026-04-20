@@ -51,6 +51,8 @@ describe('renderer app', () => {
     )
     const transcript = await screen.findByLabelText(/conversation transcript/i)
     expect(within(transcript).getByText('Build the provider layer')).toBeInTheDocument()
+    expect(screen.getByLabelText('Thinking')).toBeInTheDocument()
+    expect(screen.getByText('thinking…')).toBeInTheDocument()
   })
 
   it('keeps live events that arrive before the initial snapshot resolves', async () => {
