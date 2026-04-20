@@ -55,6 +55,8 @@ import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
 const activeSelectionKey = 'patronus.active.v1'
 const legacyActiveSelectionKey = 'gencode.active.v1'
 const legacyWorkspaceKey = 'gencode.workspace.v1'
+const threadComposerPreferencesKey = 'patronus.thread-composer-prefs.v1'
+const defaultRuntimeMode: RuntimeMode = 'auto-accept-edits'
 
 SyntaxHighlighter.registerLanguage('bash', bash)
 SyntaxHighlighter.registerLanguage('css', css)
@@ -92,6 +94,13 @@ interface ActiveSelection {
   activeChatId: string | null
 }
 
+interface ThreadComposerPreference {
+  model?: string
+  runtimeMode?: RuntimeMode
+}
+
+type ThreadComposerPreferenceMap = Record<string, ThreadComposerPreference>
+
 function loadActiveSelection(): ActiveSelection {
   try {
     const storedSelection =
@@ -109,6 +118,39 @@ function loadActiveSelection(): ActiveSelection {
 
 function saveActiveSelection(selection: ActiveSelection): void {
   localStorage.setItem(activeSelectionKey, JSON.stringify(selection))
+}
+
+function isRuntimeMode(value: unknown): value is RuntimeMode {
+  return value === 'approval-required' || value === 'auto-accept-edits' || value === 'full-access'
+}
+
+function loadThreadComposerPreferences(): ThreadComposerPreferenceMap {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(threadComposerPreferencesKey) ?? 'null') as
+      | Record<string, unknown>
+      | null
+    if (!parsed || typeof parsed !== 'object') return {}
+    const preferences: ThreadComposerPreferenceMap = {}
+    for (const [threadId, value] of Object.entries(parsed)) {
+      if (!threadId || typeof value !== 'object' || !value) continue
+      const raw = value as { model?: unknown; runtimeMode?: unknown }
+      const model = typeof raw.model === 'string' && raw.model.trim().length > 0 ? raw.model : undefined
+      const runtimeMode = isRuntimeMode(raw.runtimeMode) ? raw.runtimeMode : undefined
+      if (!model && !runtimeMode) continue
+      preferences[threadId] = { model, runtimeMode }
+    }
+    return preferences
+  } catch {
+    return {}
+  }
+}
+
+function saveThreadComposerPreferences(preferences: ThreadComposerPreferenceMap): void {
+  localStorage.setItem(threadComposerPreferencesKey, JSON.stringify(preferences))
+}
+
+function pickDefaultModel(models: ModelInfo[]): string {
+  return models.find((candidate) => candidate.isDefault)?.id ?? models[0]?.id ?? ''
 }
 
 function formatModelId(id: string): string {
@@ -200,11 +242,14 @@ function runLegacyMigration(loadedShell: OrchestrationShellSnapshot): void {
 export function HomePage(): React.JSX.Element {
   const [shell, setShell] = useState<OrchestrationShellSnapshot>({ projects: [], threads: [] })
   const [selection, setSelection] = useState<ActiveSelection>(loadActiveSelection)
+  const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferenceMap>(
+    loadThreadComposerPreferences
+  )
   const [openProjectIds, setOpenProjectIds] = useState<Set<string>>(() => new Set())
   const [thread, setThread] = useState<OrchestrationThread | null>(null)
   const [providers, setProviders] = useState<ProviderSummary[]>([])
   const [composerResetToken, setComposerResetToken] = useState(0)
-  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>('auto-accept-edits')
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(defaultRuntimeMode)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [model, setModel] = useState<string>('')
   const lastSequenceRef = useRef(0)
@@ -246,6 +291,10 @@ export function HomePage(): React.JSX.Element {
   useEffect(() => {
     saveActiveSelection(selection)
   }, [selection])
+
+  useEffect(() => {
+    saveThreadComposerPreferences(threadComposerPreferences)
+  }, [threadComposerPreferences])
 
   // Shell subscription: drives sidebar state
   useEffect(() => {
@@ -303,18 +352,64 @@ export function HomePage(): React.JSX.Element {
     void window.agentApi
       .listModels()
       .then((fetched) => {
-        if (fetched.length > 0) {
-          setModels(fetched)
-          setModel((current) => {
-            const found = fetched.find((m) => m.id === current)
-            return found ? current : (fetched.find((m) => m.isDefault)?.id ?? fetched[0]?.id ?? '')
-          })
-        }
+        setModels(fetched)
       })
       .catch((modelError) => {
         console.error('[patronus:listModels]', modelError)
       })
   }, [])
+
+  useEffect(() => {
+    if (!activeThreadId) return
+    const preferredMode = threadComposerPreferences[activeThreadId]?.runtimeMode
+    const sessionRuntimeMode =
+      thread?.id === activeThreadId ? (thread.session?.runtimeMode ?? undefined) : undefined
+    setRuntimeMode(preferredMode ?? sessionRuntimeMode ?? defaultRuntimeMode)
+  }, [activeThreadId, thread, threadComposerPreferences])
+
+  useEffect(() => {
+    if (!activeThreadId) return
+    const preferredModel = threadComposerPreferences[activeThreadId]?.model
+    if (models.length === 0) {
+      setModel(preferredModel ?? '')
+      return
+    }
+    const resolvedModel =
+      preferredModel && models.some((candidate) => candidate.id === preferredModel)
+        ? preferredModel
+        : pickDefaultModel(models)
+    setModel(resolvedModel)
+  }, [activeThreadId, models, threadComposerPreferences])
+
+  const handleRuntimeModeChange = useCallback(
+    (nextMode: RuntimeMode) => {
+      setRuntimeMode(nextMode)
+      if (!activeThreadId) return
+      setThreadComposerPreferences((current) => ({
+        ...current,
+        [activeThreadId]: {
+          ...current[activeThreadId],
+          runtimeMode: nextMode
+        }
+      }))
+    },
+    [activeThreadId]
+  )
+
+  const handleModelChange = useCallback(
+    (nextModel: string) => {
+      setModel(nextModel)
+      if (!activeThreadId) return
+      setThreadComposerPreferences((current) => ({
+        ...current,
+        [activeThreadId]: {
+          ...current[activeThreadId],
+          model: nextModel
+        }
+      }))
+    },
+    [activeThreadId]
+  )
 
   // Thread subscription for active chat
   useEffect(() => {
@@ -793,8 +888,8 @@ export function HomePage(): React.JSX.Element {
             runtimeMode={runtimeMode}
             models={models}
             model={model}
-            onRuntimeModeChange={setRuntimeMode}
-            onModelChange={setModel}
+            onRuntimeModeChange={handleRuntimeModeChange}
+            onModelChange={handleModelChange}
             onSubmitPrompt={sendPrompt}
             onInterrupt={interruptTurn}
             onStop={stopSession}

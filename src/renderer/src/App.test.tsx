@@ -67,6 +67,62 @@ describe('renderer app', () => {
     expect(screen.getByText('thinking…')).toBeInTheDocument()
   })
 
+  it('persists model and runtime mode per thread', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.listModels = vi.fn(async () => [
+      { id: 'gpt-5.4-mini', isDefault: true },
+      { id: 'gpt-5.4' }
+    ])
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    const runtimeSelect = (await screen.findByLabelText(/runtime mode/i)) as HTMLSelectElement
+    const modelSelect = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
+
+    expect(runtimeSelect.value).toBe('auto-accept-edits')
+    expect(modelSelect.value).toBe('gpt-5.4-mini')
+
+    await user.selectOptions(runtimeSelect, 'full-access')
+    await user.selectOptions(modelSelect, 'gpt-5.4')
+
+    const headerNewButton = document.querySelector<HTMLButtonElement>(
+      '.chat-header .text-button[aria-label="New chat"]'
+    )
+    expect(headerNewButton).not.toBeNull()
+    await user.click(headerNewButton as HTMLButtonElement)
+
+    const runtimeSelectAfterNew = (await screen.findByLabelText(
+      /runtime mode/i
+    )) as HTMLSelectElement
+    const modelSelectAfterNew = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
+
+    await waitFor(() => {
+      expect(runtimeSelectAfterNew.value).toBe('auto-accept-edits')
+      expect(modelSelectAfterNew.value).toBe('gpt-5.4-mini')
+    })
+
+    const threadButtons = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('.thread-list .thread-link')
+    ).filter((button) => !button.classList.contains('new-thread'))
+    expect(threadButtons).toHaveLength(2)
+
+    await user.click(threadButtons[0])
+
+    const runtimeSelectAfterReturn = (await screen.findByLabelText(
+      /runtime mode/i
+    )) as HTMLSelectElement
+    const modelSelectAfterReturn = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
+
+    await waitFor(() => {
+      expect(runtimeSelectAfterReturn.value).toBe('full-access')
+      expect(modelSelectAfterReturn.value).toBe('gpt-5.4')
+    })
+  })
+
   it('keeps live events that arrive before the initial snapshot resolves', async () => {
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     window.agentApi.subscribeThread = vi.fn((_input, listener) => {
