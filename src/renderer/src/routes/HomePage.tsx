@@ -3,6 +3,7 @@ import {
   KeyboardEvent,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -109,10 +110,12 @@ export function HomePage(): React.JSX.Element {
   const lastSequenceRef = useRef(0)
   const conversationRef = useRef<HTMLElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const shouldStickToBottomRef = useRef(true)
   const pendingUserMessagesRef = useRef(new Map<string, OrchestrationMessage>())
   const [error, setError] = useState<string | null>(null)
   const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(() => new Set())
+  const [isPendingThinking, setIsPendingThinking] = useState(false)
 
   const activeProject = useMemo(
     () => shell.projects.find((p) => p.id === selection.activeProjectId) ?? null,
@@ -237,12 +240,32 @@ export function HomePage(): React.JSX.Element {
   }, [activeThreadId])
 
   useEffect(() => {
-    if (!shouldStickToBottomRef.current) return
+    shouldStickToBottomRef.current = true
     const frame = window.requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
+      bottomRef.current?.scrollIntoView({ block: 'end', behavior: 'instant' })
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [transcriptItems.length, thread?.updatedAt])
+  }, [activeThreadId])
+
+  useLayoutEffect(() => {
+    if (!shouldStickToBottomRef.current) return
+    const el = conversationRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [thread])
+
+  useEffect(() => {
+    if (transcriptItems.length > 0 || !isRunning) {
+      setIsPendingThinking(false)
+    }
+  }, [transcriptItems.length, isRunning])
+
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [prompt])
 
   async function sendPrompt(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -256,6 +279,7 @@ export function HomePage(): React.JSX.Element {
     shouldStickToBottomRef.current = true
     setPrompt('')
     setError(null)
+    setIsPendingThinking(true)
     const commandId = `cmd:${createId()}`
     const createdAt = new Date().toISOString()
     const optimisticMessage: OrchestrationMessage = {
@@ -450,8 +474,19 @@ export function HomePage(): React.JSX.Element {
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+      event.preventDefault()
       event.currentTarget.form?.requestSubmit()
+    } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault()
+      const el = event.currentTarget
+      const start = el.selectionStart
+      const end = el.selectionEnd
+      const newVal = prompt.slice(0, start) + '\n' + prompt.slice(end)
+      setPrompt(newVal)
+      requestAnimationFrame(() => {
+        el.selectionStart = el.selectionEnd = start + 1
+      })
     }
   }
 
@@ -459,7 +494,7 @@ export function HomePage(): React.JSX.Element {
     const element = conversationRef.current
     if (!element) return
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
-    shouldStickToBottomRef.current = distanceFromBottom < 120
+    shouldStickToBottomRef.current = distanceFromBottom < 160
   }
 
   function toggleToolExpanded(activityId: string): void {
@@ -697,6 +732,12 @@ export function HomePage(): React.JSX.Element {
               }
             />
           )}
+          {isPendingThinking && (
+            <article className="thinking-row is-active">
+              <span className="thinking-spinner" aria-hidden="true" />
+              <span>thinking…</span>
+            </article>
+          )}
           {sessionError ? <SessionErrorBanner message={sessionError} /> : null}
           {error ? <p className="error-line">{error}</p> : null}
           <div ref={bottomRef} />
@@ -708,6 +749,7 @@ export function HomePage(): React.JSX.Element {
             Ask Codex
           </label>
           <textarea
+            ref={textareaRef}
             id="agent-prompt"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
@@ -769,7 +811,7 @@ export function HomePage(): React.JSX.Element {
               type="submit"
               className="send-button"
               disabled={!activeProject || !prompt.trim() || isRunning}
-              title="Send (⌘↵)"
+              title="Send (↵)"
             >
               <ArrowUp size={14} strokeWidth={2.5} />
             </button>
