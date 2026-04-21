@@ -1149,38 +1149,44 @@ const ChatComposer = memo(function ChatComposer({
       />
       <div className="composer-footer">
         <FilePen size={12} strokeWidth={1.6} className="composer-icon" />
-        <select
-          aria-label="Runtime mode"
-          className="composer-select"
-          value={runtimeMode}
-          onChange={(event) => onRuntimeModeChange(event.target.value as RuntimeMode)}
-          disabled={!enabled}
-        >
-          {runtimeModes.map((mode) => (
-            <option key={mode.value} value={mode.value}>
-              {mode.label}
-            </option>
-          ))}
-        </select>
-        <span className="composer-divider" />
-        <select
-          aria-label="Model"
-          className="composer-select model-select"
-          value={model}
-          onChange={(event) => onModelChange(event.target.value)}
-          disabled={!enabled || models.length === 0}
-          title={modelTitle}
-        >
-          {models.length === 0 ? (
-            <option value="">Model list pending</option>
-          ) : (
-            models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {getModelDisplayName(m)}
+        <span className="composer-select-shell permissions-select-shell">
+          <select
+            aria-label="Runtime mode"
+            className="composer-select"
+            value={runtimeMode}
+            onChange={(event) => onRuntimeModeChange(event.target.value as RuntimeMode)}
+            disabled={!enabled}
+          >
+            {runtimeModes.map((mode) => (
+              <option key={mode.value} value={mode.value}>
+                {mode.label}
               </option>
-            ))
-          )}
-        </select>
+            ))}
+          </select>
+          <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
+        </span>
+        <span className="composer-divider" />
+        <span className="composer-select-shell model-select-shell">
+          <select
+            aria-label="Model"
+            className="composer-select model-select"
+            value={model}
+            onChange={(event) => onModelChange(event.target.value)}
+            disabled={!enabled || models.length === 0}
+            title={modelTitle}
+          >
+            {models.length === 0 ? (
+              <option value="">Model list pending</option>
+            ) : (
+              models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {getModelDisplayName(m)}
+                </option>
+              ))
+            )}
+          </select>
+          <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
+        </span>
         <span style={composerSpacerStyle} />
         {isRunning ? (
           <div className="run-controls">
