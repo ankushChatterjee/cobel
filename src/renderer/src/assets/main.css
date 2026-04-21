@@ -37,6 +37,8 @@
   --accent-bright: #fbbf24;
   --accent-dim: rgba(245, 158, 11, 0.12);
   --accent-glow: rgba(245, 158, 11, 0.2);
+  --accent-markdown: #cfb27a;
+  --accent-markdown-soft: rgba(207, 178, 122, 0.2);
 
   /* Semantic */
   --tool-terminal: #5b9cf6;
@@ -752,23 +754,39 @@
   height: 13px;
   margin: 0 8px 0 0;
   vertical-align: -2px;
-  accent-color: var(--accent-primary);
+  accent-color: var(--accent-markdown);
 }
 
 .markdown-body blockquote {
-  border-left: 2px solid var(--border-strong);
+  border-left: 2px solid var(--accent-markdown-soft);
   padding-left: 12px;
   color: var(--text-muted);
 }
 
 .markdown-body a {
-  color: var(--accent-primary);
+  display: inline-block;
+  color: var(--accent-markdown);
   text-decoration: none;
-  text-underline-offset: 3px;
+  border-radius: 3px;
+  padding: 0 2px;
+  transition:
+    color 0.14s ease,
+    background-color 0.14s ease;
 }
 
 .markdown-body a:hover {
-  text-decoration: underline;
+  color: #ddc598;
+  background: rgba(207, 178, 122, 0.12);
+}
+
+.markdown-body a:visited {
+  color: #b49b70;
+}
+
+.markdown-body a:focus-visible {
+  outline: 1px solid rgba(207, 178, 122, 0.45);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .markdown-body table {
