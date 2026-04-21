@@ -135,6 +135,40 @@ describe('parseCodexStderr', () => {
     ])
   })
 
+  it('strips ANSI tracing output and extracts the error field', () => {
+    expect(
+      parseCodexStderr(
+        '\u001b[2m2026-04-21T16:16:01.946777Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mcodex_core::tools::router\u001b[0m\u001b[2m:\u001b[0m \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mexec_command failed for `/bin/zsh -lc "nl -ba src/ai/agent.ts | sed -n \'1,260p\'"`: CreateProcess { message: "Rejected(\\"Failed to create unified exec process: No such file or directory (os error 2)\\")" }'
+      )
+    ).toEqual([
+      {
+        level: 'error',
+        message:
+          'exec_command failed for `/bin/zsh -lc "nl -ba src/ai/agent.ts | sed -n \'1,260p\'"`: CreateProcess { message: "Rejected(\\"Failed to create unified exec process: No such file or directory (os error 2)\\")" }',
+        detail: {
+          raw: '2026-04-21T16:16:01.946777Z ERROR codex_core::tools::router: error=exec_command failed for `/bin/zsh -lc "nl -ba src/ai/agent.ts | sed -n \'1,260p\'"`: CreateProcess { message: "Rejected(\\"Failed to create unified exec process: No such file or directory (os error 2)\\")" }'
+        }
+      }
+    ])
+  })
+
+  it('classifies repeated local MCP transport refusals as a warning', () => {
+    expect(
+      parseCodexStderr(
+        '2026-04-21T16:31:40.213832Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(Reqwest(reqwest::Error { kind: Request, url: "http://127.0.0.1:29979/mcp", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:29979, Os { code: 61, kind: ConnectionRefused, message: "Connection refused" })) }))'
+      )
+    ).toEqual([
+      {
+        level: 'warning',
+        message: 'MCP transport unavailable: local MCP server connection was refused.',
+        detail: {
+          raw: '2026-04-21T16:31:40.213832Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(Reqwest(reqwest::Error { kind: Request, url: "http://127.0.0.1:29979/mcp", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:29979, Os { code: 61, kind: ConnectionRefused, message: "Connection refused" })) }))'
+        },
+        key: 'rmcp-transport-connection-refused'
+      }
+    ])
+  })
+
   it('keeps unstructured stderr visible as a runtime error', () => {
     expect(parseCodexStderr('something broke')).toEqual([
       { level: 'error', message: 'something broke' }

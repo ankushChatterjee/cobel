@@ -177,7 +177,7 @@ describe('renderer app', () => {
     expect(await screen.findByText('Streaming response')).toBeInTheDocument()
   })
 
-  it('renders assistant markdown with highlighted fenced code', async () => {
+  it('renders assistant markdown with lists, task items, and highlighted fenced code', async () => {
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     window.agentApi.subscribeThread = vi.fn((_input, listener) => {
       listener({
@@ -193,7 +193,8 @@ describe('renderer app', () => {
               {
                 id: 'assistant:markdown',
                 role: 'assistant',
-                text: 'Here is **bold text**.\n\n```ts\nconst answer = 42\n```',
+                text:
+                  'Here is **bold text**.\n\n- First item\n- Second item\n\n1. Ordered item\n2. Next ordered item\n\n- [x] Finished task\n- [ ] Open task\n\n```ts\nconst answer = 42\n```',
                 turnId: 'turn-1',
                 streaming: false,
                 sequence: 1,
@@ -226,6 +227,18 @@ describe('renderer app', () => {
     await userEvent.click(openFolderButtons[0])
 
     expect((await screen.findByText('bold text')).tagName).toBe('STRONG')
+    const unorderedList = screen.getByText('First item').closest('ul')
+    const orderedList = screen.getByText('Ordered item').closest('ol')
+    expect(unorderedList).toBeInTheDocument()
+    expect(orderedList).toBeInTheDocument()
+    expect(getComputedStyle(unorderedList!).listStyleType).toBe('disc')
+    expect(getComputedStyle(orderedList!).listStyleType).toBe('decimal')
+    const taskCheckboxes = screen.getAllByRole('checkbox')
+    expect(taskCheckboxes).toHaveLength(2)
+    expect(taskCheckboxes[0]).toBeChecked()
+    expect(taskCheckboxes[1]).not.toBeChecked()
+    expect(screen.getByText('Finished task')).toBeInTheDocument()
+    expect(screen.getByText('Open task')).toBeInTheDocument()
     expect(screen.getByText('worked for')).toBeInTheDocument()
     expect(screen.getByText('1s')).toBeInTheDocument()
     expect(screen.queryByText('3s')).not.toBeInTheDocument()
@@ -301,6 +314,163 @@ describe('renderer app', () => {
     await userEvent.click(toolRow)
     expect(await screen.findByText('bun test')).toBeInTheDocument()
     expect(screen.getByText(/pass/)).toBeInTheDocument()
+  })
+
+  it('renders a matching runtime and session error once inline', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 3,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [],
+            activities: [
+              {
+                id: 'runtime.error:event-1',
+                kind: 'runtime.error',
+                tone: 'error',
+                summary:
+                  'exec_command failed for `/bin/zsh -lc "nl -ba src/ai/agent.ts | sed -n \'1,260p\'"`: CreateProcess { message: "Rejected(\\"Failed to create unified exec process: No such file or directory (os error 2)\\")" }',
+                payload: {
+                  detail: {
+                    raw: '\u001b[31mERROR\u001b[0m error=exec_command failed'
+                  }
+                },
+                turnId: 'turn-1',
+                sequence: 1,
+                createdAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            proposedPlans: [],
+            session: {
+              threadId: _input.threadId,
+              status: 'error',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              activeTurnId: null,
+              lastError:
+                'exec_command failed for `/bin/zsh -lc "nl -ba src/ai/agent.ts | sed -n \'1,260p\'"`: CreateProcess { message: "Rejected(\\"Failed to create unified exec process: No such file or directory (os error 2)\\")" }',
+              updatedAt: '2026-04-19T00:00:02.000Z'
+            },
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T00:00:00.000Z',
+            updatedAt: '2026-04-19T00:00:02.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    expect(await screen.findByText(/exec_command failed/)).toBeInTheDocument()
+    expect(screen.getAllByText(/codex returned an error/i)).toHaveLength(1)
+    expect(document.body).not.toHaveTextContent('[31m')
+    expect(document.body.textContent).not.toContain('\u001b')
+  })
+
+  it('renders session errors without matching runtime activity at the bottom', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [],
+            activities: [],
+            proposedPlans: [],
+            session: {
+              threadId: _input.threadId,
+              status: 'error',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              activeTurnId: null,
+              lastError: 'Codex CLI is not available.',
+              updatedAt: '2026-04-19T00:00:02.000Z'
+            },
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T00:00:00.000Z',
+            updatedAt: '2026-04-19T00:00:02.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    expect(await screen.findByText('Codex CLI is not available.')).toBeInTheDocument()
+    expect(screen.getAllByText(/codex returned an error/i)).toHaveLength(1)
+  })
+
+  it('renders runtime warnings with an icon instead of a text label', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: {
+            id: _input.threadId,
+            title: 'Chat title',
+            cwd: '/Users/ankush/codespace/gencode',
+            branch: 'main',
+            messages: [],
+            activities: [
+              {
+                id: 'runtime.warning:event-1',
+                kind: 'runtime.warning',
+                tone: 'info',
+                summary: 'MCP transport unavailable: local MCP server connection was refused.',
+                payload: {},
+                turnId: null,
+                sequence: 1,
+                createdAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            proposedPlans: [],
+            session: null,
+            latestTurn: null,
+            checkpoints: [],
+            createdAt: '2026-04-19T00:00:00.000Z',
+            updatedAt: '2026-04-19T00:00:01.000Z',
+            archivedAt: null
+          }
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    expect(await screen.findByLabelText('Warning')).toBeInTheDocument()
+    expect(
+      screen.getByText('MCP transport unavailable: local MCP server connection was refused.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/^warning$/i)).not.toBeInTheDocument()
   })
 
   it('orders restored transcript rows by timestamp when event sequences reset', async () => {

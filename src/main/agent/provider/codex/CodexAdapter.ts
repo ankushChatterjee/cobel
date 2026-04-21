@@ -105,11 +105,14 @@ export function mapProviderEvent(event: ProviderEvent): ProviderRuntimeEvent | n
     }
   }
 
-  if (event.kind === 'error') {
+  if (event.kind === 'error' || event.kind === 'warning') {
     return {
       ...base,
-      type: 'runtime.error',
-      payload: { message: event.message ?? 'Codex error', detail: event.payload }
+      type: event.kind === 'error' ? 'runtime.error' : 'runtime.warning',
+      payload: {
+        message: event.message ?? (event.kind === 'error' ? 'Codex error' : 'Codex warning'),
+        detail: event.payload
+      }
     }
   }
 

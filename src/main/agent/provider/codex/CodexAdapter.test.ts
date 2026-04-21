@@ -10,6 +10,27 @@ const baseEvent: Omit<ProviderEvent, 'id' | 'method' | 'payload'> = {
 }
 
 describe('mapProviderEvent', () => {
+  it('maps provider warning events to runtime warnings', () => {
+    expect(
+      mapProviderEvent({
+        ...baseEvent,
+        kind: 'warning',
+        id: 'event-warning',
+        method: 'runtime/warning',
+        message: 'MCP transport unavailable: local MCP server connection was refused.',
+        payload: { raw: 'rmcp transport closed' }
+      })
+    ).toEqual(
+      expect.objectContaining({
+        type: 'runtime.warning',
+        payload: {
+          message: 'MCP transport unavailable: local MCP server connection was refused.',
+          detail: { raw: 'rmcp transport closed' }
+        }
+      })
+    )
+  })
+
   it('normalizes nested tool item payloads', () => {
     const event = mapProviderEvent({
       ...baseEvent,

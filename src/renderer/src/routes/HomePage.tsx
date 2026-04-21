@@ -19,10 +19,12 @@ import {
   ChevronRight,
   Copy,
   Trash2,
+  Folder,
   FolderOpen,
   Plus,
   RotateCcw,
   Square,
+  TriangleAlert,
   ExternalLink,
   FilePen
 } from 'lucide-react'
@@ -88,6 +90,7 @@ const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
   { value: 'full-access', label: 'Full access' }
 ]
 const composerSpacerStyle = { flex: 1 }
+const markdownRemarkPlugins = [remarkGfm]
 const modelTokenLabels: Record<string, string> = {
   gpt: 'GPT',
   codex: 'Codex',
@@ -313,9 +316,8 @@ export function HomePage(): React.JSX.Element {
   const sessionStatus = thread?.session?.status ?? 'idle'
   const activeTurnId = thread?.session?.activeTurnId
   const isRunning = sessionStatus === 'starting' || sessionStatus === 'running'
-  const sessionError =
-    thread?.session?.status === 'error' ? (thread.session.lastError ?? null) : null
   const transcriptItems = useMemo(() => buildTranscriptItems(thread), [thread])
+  const sessionError = useMemo(() => readSessionErrorForDisplay(thread), [thread])
   const hasActiveThinkingActivity = useMemo(
     () =>
       thread?.activities.some((activity) => isThinkingActivity(activity) && !activity.resolved) ??
@@ -871,14 +873,11 @@ export function HomePage(): React.JSX.Element {
                       aria-expanded={isOpen}
                       onClick={() => selectProject(project)}
                     >
-                      <span className="disclosure">
-                        {isOpen ? (
-                          <ChevronDown size={12} strokeWidth={2} />
-                        ) : (
-                          <ChevronRight size={12} strokeWidth={2} />
-                        )}
-                      </span>
-                      <FolderOpen size={13} strokeWidth={1.8} />
+                      {isOpen ? (
+                        <FolderOpen size={13} strokeWidth={2} />
+                      ) : (
+                        <Folder size={13} strokeWidth={2} />
+                      )}
                       <span className="project-name">{project.name}</span>
                     </button>
                     {isOpen ? (
@@ -895,6 +894,12 @@ export function HomePage(): React.JSX.Element {
                             >
                               <span className="thread-dot" />
                               <span className="thread-label">{chat.title}</span>
+                              <span
+                                className="thread-used-at"
+                                title={`Last used ${formatTime(chat.updatedAt)}`}
+                              >
+                                {formatThreadLastUsed(chat.updatedAt)}
+                              </span>
                             </button>
                             <button
                               type="button"
@@ -945,7 +950,8 @@ export function HomePage(): React.JSX.Element {
           <div className="chat-title-group">
             <h1>{activeChat?.title ?? 'Open a project'}</h1>
             <span>
-              {activeProject?.name ?? 'no project'} · {sessionStatus}
+              <strong className="chat-project-name">{activeProject?.name ?? 'no project'}</strong> ·{' '}
+              {sessionStatus}
             </span>
           </div>
           <div className="header-actions">
@@ -1426,7 +1432,7 @@ const MarkdownMessage = memo(function MarkdownMessage({
 
   return (
     <div className="markdown-body">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={markdownRemarkPlugins} components={components}>
         {deferredText}
       </ReactMarkdown>
     </div>
@@ -1724,6 +1730,17 @@ const ActivityRow = memo(function ActivityRow({
 }: {
   activity: OrchestrationThreadActivity
 }): React.JSX.Element {
+  if (activity.kind === 'runtime.warning') {
+    return (
+      <article className="activity-row warning" aria-label="Warning">
+        <span className="activity-row-icon" aria-hidden="true">
+          <TriangleAlert size={11} strokeWidth={2.1} />
+        </span>
+        <code>{activity.summary}</code>
+      </article>
+    )
+  }
+
   return (
     <article className={`activity-row ${activity.tone}`}>
       <span>{labelForActivity(activity)}</span>
@@ -1953,6 +1970,22 @@ function isRuntimeError(activity: OrchestrationThreadActivity): boolean {
   return activity.kind === 'runtime.error'
 }
 
+function readSessionErrorForDisplay(thread: OrchestrationThread | null): string | null {
+  const message = thread?.session?.status === 'error' ? (thread.session.lastError ?? null) : null
+  if (!message) return null
+  const normalizedMessage = normalizeErrorMessage(message)
+  const hasMatchingRuntimeError =
+    thread?.activities.some(
+      (activity) =>
+        isRuntimeError(activity) && normalizeErrorMessage(activity.summary) === normalizedMessage
+    ) ?? false
+  return hasMatchingRuntimeError ? null : message
+}
+
+function normalizeErrorMessage(message: string): string {
+  return message.trim().replace(/\s+/g, ' ')
+}
+
 function isThinkingActivity(activity: OrchestrationThreadActivity): boolean {
   return activity.tone === 'thinking'
 }
@@ -1992,6 +2025,8 @@ function eventHasAssistantResponse(event: OrchestrationEvent): boolean {
 }
 
 function labelForActivity(activity: OrchestrationThreadActivity): string {
+  if (activity.kind === 'runtime.warning') return 'warning'
+  if (activity.kind === 'runtime.error') return 'error'
   if (activity.kind.includes('approval')) return 'approval'
   if (activity.kind.includes('user-input')) return 'input'
   const itemType = readPayloadString(activity.payload, 'itemType')
@@ -2130,6 +2165,21 @@ function formatWorkDuration(ms: number | null): string {
   const minutes = Math.floor(ms / 60_000)
   const seconds = Math.round((ms % 60_000) / 1000)
   return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`
+}
+
+function formatThreadLastUsed(value: string): string {
+  const timestamp = new Date(value).getTime()
+  if (!Number.isFinite(timestamp)) return ''
+
+  const elapsedMs = Math.max(0, Date.now() - timestamp)
+  if (elapsedMs < 60_000) return 'now'
+  if (elapsedMs < 3_600_000) return `${Math.floor(elapsedMs / 60_000)}m`
+  if (elapsedMs < 86_400_000) return `${Math.floor(elapsedMs / 3_600_000)}h`
+  if (elapsedMs < 604_800_000) return `${Math.floor(elapsedMs / 86_400_000)}d`
+
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(
+    new Date(timestamp)
+  )
 }
 
 function formatPayload(payload: Record<string, unknown>): string {

@@ -74,13 +74,14 @@ interface CodexSessionContext {
   pending: Map<string, PendingRequest>
   pendingApprovals: Map<string, PendingApprovalRequest>
   pendingUserInputs: Map<string, PendingUserInputRequest>
+  emittedWarningKeys: Set<string>
   nextRequestId: number
   stopping: boolean
 }
 
 export interface ProviderEvent {
   id: string
-  kind: 'session' | 'notification' | 'request' | 'error'
+  kind: 'session' | 'notification' | 'request' | 'error' | 'warning'
   provider: 'codex'
   threadId: string
   createdAt: string
@@ -176,6 +177,7 @@ export class CodexAppServerManager {
       pending: new Map(),
       pendingApprovals: new Map(),
       pendingUserInputs: new Map(),
+      emittedWarningKeys: new Set(),
       nextRequestId: 1,
       stopping: false
     }
@@ -379,6 +381,7 @@ export class CodexAppServerManager {
       pending: new Map(),
       pendingApprovals: new Map(),
       pendingUserInputs: new Map(),
+      emittedWarningKeys: new Set(),
       nextRequestId: 1,
       stopping: false
     }
@@ -439,6 +442,10 @@ export class CodexAppServerManager {
     context.child.stderr.on('data', (chunk) => {
       for (const message of parseCodexStderr(String(chunk))) {
         if (message.level === 'ignore') continue
+        if (message.level === 'warning') {
+          this.emitWarningOnce(context, message.message, message.detail, message.key)
+          continue
+        }
         this.emitError(context.session.threadId, message.message, message.detail)
       }
     })
@@ -600,6 +607,23 @@ export class CodexAppServerManager {
     this.emitRaw({ kind: 'error', threadId, method: 'runtime/error', message, payload: detail })
   }
 
+  private emitWarningOnce(
+    context: CodexSessionContext,
+    message: string,
+    detail?: unknown,
+    key = message
+  ): void {
+    if (context.emittedWarningKeys.has(key)) return
+    context.emittedWarningKeys.add(key)
+    this.emitRaw({
+      kind: 'warning',
+      threadId: context.session.threadId,
+      method: 'runtime/warning',
+      message,
+      payload: detail
+    })
+  }
+
   private emitRaw(input: Omit<ProviderEvent, 'id' | 'provider' | 'createdAt'>): void {
     const event = {
       id: createEventId('raw'),
@@ -648,28 +672,65 @@ export function buildCodexInitializeParams(): {
 
 export function parseCodexStderr(
   chunk: string
-): Array<{ level: 'error' | 'ignore'; message: string; detail?: unknown }> {
-  const messages: Array<{ level: 'error' | 'ignore'; message: string; detail?: unknown }> = []
+): Array<{ level: 'error' | 'warning' | 'ignore'; message: string; detail?: unknown; key?: string }> {
+  const messages: Array<{
+    level: 'error' | 'warning' | 'ignore'
+    message: string
+    detail?: unknown
+    key?: string
+  }> = []
   for (const line of chunk.split(/\r?\n/)) {
-    const trimmed = line.trim()
+    const trimmed = stripAnsi(line).trim()
     if (!trimmed) continue
     const parsed = parseJsonRecord(trimmed)
     if (!parsed) {
-      messages.push({ level: 'error', message: trimmed })
+      const message = readTracingErrorMessage(trimmed) ?? trimmed
+      const warning = classifyCodexWarning(trimmed)
+      messages.push({
+        level: warning ? 'warning' : 'error',
+        message: warning?.message ?? message,
+        detail: warning || message !== trimmed ? { raw: trimmed } : undefined,
+        key: warning?.key
+      })
       continue
     }
     const level = readString(parsed, 'level')?.toUpperCase()
     if (level && level !== 'ERROR') {
-      messages.push({ level: 'ignore', message: readCodexLogMessage(parsed) ?? trimmed })
+      messages.push({ level: 'ignore', message: stripAnsi(readCodexLogMessage(parsed) ?? trimmed) })
       continue
     }
     messages.push({
       level: 'error',
-      message: readCodexLogMessage(parsed) ?? trimmed,
+      message: stripAnsi(readCodexLogMessage(parsed) ?? trimmed),
       detail: parsed
     })
   }
   return messages
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+}
+
+function readTracingErrorMessage(value: string): string | undefined {
+  const match = value.match(/(?:^|\s)error=(.+)$/)
+  if (!match) return undefined
+  const message = match[1].trim()
+  return message.length > 0 ? message : undefined
+}
+
+function classifyCodexWarning(value: string): { message: string; key: string } | null {
+  if (
+    value.includes('rmcp::transport::worker') &&
+    value.includes('Transport channel closed') &&
+    value.includes('Connection refused')
+  ) {
+    return {
+      message: 'MCP transport unavailable: local MCP server connection was refused.',
+      key: 'rmcp-transport-connection-refused'
+    }
+  }
+  return null
 }
 
 function isServerRequest(value: unknown): value is JsonRpcRequest {

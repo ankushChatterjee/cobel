@@ -214,7 +214,7 @@ export class ProviderRuntimeIngestion {
           },
           event.threadId
         )
-        if (event.type === 'runtime.error') {
+        if (event.type === 'runtime.error' && this.shouldPromoteRuntimeError(event)) {
           this.engine.setSession({
             threadId: event.threadId,
             status: 'error',
@@ -231,6 +231,12 @@ export class ProviderRuntimeIngestion {
       case 'thread.started':
         return
     }
+  }
+
+  private shouldPromoteRuntimeError(event: ProviderRuntimeEvent): boolean {
+    if (!event.turnId) return true
+    const activeTurnId = this.engine.getThread(event.threadId).session?.activeTurnId
+    return activeTurnId === event.turnId
   }
 
   private ingestContentDelta(

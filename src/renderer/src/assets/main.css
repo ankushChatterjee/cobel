@@ -19,13 +19,13 @@
   --surface-strip: #0f0f13;
   --surface-input: #0d0d10;
   --surface-hover: #16161c;
-  --surface-active: #1e1e28;
+  --surface-active: #1b1b22;
 
   /* Text — lifted for sidebar readability */
-  --text-primary: #f0f0f2;
-  --text-secondary: #aaabb8;
-  --text-muted: #70708a;
-  --text-label: #8a8aa4;
+  --text-primary: #f6f6f8;
+  --text-secondary: #c8c9d4;
+  --text-muted: #85869a;
+  --text-label: #9a9bb0;
 
   /* Borders */
   --border-subtle: #22223a;
@@ -157,11 +157,11 @@
 .add-project-button {
   display: grid;
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   border: 1px solid var(--border-medium);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -235,6 +235,8 @@
 
 .project-list {
   display: grid;
+  gap: 2px;
+  padding: 0 8px;
 }
 
 .project-group {
@@ -245,39 +247,45 @@
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 4px 14px;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 9px;
   border: 0;
+  border-radius: var(--radius-md);
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: 650;
   text-align: left;
+  opacity: 0.68;
   transition:
     background 0.12s,
-    color 0.12s;
+    color 0.12s,
+    opacity 0.12s;
 }
 
 .project-toggle.active {
   color: var(--text-primary);
+  opacity: 0.9;
 }
 
+.project-toggle:focus-visible,
 .project-toggle:hover {
   background: var(--surface-hover);
   color: var(--text-primary);
+  opacity: 1;
 }
 
 .project-toggle svg {
-  flex-shrink: 0;
-  color: var(--text-label);
+  flex: 0 0 14px;
+  color: currentColor;
   transition: color 0.12s;
 }
 
 .project-toggle:hover svg,
 .project-toggle.active svg {
-  color: var(--text-primary);
+  color: currentColor;
 }
 
 .project-name {
@@ -287,27 +295,22 @@
   flex: 1;
 }
 
-.disclosure {
-  width: 14px;
-  flex: 0 0 14px;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .thread-list {
   display: grid;
-  padding: 1px 0 4px;
+  gap: 2px;
+  padding: 3px 0 5px;
 }
 
 .thread-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 26px;
+  grid-template-columns: minmax(0, 1fr) 24px;
   align-items: center;
-  min-height: 28px;
-  padding-right: 7px;
-  transition: background 0.1s;
+  min-height: 29px;
+  border-radius: var(--radius-md);
+  padding-right: 4px;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .thread-row:hover,
@@ -324,9 +327,9 @@
   width: 100%;
   min-width: 0;
   align-items: center;
-  gap: 7px;
-  min-height: 28px;
-  padding: 3px 8px 3px 32px;
+  gap: 8px;
+  min-height: 29px;
+  padding: 3px 4px 3px 33px;
   border: 0;
   background: transparent;
   color: var(--text-label);
@@ -346,8 +349,8 @@
 }
 
 .thread-row.active .thread-dot {
-  background: var(--accent-primary);
-  box-shadow: 0 0 0 2px var(--accent-dim);
+  background: var(--text-secondary);
+  box-shadow: none;
 }
 
 .thread-dot {
@@ -367,13 +370,32 @@
   flex: 1;
 }
 
+.thread-used-at {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.82;
+  transition: opacity 0.12s ease;
+}
+
+.thread-row.active .thread-used-at {
+  color: var(--text-label);
+  opacity: 1;
+}
+
+.thread-row:hover .thread-used-at,
+.thread-row:focus-within .thread-used-at {
+  opacity: 0;
+}
+
 .thread-delete-button {
   display: grid;
   width: 24px;
   height: 24px;
   place-items: center;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -400,8 +422,9 @@
 .thread-link.new-thread {
   color: var(--text-muted);
   font-size: 12px;
-  gap: 7px;
-  padding-left: 32px;
+  gap: 8px;
+  border-radius: var(--radius-md);
+  padding-left: 33px;
   margin-top: 2px;
 }
 
@@ -453,14 +476,19 @@
 .chat-title-group h1 {
   margin: 0;
   font-size: 13.5px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-weight: 750;
+  letter-spacing: 0;
   color: var(--text-primary);
 }
 
 .chat-title-group span {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.chat-project-name {
+  color: var(--text-secondary);
+  font-weight: 750;
 }
 
 .header-actions {
@@ -610,8 +638,9 @@
 
 .message p {
   margin: 0;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-size: 14px;
+  font-weight: 450;
   line-height: 1.65;
   white-space: pre-wrap;
 }
@@ -626,8 +655,9 @@
 }
 
 .markdown-body {
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-size: 14px;
+  font-weight: 450;
   line-height: 1.68;
   overflow-wrap: anywhere;
   text-wrap: pretty;
@@ -669,12 +699,60 @@
   padding-left: 22px;
 }
 
+.markdown-body ul {
+  list-style: disc;
+}
+
+.markdown-body ol {
+  list-style: decimal;
+}
+
+.markdown-body ul ul,
+.markdown-body ol ul {
+  list-style: circle;
+}
+
+.markdown-body ul ol,
+.markdown-body ol ol {
+  list-style: lower-alpha;
+}
+
+.markdown-body li::marker {
+  color: var(--text-label);
+  font-size: 0.92em;
+}
+
 .markdown-body li {
   margin: 4px 0;
+  padding-left: 2px;
 }
 
 .markdown-body li > p {
   margin: 0;
+}
+
+.markdown-body li > ul,
+.markdown-body li > ol {
+  margin-top: 5px;
+  margin-bottom: 6px;
+}
+
+.markdown-body .contains-task-list,
+.markdown-body .task-list-item {
+  list-style: none;
+}
+
+.markdown-body .task-list-item {
+  margin-left: -20px;
+  padding-left: 0;
+}
+
+.markdown-body .task-list-item input[type='checkbox'] {
+  width: 13px;
+  height: 13px;
+  margin: 0 8px 0 0;
+  vertical-align: -2px;
+  accent-color: var(--accent-primary);
 }
 
 .markdown-body blockquote {
@@ -843,6 +921,12 @@
   overflow: hidden;
 }
 
+.activity-row.warning {
+  grid-template-columns: 28px minmax(0, 1fr);
+  border: 1px solid rgba(250, 204, 21, 0.22);
+  background: rgba(250, 204, 21, 0.055);
+}
+
 .activity-row span {
   padding-left: 10px;
   color: var(--tool-edit);
@@ -857,6 +941,26 @@
 
 .activity-row.error span {
   color: var(--error);
+}
+
+.activity-row.warning .activity-row-icon {
+  display: grid;
+  height: 100%;
+  place-items: center;
+  padding-left: 0;
+  color: #fbbf24;
+  font-size: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.activity-row.warning .activity-row-icon svg {
+  color: inherit;
+  stroke: currentColor;
+}
+
+.activity-row.warning code {
+  color: #fde68a;
 }
 
 .activity-row code {

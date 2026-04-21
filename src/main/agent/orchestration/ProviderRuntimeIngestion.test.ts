@@ -178,6 +178,99 @@ describe('ProviderRuntimeIngestion', () => {
     expect(thread.session?.activeTurnId).toBe('turn-active')
   })
 
+  it('records an active turn runtime error and marks the session errored', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'runtime.error',
+        turnId: 'turn-1',
+        payload: { message: 'exec_command failed' }
+      })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'runtime.error',
+          summary: 'exec_command failed',
+          turnId: 'turn-1'
+        })
+      ])
+    )
+    expect(thread.session).toEqual(
+      expect.objectContaining({
+        status: 'error',
+        activeTurnId: null,
+        lastError: 'exec_command failed'
+      })
+    )
+  })
+
+  it('records stale turn runtime errors without overwriting the active running session', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-active', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'runtime.error',
+        turnId: 'turn-stale',
+        payload: { message: 'stale failure' }
+      })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'runtime.error',
+          summary: 'stale failure',
+          turnId: 'turn-stale'
+        })
+      ])
+    )
+    expect(thread.session).toEqual(
+      expect.objectContaining({
+        status: 'running',
+        activeTurnId: 'turn-active',
+        lastError: null
+      })
+    )
+  })
+
+  it('clears the last runtime error after a later successful turn', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'runtime.error',
+        turnId: 'turn-1',
+        payload: { message: 'exec_command failed' }
+      })
+    )
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-2', payload: {} }))
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-2', payload: { state: 'completed' } })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').session).toEqual(
+      expect.objectContaining({
+        status: 'ready',
+        activeTurnId: null,
+        lastError: null
+      })
+    )
+  })
+
   it('finalizes activities for a stale completed turn without closing the active turn', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
