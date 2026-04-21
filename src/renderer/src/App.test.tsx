@@ -123,6 +123,47 @@ describe('renderer app', () => {
     })
   })
 
+  it('opens the model selector with Cmd+Shift+M and supports keyboard selection', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.listModels = vi.fn(async () => [
+      { id: 'gpt-5.4-mini', isDefault: true },
+      { id: 'gpt-5.4' },
+      { id: 'gpt-5.3-codex' }
+    ])
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    const modelSelect = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
+    await waitFor(() => {
+      expect(modelSelect).not.toBeDisabled()
+      expect(modelSelect.value).toBe('gpt-5.4-mini')
+    })
+
+    fireEvent.keyDown(window, { key: 'm', metaKey: true, shiftKey: true })
+
+    const listbox = await screen.findByRole('listbox')
+    expect(screen.getByText('⌘⇧M')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(within(listbox).getByRole('option', { name: /gpt 5\.4 mini/i })).toHaveFocus()
+    })
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' })
+    await waitFor(() => {
+      expect(within(listbox).getByRole('option', { name: /gpt 5\.4$/i })).toHaveFocus()
+    })
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(modelSelect.value).toBe('gpt-5.4')
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    })
+  })
+
   it('keeps live events that arrive before the initial snapshot resolves', async () => {
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     window.agentApi.subscribeThread = vi.fn((_input, listener) => {

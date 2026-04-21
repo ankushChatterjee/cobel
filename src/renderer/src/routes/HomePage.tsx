@@ -7,6 +7,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -91,6 +92,12 @@ const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
 ]
 const composerSpacerStyle = { flex: 1 }
 const markdownRemarkPlugins = [remarkGfm]
+
+type ComposerSelectOption = {
+  value: string
+  label: string
+}
+
 const modelTokenLabels: Record<string, string> = {
   gpt: 'GPT',
   codex: 'Codex',
@@ -1053,6 +1060,227 @@ export function HomePage(): React.JSX.Element {
   )
 }
 
+function ComposerDropdown({
+  ariaLabel,
+  className,
+  disabled,
+  onChange,
+  shortcut,
+  shortcutLabel,
+  options,
+  title,
+  value
+}: {
+  ariaLabel: string
+  className: string
+  disabled: boolean
+  onChange: (value: string) => void
+  shortcut?: { key: string; metaKey?: boolean; shiftKey?: boolean }
+  shortcutLabel?: string
+  options: ComposerSelectOption[]
+  title?: string
+  value: string
+}): React.JSX.Element {
+  const [isOpen, setIsOpen] = useState(false)
+  const [highlightedIndex, setHighlightedIndex] = useState(0)
+  const rootRef = useRef<HTMLSpanElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const listboxId = useId()
+  const activeOption = options.find((option) => option.value === value) ?? options[0]
+  const displayLabel = activeOption?.label ?? ''
+  const activeIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === activeOption?.value)
+  )
+
+  useEffect(() => {
+    if (!isOpen) return
+    setHighlightedIndex(activeIndex)
+    const frame = window.requestAnimationFrame(() => optionRefs.current[activeIndex]?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeIndex, isOpen])
+
+  useEffect(() => {
+    if (!shortcut || disabled) return
+
+    const handleShortcut = (event: globalThis.KeyboardEvent): void => {
+      if (event.key.toLowerCase() !== shortcut.key.toLowerCase()) return
+      if (Boolean(shortcut.metaKey) !== event.metaKey) return
+      if (Boolean(shortcut.shiftKey) !== event.shiftKey) return
+      event.preventDefault()
+      setIsOpen(true)
+      triggerRef.current?.focus()
+    }
+
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [disabled, shortcut])
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    const handlePointerDown = (event: globalThis.PointerEvent): void => {
+      if (rootRef.current?.contains(event.target as Node)) return
+      setIsOpen(false)
+    }
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setIsOpen(false)
+        triggerRef.current?.focus()
+      }
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isOpen])
+
+  const moveHighlight = useCallback(
+    (direction: 1 | -1): void => {
+      setHighlightedIndex((currentIndex) => {
+        const nextIndex = (currentIndex + direction + options.length) % options.length
+        window.requestAnimationFrame(() => optionRefs.current[nextIndex]?.focus())
+        return nextIndex
+      })
+    },
+    [options.length]
+  )
+
+  const openMenu = useCallback((): void => {
+    setHighlightedIndex(activeIndex)
+    setIsOpen(true)
+  }, [activeIndex])
+
+  const chooseOption = useCallback(
+    (nextValue: string): void => {
+      onChange(nextValue)
+      setIsOpen(false)
+      triggerRef.current?.focus()
+    },
+    [onChange]
+  )
+
+  const handleTriggerKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>): void => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        openMenu()
+      }
+    },
+    [openMenu]
+  )
+
+  const handleOptionKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>, optionValue: string): void => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        moveHighlight(1)
+        return
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        moveHighlight(-1)
+        return
+      }
+
+      if (event.key === 'Home') {
+        event.preventDefault()
+        setHighlightedIndex(0)
+        optionRefs.current[0]?.focus()
+        return
+      }
+
+      if (event.key === 'End') {
+        event.preventDefault()
+        const lastIndex = options.length - 1
+        setHighlightedIndex(lastIndex)
+        optionRefs.current[lastIndex]?.focus()
+        return
+      }
+
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        chooseOption(optionValue)
+      }
+    },
+    [chooseOption, moveHighlight, options.length]
+  )
+
+  return (
+    <span ref={rootRef} className={`composer-select-shell ${className}`}>
+      <select
+        aria-label={ariaLabel}
+        className="sr-only composer-native-select"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+        tabIndex={-1}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="composer-select-trigger"
+        disabled={disabled}
+        title={title}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        aria-controls={listboxId}
+        onClick={() => setIsOpen((open) => !open)}
+        onKeyDown={handleTriggerKeyDown}
+      >
+        <span className="composer-select-value">{displayLabel}</span>
+        <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
+      </button>
+      {isOpen ? (
+        <div className="composer-select-popover" role="listbox" id={listboxId}>
+          <div className="composer-select-options">
+            {options.map((option, index) => {
+              const isSelected = option.value === value
+              return (
+                <button
+                  ref={(node) => {
+                    optionRefs.current[index] = node
+                  }}
+                  key={option.value}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  className="composer-select-option"
+                  data-highlighted={index === highlightedIndex}
+                  onClick={() => chooseOption(option.value)}
+                  onFocus={() => setHighlightedIndex(index)}
+                  onKeyDown={(event) => handleOptionKeyDown(event, option.value)}
+                >
+                  <span>{option.label}</span>
+                  {isSelected ? <Check size={12} strokeWidth={1.8} aria-hidden="true" /> : null}
+                </button>
+              )
+            })}
+          </div>
+          {shortcutLabel ? (
+            <div className="composer-select-hint" aria-hidden="true">
+              <span>Open selector</span>
+              <kbd>{shortcutLabel}</kbd>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </span>
+  )
+}
+
 const ChatComposer = memo(function ChatComposer({
   enabled,
   isRunning,
@@ -1087,6 +1315,18 @@ const ChatComposer = memo(function ChatComposer({
     if (activeModel) return `Model: ${getModelDisplayName(activeModel)}`
     return `Model: ${formatModelId(model)}`
   }, [activeModel, model])
+  const modelShortcut = useMemo(() => ({ key: 'm', metaKey: true, shiftKey: true }), [])
+  const modelOptions = useMemo<ComposerSelectOption[]>(
+    () =>
+      models.length === 0
+        ? [{ value: '', label: 'Model list pending' }]
+        : models.map((m) => ({ value: m.id, label: getModelDisplayName(m) })),
+    [models]
+  )
+  const runtimeModeOptions = useMemo<ComposerSelectOption[]>(
+    () => runtimeModes.map((mode) => ({ value: mode.value, label: mode.label })),
+    []
+  )
 
   useEffect(() => {
     const el = textareaRef.current
@@ -1149,44 +1389,26 @@ const ChatComposer = memo(function ChatComposer({
       />
       <div className="composer-footer">
         <FilePen size={12} strokeWidth={1.6} className="composer-icon" />
-        <span className="composer-select-shell permissions-select-shell">
-          <select
-            aria-label="Runtime mode"
-            className="composer-select"
-            value={runtimeMode}
-            onChange={(event) => onRuntimeModeChange(event.target.value as RuntimeMode)}
-            disabled={!enabled}
-          >
-            {runtimeModes.map((mode) => (
-              <option key={mode.value} value={mode.value}>
-                {mode.label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
-        </span>
+        <ComposerDropdown
+          ariaLabel="Runtime mode"
+          className="permissions-select-shell"
+          value={runtimeMode}
+          onChange={(nextValue) => onRuntimeModeChange(nextValue as RuntimeMode)}
+          options={runtimeModeOptions}
+          disabled={!enabled}
+        />
         <span className="composer-divider" />
-        <span className="composer-select-shell model-select-shell">
-          <select
-            aria-label="Model"
-            className="composer-select model-select"
-            value={model}
-            onChange={(event) => onModelChange(event.target.value)}
-            disabled={!enabled || models.length === 0}
-            title={modelTitle}
-          >
-            {models.length === 0 ? (
-              <option value="">Model list pending</option>
-            ) : (
-              models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {getModelDisplayName(m)}
-                </option>
-              ))
-            )}
-          </select>
-          <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
-        </span>
+        <ComposerDropdown
+          ariaLabel="Model"
+          className="model-select-shell"
+          value={model}
+          onChange={onModelChange}
+          options={modelOptions}
+          disabled={!enabled || models.length === 0}
+          title={`${modelTitle} (⌘⇧M)`}
+          shortcut={modelShortcut}
+          shortcutLabel="⌘⇧M"
+        />
         <span style={composerSpacerStyle} />
         {isRunning ? (
           <div className="run-controls">

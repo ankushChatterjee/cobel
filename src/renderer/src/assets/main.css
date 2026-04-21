@@ -1380,65 +1380,147 @@
   min-width: 0;
   height: 24px;
   color: var(--text-muted);
-  transition:
-    color 0.15s ease,
-    opacity 0.15s ease;
 }
 
-.composer-select-shell:hover {
-  color: var(--text-secondary);
-}
-
-.composer-select-shell:focus-within {
-  color: var(--text-secondary);
-}
-
-.composer-select-shell:has(.composer-select:disabled) {
-  color: var(--text-muted);
-  opacity: 0.48;
-}
-
-.composer-select-shell svg {
-  position: absolute;
-  right: 0;
-  pointer-events: none;
-  color: currentColor;
-  opacity: 0.68;
-}
-
-.permissions-select-shell {
-  width: 98px;
-}
-
-.model-select-shell {
-  width: clamp(92px, 16vw, 160px);
-}
-
-.composer-select {
-  width: 100%;
-  height: 100%;
-  min-width: 0;
+.composer-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 24px;
+  gap: 4px;
   border: 0;
-  appearance: none;
+  border-radius: 999px;
   background: transparent;
-  color: currentColor;
+  color: inherit;
   outline: none;
-  padding: 0 17px 0 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 0 7px;
   font-size: 11.5px;
   line-height: 24px;
   cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease,
+    opacity 0.14s ease;
 }
 
-.composer-select:disabled {
+.composer-select-trigger:hover,
+.composer-select-trigger:focus-visible,
+.composer-select-trigger[aria-expanded='true'] {
+  background: rgba(255, 255, 255, 0.075);
+  color: var(--text-secondary);
+}
+
+.composer-select-trigger:disabled {
   cursor: not-allowed;
+  opacity: 0.48;
 }
 
-.composer-select.model-select {
+.composer-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-select-shell .composer-select-trigger {
   color: var(--text-secondary);
   font-weight: 500;
+}
+
+.composer-select-trigger svg {
+  flex: 0 0 auto;
+  opacity: 0.64;
+}
+
+.composer-select-popover {
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 0;
+  z-index: 20;
+  width: max-content;
+  min-width: 164px;
+  max-width: min(260px, calc(100vw - 32px));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: var(--radius-md);
+  background: #1b1b20;
+  padding: 5px;
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.44),
+    0 2px 10px rgba(0, 0, 0, 0.24),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+.composer-select-options {
+  display: grid;
+  gap: 1px;
+}
+
+.composer-select-option {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 6px 7px;
+  font-size: 12px;
+  line-height: 1.25;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.composer-select-option:hover,
+.composer-select-option:focus-visible,
+.composer-select-option[data-highlighted='true'] {
+  background: rgba(255, 255, 255, 0.075);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.composer-select-option[aria-selected='true'] {
+  background: rgba(255, 255, 255, 0.095);
+  color: var(--text-primary);
+}
+
+.composer-select-option svg {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.composer-select-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 5px -1px -1px;
+  padding: 6px 7px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.065);
+  color: rgba(200, 201, 212, 0.45);
+  font-size: 10.5px;
+  line-height: 1;
+}
+
+.composer-select-hint kbd {
+  min-width: 0;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(246, 246, 248, 0.58);
+  padding: 3px 5px 3.5px;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1;
 }
 
 .composer-divider {
