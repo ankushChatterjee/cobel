@@ -111,7 +111,7 @@
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--border-subtle);
-  background: var(--surface-sidebar);
+  background: var(--surface-root);
   overflow: hidden;
 }
 
@@ -450,7 +450,7 @@
   min-height: 0;
   grid-template-rows: 48px minmax(0, 1fr);
   overflow: hidden;
-  background: var(--surface-root);
+  background: var(--surface-sidebar);
   position: relative;
 }
 
@@ -458,7 +458,7 @@
   justify-content: space-between;
   border-bottom: 1px solid var(--border-subtle);
   padding: 0 20px;
-  background: var(--surface-sidebar);
+  background: var(--surface-root);
   flex-shrink: 0;
   -webkit-app-region: drag;
 }
