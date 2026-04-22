@@ -1082,7 +1082,7 @@ export function HomePage(): React.JSX.Element {
         />
       </aside>
 
-      <main className="chat-surface">
+      <main className={`chat-surface ${diffPanelOpen ? 'diff-open' : ''}`}>
         <header className="chat-header">
           <div className="chat-title-group">
             <h1>{activeChat?.title ?? 'Open a project'}</h1>
@@ -1133,79 +1133,81 @@ export function HomePage(): React.JSX.Element {
           </div>
         </header>
 
-        <section
-          ref={conversationRef}
-          className="conversation"
-          aria-live="polite"
-          onScroll={handleConversationScroll}
-        >
-          <div className="status-line">
-            <span>{sessionStatus}</span>
-            <span>{activeProject?.path ?? 'no workspace'}</span>
-            <span>
-              {activeProvider?.detail ?? activeProvider?.status ?? 'provider probe pending'}
-            </span>
-          </div>
-
-          {!activeProject ? (
-            <div className="empty-state">
-              <p>What would you build?</p>
+        <div className="chat-primary">
+          <section
+            ref={conversationRef}
+            className="conversation"
+            aria-live="polite"
+            onScroll={handleConversationScroll}
+          >
+            <div className="status-line">
+              <span>{sessionStatus}</span>
+              <span>{activeProject?.path ?? 'no workspace'}</span>
+              <span>
+                {activeProvider?.detail ?? activeProvider?.status ?? 'provider probe pending'}
+              </span>
             </div>
-          ) : transcriptItems.length === 0 ? (
-            <div className="empty-state">
-              <p>What would you build?</p>
-            </div>
-          ) : (
-            <TranscriptList
-              items={transcriptItems}
-              showPendingThinking={showPendingThinking}
-              expandedToolIds={expandedToolIds}
-              checkpointByAssistantMessageId={checkpointByAssistantMessageId}
-              revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-              onToggleTool={toggleToolExpanded}
-              onApprove={respondToApproval}
-              onAnswer={respondToUserInput}
-              onPreviewDiff={showDiffPreview}
-              onOpenDiff={(turnId, filePath) =>
-                openDiffPanel({ mode: turnId ? 'turn' : 'full', turnId, filePath })
-              }
-              onRevert={revertToCheckpoint}
-            />
-          )}
-          {sessionError ? <SessionErrorBanner message={sessionError} /> : null}
-          {error ? <p className="error-line">{error}</p> : null}
-          <div ref={bottomRef} />
-        </section>
 
-        <div className="composer-wrap">
-          <div className="composer-stack">
-            <div className="floating-diff-row">
-              <FloatingDiffPill
-                summaries={thread?.checkpoints ?? []}
-                onOpen={() => openDiffPanel({ mode: 'full' })}
+            {!activeProject ? (
+              <div className="empty-state">
+                <p>What would you build?</p>
+              </div>
+            ) : transcriptItems.length === 0 ? (
+              <div className="empty-state">
+                <p>What would you build?</p>
+              </div>
+            ) : (
+              <TranscriptList
+                items={transcriptItems}
+                showPendingThinking={showPendingThinking}
+                expandedToolIds={expandedToolIds}
+                checkpointByAssistantMessageId={checkpointByAssistantMessageId}
+                revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+                onToggleTool={toggleToolExpanded}
+                onApprove={respondToApproval}
+                onAnswer={respondToUserInput}
+                onPreviewDiff={showDiffPreview}
+                onOpenDiff={(turnId, filePath) =>
+                  openDiffPanel({ mode: turnId ? 'turn' : 'full', turnId, filePath })
+                }
+                onRevert={revertToCheckpoint}
+              />
+            )}
+            {sessionError ? <SessionErrorBanner message={sessionError} /> : null}
+            {error ? <p className="error-line">{error}</p> : null}
+            <div ref={bottomRef} />
+          </section>
+
+          <div className="composer-wrap">
+            <div className="composer-stack">
+              <div className="floating-diff-row">
+                <FloatingDiffPill
+                  summaries={thread?.checkpoints ?? []}
+                  onOpen={() => openDiffPanel({ mode: 'full' })}
+                />
+              </div>
+              <ChatComposer
+                key={composerResetToken}
+                enabled={Boolean(activeProject)}
+                isRunning={isRunning}
+                runtimeMode={runtimeMode}
+                models={models}
+                model={model}
+                onRuntimeModeChange={handleRuntimeModeChange}
+                onModelChange={handleModelChange}
+                onSubmitPrompt={sendPrompt}
+                onInterrupt={interruptTurn}
+                onStop={stopSession}
               />
             </div>
-            <ChatComposer
-              key={composerResetToken}
-              enabled={Boolean(activeProject)}
-              isRunning={isRunning}
-              runtimeMode={runtimeMode}
-              models={models}
-              model={model}
-              onRuntimeModeChange={handleRuntimeModeChange}
-              onModelChange={handleModelChange}
-              onSubmitPrompt={sendPrompt}
-              onInterrupt={interruptTurn}
-              onStop={stopSession}
-            />
           </div>
+          <DiffPreviewPopover
+            preview={diffPreview}
+            threadId={activeThreadId}
+            onClose={() => setDiffPreview(null)}
+            onOpenSidebar={(turnId, filePath) => openDiffPanel({ mode: 'turn', turnId, filePath })}
+          />
         </div>
-        <DiffPreviewPopover
-          preview={diffPreview}
-          threadId={activeThreadId}
-          onClose={() => setDiffPreview(null)}
-          onOpenSidebar={(turnId, filePath) => openDiffPanel({ mode: 'turn', turnId, filePath })}
-        />
         <DiffReviewSidebar
           open={diffPanelOpen}
           threadId={activeThreadId}

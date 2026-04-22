@@ -451,18 +451,37 @@
   height: 100vh;
   min-height: 0;
   grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 0;
   overflow: hidden;
   background: var(--surface-sidebar);
   position: relative;
+  transition: grid-template-columns 0.22s ease;
+}
+
+.chat-surface.diff-open {
+  grid-template-columns: minmax(360px, 1fr) minmax(
+      420px,
+      min(var(--diff-panel-width, 640px), calc(100vw - var(--sidebar-width, 290px) - 32px))
+    );
 }
 
 .chat-header {
+  grid-column: 1 / -1;
   justify-content: space-between;
   border-bottom: 1px solid var(--border-subtle);
   padding: 0 20px;
   background: var(--surface-root);
   flex-shrink: 0;
   -webkit-app-region: drag;
+}
+
+.chat-primary {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-header > * {
@@ -554,7 +573,8 @@
 
 .conversation {
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   padding: 28px 40px 140px;
   scroll-behavior: smooth;
@@ -592,6 +612,8 @@
   display: grid;
   gap: 14px;
   margin: 0 auto;
+  min-width: 0;
+  width: 100%;
   max-width: 850px;
 }
 
@@ -606,13 +628,18 @@
 }
 
 .message {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
   max-width: 850px;
   animation: transcript-item-in 0.2s ease-out;
 }
 
 .message.user {
   margin-left: auto;
-  max-width: 700px;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: min(700px, 100%);
   text-align: right;
 }
 
@@ -661,16 +688,21 @@
 }
 
 .message p {
+  max-width: 100%;
   margin: 0;
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 450;
   line-height: 1.65;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
 .message.user p {
   display: inline-block;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -814,6 +846,8 @@
 }
 
 .markdown-body {
+  min-width: 0;
+  max-width: 100%;
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 450;
@@ -840,6 +874,7 @@
 }
 
 .markdown-body p {
+  min-width: 0;
   white-space: normal;
 }
 
@@ -921,7 +956,8 @@
 }
 
 .markdown-body a {
-  display: inline-block;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: var(--accent-markdown);
   text-decoration: none;
   border-radius: 3px;
@@ -969,6 +1005,9 @@
 }
 
 .markdown-inline-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
   background: var(--surface-strip);
@@ -985,6 +1024,7 @@
 
 .markdown-code-pre {
   overflow: auto;
+  max-width: 100%;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: #24292e;
@@ -1037,13 +1077,14 @@
 
 .markdown-code-block {
   display: block;
-  min-width: max-content;
+  min-width: 0;
   color: #e1e4e8;
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 12px;
   line-height: 1.58;
   tab-size: 2;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .markdown-code-block.highlighted {
@@ -1087,7 +1128,7 @@
 .activity-row {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
-  align-items: center;
+  align-items: start;
   min-height: 28px;
   border-radius: var(--radius-sm);
   background: var(--surface-strip);
@@ -1103,6 +1144,7 @@
 }
 
 .activity-row span {
+  padding-top: 6px;
   padding-left: 10px;
   color: var(--tool-edit);
   font-size: 10px;
@@ -1139,13 +1181,15 @@
 }
 
 .activity-row code {
-  overflow: hidden;
-  padding: 0 10px;
+  min-width: 0;
+  overflow: visible;
+  padding: 6px 10px;
   color: var(--text-secondary);
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 /* ── Thinking row ─────────────────────────────────────────── */
@@ -1254,10 +1298,11 @@
 }
 
 .tool-line-target {
-  overflow: hidden;
+  min-width: 0;
+  overflow: visible;
   color: var(--text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   flex: 1;
 }
 
@@ -1912,23 +1957,21 @@
 }
 
 .diff-review-sidebar {
-  position: absolute;
-  top: 48px;
-  right: 0;
-  bottom: 0;
+  position: relative;
   z-index: 30;
   container-type: inline-size;
   display: grid;
+  min-width: 0;
+  height: 100%;
   grid-template-rows: auto auto minmax(0, 1fr);
-  width: min(var(--diff-panel-width, 640px), calc(100vw - var(--sidebar-width, 290px) - 32px));
-  min-width: 420px;
+  width: 100%;
   overflow: hidden;
   border-left: 1px solid rgba(255, 255, 255, 0.09);
   background: rgba(9, 9, 11, 0.98);
-  box-shadow: -18px 0 56px rgba(0, 0, 0, 0.38);
+  box-shadow: -10px 0 34px rgba(0, 0, 0, 0.24);
   opacity: 0;
   pointer-events: none;
-  transform: translateX(32px);
+  transform: translateX(16px);
   transition:
     transform 0.22s ease,
     opacity 0.18s ease;
@@ -2247,9 +2290,14 @@
     padding-right: 6px;
   }
 
+  .chat-surface.diff-open {
+    grid-template-columns: minmax(0, 1fr) minmax(
+        380px,
+        min(var(--diff-panel-width, 640px), calc(100vw - 32px))
+      );
+  }
+
   .diff-review-sidebar {
-    top: 0;
-    width: 100%;
     min-width: 0;
   }
 
