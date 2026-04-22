@@ -49,6 +49,18 @@ describe('CheckpointStore', () => {
     await store.restoreCheckpoint(cwd, 'thread:test', 0)
     await expect(readFile(join(cwd, 'a.txt'), 'utf8')).resolves.toBe('one\n')
     await expect(readFile(join(cwd, 'b.txt'), 'utf8')).rejects.toThrow()
+
+    await writeFile(join(cwd, 'a.txt'), 'one\nlive\n')
+    await writeFile(join(cwd, 'c.txt'), 'current\n')
+
+    const worktreeDiff = await store.diffCheckpointToWorktree(cwd, 'thread:test', 0)
+    expect(worktreeDiff.truncated).toBe(false)
+    expect(worktreeDiff.files).toEqual([
+      { path: 'a.txt', kind: 'modified', additions: 1, deletions: 0, binary: false },
+      { path: 'c.txt', kind: 'added', additions: 1, deletions: 0, binary: false }
+    ])
+    expect(worktreeDiff.diff).toContain('+live')
+    expect(worktreeDiff.diff).toContain('+current')
   })
 })
 

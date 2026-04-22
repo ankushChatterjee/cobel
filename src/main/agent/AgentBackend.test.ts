@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
+import { execFile } from 'node:child_process'
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { DEFAULT_THREAD_ID } from '../../shared/agent'
 import { AgentBackend } from './AgentBackend'
+import { CheckpointStore } from './checkpointing/CheckpointStore'
 import { openInMemoryDatabase } from './persistence/Sqlite'
+
+const execFileAsync = promisify(execFile)
 
 describe('AgentBackend', () => {
   it('runs a full fake-provider turn through snapshot and live events', async () => {
@@ -150,5 +158,98 @@ describe('AgentBackend', () => {
     expect(shell.projects[0]!.name).toBe('Project One')
     expect(shell.threads).toHaveLength(1)
     expect(shell.threads[0]!.title).toBe('Thread One')
+  })
+
+  it('restores checkpoint files without pruning chat or checkpoint history', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'cobel-agent-revert-'))
+    const db = openInMemoryDatabase()
+    const backend = new AgentBackend({ useFakeProvider: true, db })
+    const store = new CheckpointStore()
+    const threadId = 'thread:checkpoint-files-only'
+    const projectId = 'project:checkpoint-files-only'
+    const now = '2026-04-22T00:00:00.000Z'
+
+    try {
+      await execFileAsync('git', ['init'], { cwd })
+      await execFileAsync('git', ['config', 'user.name', 'Cobel Test'], { cwd })
+      await execFileAsync('git', ['config', 'user.email', 'cobel@example.invalid'], { cwd })
+      await writeFile(join(cwd, 'note.txt'), 'before\n')
+      await execFileAsync('git', ['add', 'note.txt'], { cwd })
+      await execFileAsync('git', ['commit', '-m', 'initial'], { cwd })
+
+      await store.captureCheckpoint(cwd, threadId, 0)
+      await writeFile(join(cwd, 'note.txt'), 'after\n')
+      await store.captureCheckpoint(cwd, threadId, 1)
+
+      await backend.dispatchCommand({
+        type: 'project.create',
+        commandId: 'cmd-project',
+        projectId,
+        name: 'Checkpoint Project',
+        path: cwd,
+        createdAt: now
+      })
+      await backend.dispatchCommand({
+        type: 'thread.create',
+        commandId: 'cmd-thread',
+        threadId,
+        projectId,
+        title: 'Checkpoint thread',
+        cwd,
+        createdAt: now
+      })
+      backend.engine.upsertMessage(
+        {
+          id: 'user:1',
+          role: 'user',
+          text: 'change the file',
+          turnId: null,
+          streaming: false,
+          createdAt: now,
+          updatedAt: now
+        },
+        threadId
+      )
+      backend.engine.upsertMessage(
+        {
+          id: 'assistant:1',
+          role: 'assistant',
+          text: 'changed',
+          turnId: 'turn-1',
+          streaming: false,
+          createdAt: now,
+          updatedAt: now
+        },
+        threadId
+      )
+      backend.engine.upsertCheckpoint(
+        {
+          id: `checkpoint:${threadId}:turn-1`,
+          turnId: 'turn-1',
+          assistantMessageId: 'assistant:1',
+          checkpointTurnCount: 1,
+          status: 'ready',
+          files: [{ path: 'note.txt', kind: 'modified', additions: 1, deletions: 1 }],
+          completedAt: now
+        },
+        threadId
+      )
+
+      await backend.dispatchCommand({
+        type: 'thread.checkpoint.revert',
+        commandId: 'cmd-revert',
+        threadId,
+        turnCount: 0,
+        createdAt: now
+      })
+
+      await expect(readFile(join(cwd, 'note.txt'), 'utf8')).resolves.toBe('before\n')
+      const thread = backend.engine.getThread(threadId)
+      expect(thread.messages.map((message) => message.id)).toEqual(['user:1', 'assistant:1'])
+      expect(thread.checkpoints).toHaveLength(1)
+      await expect(store.hasCheckpoint(cwd, threadId, 1)).resolves.toBe(true)
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
   })
 })

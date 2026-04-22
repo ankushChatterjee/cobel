@@ -347,6 +347,8 @@ export function HomePage(): React.JSX.Element {
   const [selectedDiffTurnId, setSelectedDiffTurnId] = useState<string | null>(null)
   const [selectedDiffFilePath, setSelectedDiffFilePath] = useState<string | null>(null)
   const [diffPreview, setDiffPreview] = useState<DiffPreviewState | null>(null)
+  const [pendingRevertTurnCount, setPendingRevertTurnCount] = useState<number | null>(null)
+  const [workspaceDiffVersion, setWorkspaceDiffVersion] = useState(0)
 
   const activeProject = useMemo(
     () => shell.projects.find((p) => p.id === selection.activeProjectId) ?? null,
@@ -880,13 +882,14 @@ export function HomePage(): React.JSX.Element {
     []
   )
 
+  const requestRevertToCheckpoint = useCallback((turnCount: number): Promise<void> => {
+    setPendingRevertTurnCount(turnCount)
+    return Promise.resolve()
+  }, [])
+
   const revertToCheckpoint = useCallback(
     async (turnCount: number): Promise<void> => {
       if (!activeThreadId) return
-      const confirmed = window.confirm(
-        `Revert workspace and conversation to checkpoint ${turnCount}? This restores files and rolls back newer assistant turns.`
-      )
-      if (!confirmed) return
       setError(null)
       try {
         await window.agentApi.dispatchCommand({
@@ -896,6 +899,8 @@ export function HomePage(): React.JSX.Element {
           turnCount,
           createdAt: new Date().toISOString()
         })
+        setPendingRevertTurnCount(null)
+        setWorkspaceDiffVersion((version) => version + 1)
       } catch (revertError) {
         setError(revertError instanceof Error ? revertError.message : String(revertError))
       }
@@ -1170,11 +1175,11 @@ export function HomePage(): React.JSX.Element {
                 onOpenDiff={(turnId, filePath) =>
                   openDiffPanel({ mode: turnId ? 'turn' : 'full', turnId, filePath })
                 }
-                onRevert={revertToCheckpoint}
+                onRevert={requestRevertToCheckpoint}
               />
             )}
             {sessionError ? <SessionErrorBanner message={sessionError} /> : null}
-            {error ? <p className="error-line">{error}</p> : null}
+            {error ? <p className="error-line">{errorMessageForDisplay(error)}</p> : null}
             <div ref={bottomRef} />
           </section>
 
@@ -1182,7 +1187,9 @@ export function HomePage(): React.JSX.Element {
             <div className="composer-stack">
               <div className="floating-diff-row">
                 <FloatingDiffPill
+                  threadId={activeThreadId}
                   summaries={thread?.checkpoints ?? []}
+                  workspaceDiffVersion={workspaceDiffVersion}
                   onOpen={() => openDiffPanel({ mode: 'full' })}
                 />
               </div>
@@ -1217,6 +1224,7 @@ export function HomePage(): React.JSX.Element {
           wrapLines={diffWrapLines}
           selectedTurnId={selectedDiffTurnId}
           selectedFilePath={selectedDiffFilePath}
+          workspaceDiffVersion={workspaceDiffVersion}
           onModeChange={setDiffPanelMode}
           onDiffStyleChange={setDiffStyleMode}
           onWrapLinesChange={setDiffWrapLines}
@@ -1231,6 +1239,12 @@ export function HomePage(): React.JSX.Element {
           onResizeMove={resizeDiffPanel}
           onResizeEnd={stopDiffPanelResize}
           onResizeKeyDown={handleDiffPanelResizeKeyDown}
+        />
+        <RevertWarningDialog
+          turnCount={pendingRevertTurnCount}
+          workspacePath={activeProject?.path ?? thread?.cwd ?? null}
+          onCancel={() => setPendingRevertTurnCount(null)}
+          onConfirm={(turnCount) => void revertToCheckpoint(turnCount)}
         />
       </main>
     </div>
@@ -1879,6 +1893,74 @@ const MessageRow = memo(function MessageRow({
   )
 })
 
+function RevertWarningDialog({
+  turnCount,
+  workspacePath,
+  onCancel,
+  onConfirm
+}: {
+  turnCount: number | null
+  workspacePath: string | null
+  onCancel: () => void
+  onConfirm: (turnCount: number) => void
+}): React.JSX.Element | null {
+  useEffect(() => {
+    if (turnCount === null) return
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === 'Escape') onCancel()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onCancel, turnCount])
+
+  if (turnCount === null) return null
+
+  return (
+    <div className="revert-warning-layer" role="presentation">
+      <button
+        type="button"
+        className="revert-warning-scrim"
+        aria-label="Cancel revert"
+        onClick={onCancel}
+      />
+      <section
+        className="revert-warning-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="revert-warning-title"
+        aria-describedby="revert-warning-description"
+      >
+        <div className="revert-warning-icon" aria-hidden="true">
+          <TriangleAlert size={15} strokeWidth={2} />
+        </div>
+        <div className="revert-warning-copy">
+          <p className="revert-warning-kicker">Checkpoint {turnCount}</p>
+          <h2 id="revert-warning-title">Restore files to this snapshot?</h2>
+          <p id="revert-warning-description">
+            This only changes files in the worktree. The chat history stays intact, but the restore
+            can overwrite or remove changes made by another thread, by you, or by tools since this
+            checkpoint.
+          </p>
+          {workspacePath ? <code>{workspacePath}</code> : null}
+        </div>
+        <div className="revert-warning-actions">
+          <button type="button" className="revert-warning-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="revert-warning-primary"
+            onClick={() => onConfirm(turnCount)}
+          >
+            <RotateCcw size={13} strokeWidth={2} />
+            Restore files
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 const MarkdownMessage = memo(function MarkdownMessage({
   text,
   isStreaming
@@ -2234,6 +2316,7 @@ const SessionErrorBanner = memo(function SessionErrorBanner({
 }: {
   message: string
 }): React.JSX.Element {
+  const displayMessage = errorMessageForDisplay(message)
   return (
     <div className="session-error-banner" role="alert" aria-live="assertive">
       <span className="session-error-icon" aria-hidden="true">
@@ -2241,7 +2324,7 @@ const SessionErrorBanner = memo(function SessionErrorBanner({
       </span>
       <div className="session-error-body">
         <p className="session-error-title">Codex returned an error</p>
-        <p className="session-error-message">{renderTextWithLinks(message)}</p>
+        <p className="session-error-message">{renderTextWithLinks(displayMessage)}</p>
       </div>
     </div>
   )
@@ -2497,6 +2580,24 @@ function readSessionErrorForDisplay(thread: OrchestrationThread | null): string 
         isRuntimeError(activity) && normalizeErrorMessage(activity.summary) === normalizedMessage
     ) ?? false
   return hasMatchingRuntimeError ? null : message
+}
+
+function errorMessageForDisplay(error: unknown): string {
+  return sanitizeDisplayedError(error instanceof Error ? error.message : String(error))
+}
+
+function sanitizeDisplayedError(message: string): string {
+  let normalized = stripAnsi(message).trim().replace(/\s+/g, ' ')
+  normalized = normalized.replace(/^Error invoking remote method '[^']+':\s*/i, '')
+  normalized = normalized.replace(/^Error:\s*/i, '')
+  if (/^No active Codex session for thread:/i.test(normalized)) {
+    return 'Codex session ended. Send your message again to start a fresh session.'
+  }
+  return normalized
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
 }
 
 function normalizeErrorMessage(message: string): string {

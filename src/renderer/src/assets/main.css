@@ -710,6 +710,162 @@
   text-align: left;
 }
 
+/* ── Revert warning ───────────────────────────────────────── */
+
+.revert-warning-layer {
+  position: absolute;
+  inset: 48px 0 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+}
+
+.revert-warning-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(2, 2, 4, 0.46);
+  cursor: default;
+  pointer-events: all;
+  backdrop-filter: blur(8px);
+}
+
+.revert-warning-dialog {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 12px;
+  width: min(500px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  background: rgba(13, 13, 16, 0.98);
+  box-shadow:
+    0 22px 64px rgba(0, 0, 0, 0.42),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  padding: 16px;
+  pointer-events: all;
+  animation: revert-warning-in 0.16s ease-out;
+}
+
+.revert-warning-icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid rgba(248, 113, 113, 0.16);
+  border-radius: 999px;
+  background: rgba(248, 113, 113, 0.045);
+  color: rgba(252, 165, 165, 0.82);
+}
+
+.revert-warning-copy {
+  min-width: 0;
+}
+
+.revert-warning-kicker {
+  margin: 0 0 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.revert-warning-copy h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14.5px;
+  font-weight: 720;
+  letter-spacing: 0;
+  line-height: 1.3;
+}
+
+.revert-warning-copy p:not(.revert-warning-kicker) {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.25px;
+  line-height: 1.55;
+}
+
+.revert-warning-copy code {
+  display: block;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.028);
+  color: var(--text-muted);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  padding: 7px 8px;
+}
+
+.revert-warning-actions {
+  grid-column: 2;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.revert-warning-secondary,
+.revert-warning-primary {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: var(--radius-sm);
+  padding: 0 11px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.revert-warning-secondary {
+  border: 1px solid var(--border-medium);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.revert-warning-secondary:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.revert-warning-primary {
+  border: 1px solid rgba(248, 113, 113, 0.24);
+  background: rgba(248, 113, 113, 0.075);
+  color: rgba(254, 202, 202, 0.92);
+}
+
+.revert-warning-primary:hover {
+  border-color: rgba(248, 113, 113, 0.38);
+  background: rgba(248, 113, 113, 0.11);
+  color: #fecaca;
+}
+
+@keyframes revert-warning-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 /* ── Diff review pills ───────────────────────────────────── */
 
 .changed-files-strip {

@@ -14,6 +14,7 @@ import { Check, ChevronDown, Search } from 'lucide-react'
 import type {
   CheckpointDiffResult,
   CheckpointFileChange,
+  CheckpointWorktreeDiffResult,
   OrchestrationCheckpointSummary
 } from '../../../../shared/agent'
 
@@ -33,7 +34,9 @@ interface ChangedFilePillsProps {
 }
 
 interface FloatingDiffPillProps {
+  threadId: string | null
   summaries: OrchestrationCheckpointSummary[]
+  workspaceDiffVersion: number
   onOpen: () => void
 }
 
@@ -46,6 +49,7 @@ interface DiffReviewSidebarProps {
   wrapLines: boolean
   selectedTurnId: string | null
   selectedFilePath: string | null
+  workspaceDiffVersion: number
   onModeChange: (mode: DiffPanelMode) => void
   onDiffStyleChange: (style: DiffStyleMode) => void
   onWrapLinesChange: (wrap: boolean) => void
@@ -150,12 +154,21 @@ export const ChangedFilePills = memo(function ChangedFilePills({
 })
 
 export const FloatingDiffPill = memo(function FloatingDiffPill({
+  threadId,
   summaries,
+  workspaceDiffVersion,
   onOpen
 }: FloatingDiffPillProps): React.JSX.Element | null {
   const ready = summaries.filter((summary) => summary.status === 'ready')
+  const { result } = useCheckpointWorktreeDiff(
+    threadId,
+    0,
+    ready.length > 0,
+    workspaceDiffVersion
+  )
   if (ready.length === 0) return null
-  const totals = summarizeFiles(ready.flatMap((summary) => summary.files))
+  const files = result?.files ?? ready.flatMap((summary) => summary.files)
+  const totals = summarizeFiles(files)
   if (totals.additions === 0 && totals.deletions === 0) return null
   return (
     <button type="button" className="floating-diff-pill" onClick={onOpen} title="Open review diff">
@@ -175,6 +188,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   wrapLines,
   selectedTurnId,
   selectedFilePath,
+  workspaceDiffVersion,
   onModeChange,
   onDiffStyleChange,
   onWrapLinesChange,
@@ -211,6 +225,12 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
       : latest
         ? { fromTurnCount: 0, toTurnCount: latest.checkpointTurnCount }
         : null
+  const worktreeDiff = useCheckpointWorktreeDiff(
+    threadId,
+    0,
+    open && mode !== 'turn' && readySummaries.length > 0,
+    workspaceDiffVersion
+  )
   const headerCopy =
     mode === 'turn' && selectedTurn
       ? {
@@ -222,9 +242,14 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
         }
       : {
           title: 'All changes',
-          subtitle: summarizeFiles(readySummaries.flatMap((summary) => summary.files))
+          subtitle: summarizeFiles(
+            worktreeDiff.result?.files ?? readySummaries.flatMap((summary) => summary.files)
+          )
         }
-  const { result, loading, error } = useCheckpointDiff(threadId, range, open)
+  const checkpointDiff = useCheckpointDiff(threadId, range, open && mode === 'turn')
+  const result = mode === 'turn' ? checkpointDiff.result : worktreeDiff.result
+  const loading = mode === 'turn' ? checkpointDiff.loading : worktreeDiff.loading
+  const error = mode === 'turn' ? checkpointDiff.error : worktreeDiff.error
   const files = useMemo(() => parsePatch(result?.diff ?? '', range), [result?.diff, range])
   const visibleFiles = selectedFilePath
     ? files.filter((file) => file.name === selectedFilePath || file.prevName === selectedFilePath)
@@ -240,7 +265,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
     const summaryFiles =
       mode === 'turn' && selectedTurn
         ? selectedTurn.files
-        : readySummaries.flatMap((summary) => summary.files)
+        : (worktreeDiff.result?.files ?? readySummaries.flatMap((summary) => summary.files))
     const byPath = new Map<
       string,
       { path: string; label: string; detail: string }
@@ -253,7 +278,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
       })
     }
     return [...byPath.values()]
-  }, [files, mode, readySummaries, selectedTurn])
+  }, [files, mode, readySummaries, selectedTurn, worktreeDiff.result?.files])
   const selectedFile = selectedFilePath
     ? fileChoices.find((file) => file.path === selectedFilePath)
     : null
@@ -607,6 +632,46 @@ function useCheckpointDiff(
   return { result, loading, error }
 }
 
+function useCheckpointWorktreeDiff(
+  threadId: string | null,
+  fromTurnCount: number,
+  enabled: boolean,
+  version: number
+): { result: CheckpointWorktreeDiffResult | null; loading: boolean; error: string | null } {
+  const [result, setResult] = useState<CheckpointWorktreeDiffResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const latestKeyRef = useRef<string | null>(null)
+  const key = threadId ? `${threadId}:${fromTurnCount}:worktree:${version}` : null
+
+  useEffect(() => {
+    if (!enabled || !threadId || !key) {
+      setResult(null)
+      setLoading(false)
+      setError(null)
+      return
+    }
+    latestKeyRef.current = key
+    setLoading(true)
+    setError(null)
+    void window.agentApi
+      .getCheckpointWorktreeDiff({ threadId, fromTurnCount })
+      .then((nextResult) => {
+        if (latestKeyRef.current !== key) return
+        setResult(nextResult)
+      })
+      .catch((loadError) => {
+        if (latestKeyRef.current !== key) return
+        setError(loadError instanceof Error ? loadError.message : String(loadError))
+      })
+      .finally(() => {
+        if (latestKeyRef.current === key) setLoading(false)
+      })
+  }, [enabled, fromTurnCount, key, threadId])
+
+  return { result, loading, error }
+}
+
 function parsePatch(
   patch: string,
   range: { fromTurnCount: number; toTurnCount: number } | null
@@ -670,7 +735,7 @@ function DiffEmptyState({ label, tone }: { label: string; tone?: 'error' }): Rea
   return <div className={`diff-empty-state ${tone ?? ''}`}>{label}</div>
 }
 
-export function summarizeFiles(files: CheckpointFileChange[]): {
+function summarizeFiles(files: CheckpointFileChange[]): {
   additions: number
   deletions: number
 } {

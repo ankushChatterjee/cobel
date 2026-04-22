@@ -2,6 +2,8 @@ import type {
   ClientOrchestrationCommand,
   CheckpointDiffRequest,
   CheckpointDiffResult,
+  CheckpointWorktreeDiffRequest,
+  CheckpointWorktreeDiffResult,
   DispatchResult,
   OrchestrationShellSnapshot,
   OrchestrationShellStreamItem,
@@ -274,6 +276,22 @@ export class AgentBackend {
     return { ...input, ...result }
   }
 
+  async getCheckpointWorktreeDiff(
+    input: CheckpointWorktreeDiffRequest
+  ): Promise<CheckpointWorktreeDiffResult> {
+    const thread = this.engine.getThread(input.threadId)
+    if (!thread.cwd) throw new Error('No workspace is attached to this thread.')
+    if (input.fromTurnCount < 0) {
+      throw new Error('Checkpoint turn counts must be non-negative.')
+    }
+    const result = await this.checkpointStore.diffCheckpointToWorktree(
+      thread.cwd,
+      input.threadId,
+      input.fromTurnCount
+    )
+    return { ...input, ...result }
+  }
+
   async drain(): Promise<void> {
     await this.ingestion.drain()
     await this.checkpointReactor.drain()
@@ -307,24 +325,6 @@ export class AgentBackend {
     }
 
     await this.checkpointStore.restoreCheckpoint(thread.cwd, input.threadId, input.turnCount)
-    const rolledBackTurns = latestTurnCount - input.turnCount
-    if (rolledBackTurns > 0) {
-      await this.providers.rollbackConversation(this.providerForThread(input.threadId), {
-        threadId: input.threadId,
-        numTurns: rolledBackTurns
-      })
-    }
-    await this.checkpointStore.deleteCheckpointsNewerThan(
-      thread.cwd,
-      input.threadId,
-      input.turnCount
-    )
-    this.engine.revertThread({
-      threadId: input.threadId,
-      turnCount: input.turnCount,
-      commandId: input.commandId,
-      createdAt: input.createdAt
-    })
   }
 }
 

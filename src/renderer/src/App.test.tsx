@@ -464,6 +464,44 @@ describe('renderer app', () => {
     expect(screen.getAllByText(/codex returned an error/i)).toHaveLength(1)
   })
 
+  it('does not show Electron IPC boilerplate for command errors', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    const dispatchCommand = vi.mocked(window.agentApi.dispatchCommand)
+    const defaultDispatchCommand = dispatchCommand.getMockImplementation()
+    dispatchCommand.mockImplementation(async (input) => {
+      if (input.type === 'thread.turn.start') {
+        throw new Error(
+          "Error invoking remote method 'agent:dispatch-command': Error: No active Codex session for thread: project:users-ankush-codespace-gencode:chat:abc"
+        )
+      }
+      return defaultDispatchCommand?.(input) ?? {
+        accepted: true,
+        commandId: input.commandId,
+        threadId: 'threadId' in input ? input.threadId : '',
+        turnId: 'turn:test'
+      }
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    const composer = await screen.findByRole('textbox', { name: /ask codex/i })
+    await user.type(composer, 'Run tests')
+    await user.click(screen.getByRole('button', { name: /send/i }))
+
+    expect(
+      await screen.findByText(
+        'Codex session ended. Send your message again to start a fresh session.'
+      )
+    ).toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent('Error invoking remote method')
+    expect(document.body).not.toHaveTextContent('agent:dispatch-command')
+    expect(document.body).not.toHaveTextContent('project:users-ankush-codespace-gencode')
+  })
+
   it('renders runtime warnings with an icon instead of a text label', async () => {
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     window.agentApi.subscribeThread = vi.fn((_input, listener) => {

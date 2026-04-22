@@ -32,6 +32,28 @@ export class CheckpointStore {
 
   async captureCheckpoint(cwd: string, threadId: string, turnCount: number): Promise<void> {
     const ref = this.checkpointRef(threadId, turnCount)
+    const commitOid = await this.captureWorktreeCommit(cwd, `cobel checkpoint ${turnCount}`)
+    await this.git(cwd, ['update-ref', ref, commitOid])
+  }
+
+  async diffCheckpointToWorktree(
+    cwd: string,
+    threadId: string,
+    fromTurnCount: number
+  ): Promise<{ diff: string; files: CheckpointFileChange[]; truncated: boolean }> {
+    const fromCommit = await this.requireCheckpointCommit(cwd, threadId, fromTurnCount)
+    const worktreeCommit = await this.captureWorktreeCommit(
+      cwd,
+      `cobel worktree snapshot from ${fromTurnCount}`
+    )
+    const [diff, files] = await Promise.all([
+      this.diffCommits(cwd, fromCommit, worktreeCommit),
+      this.summarizeCommits(cwd, fromCommit, worktreeCommit)
+    ])
+    return { ...diff, files }
+  }
+
+  private async captureWorktreeCommit(cwd: string, message: string): Promise<string> {
     const tempDir = await mkdtemp(join(tmpdir(), 'cobel-checkpoint-'))
     const tempIndexPath = join(tempDir, `index-${randomUUID()}`)
     const env: NodeJS.ProcessEnv = {
@@ -51,12 +73,12 @@ export class CheckpointStore {
       const treeOid = (await this.git(cwd, ['write-tree'], { env })).stdout.trim()
       if (!treeOid) throw new Error('git write-tree returned an empty tree oid.')
       const commitOid = (
-        await this.git(cwd, ['commit-tree', treeOid, '-m', `cobel checkpoint ${turnCount}`], {
+        await this.git(cwd, ['commit-tree', treeOid, '-m', message], {
           env
         })
       ).stdout.trim()
       if (!commitOid) throw new Error('git commit-tree returned an empty commit oid.')
-      await this.git(cwd, ['update-ref', ref, commitOid])
+      return commitOid
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }
@@ -70,6 +92,25 @@ export class CheckpointStore {
   ): Promise<{ diff: string; truncated: boolean }> {
     const fromCommit = await this.requireCheckpointCommit(cwd, threadId, fromTurnCount)
     const toCommit = await this.requireCheckpointCommit(cwd, threadId, toTurnCount)
+    return this.diffCommits(cwd, fromCommit, toCommit)
+  }
+
+  async summarizeDiff(
+    cwd: string,
+    threadId: string,
+    fromTurnCount: number,
+    toTurnCount: number
+  ): Promise<CheckpointFileChange[]> {
+    const fromCommit = await this.requireCheckpointCommit(cwd, threadId, fromTurnCount)
+    const toCommit = await this.requireCheckpointCommit(cwd, threadId, toTurnCount)
+    return this.summarizeCommits(cwd, fromCommit, toCommit)
+  }
+
+  private async diffCommits(
+    cwd: string,
+    fromCommit: string,
+    toCommit: string
+  ): Promise<{ diff: string; truncated: boolean }> {
     const result = await this.git(
       cwd,
       ['diff', '--patch', '--minimal', '--find-renames', '--no-color', fromCommit, toCommit],
@@ -84,14 +125,11 @@ export class CheckpointStore {
     }
   }
 
-  async summarizeDiff(
+  private async summarizeCommits(
     cwd: string,
-    threadId: string,
-    fromTurnCount: number,
-    toTurnCount: number
+    fromCommit: string,
+    toCommit: string
   ): Promise<CheckpointFileChange[]> {
-    const fromCommit = await this.requireCheckpointCommit(cwd, threadId, fromTurnCount)
-    const toCommit = await this.requireCheckpointCommit(cwd, threadId, toTurnCount)
     const [nameStatus, numStat] = await Promise.all([
       this.git(cwd, [
         'diff',
