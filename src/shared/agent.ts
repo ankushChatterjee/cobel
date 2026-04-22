@@ -222,10 +222,42 @@ export interface OrchestrationProposedPlan {
   updatedAt: string
 }
 
+export type CheckpointFileKind = 'added' | 'modified' | 'deleted' | 'renamed'
+
+export type CheckpointStatus = 'ready' | 'missing' | 'error'
+
+export interface CheckpointFileChange {
+  path: string
+  oldPath?: string
+  kind: CheckpointFileKind
+  additions: number
+  deletions: number
+  binary?: boolean
+}
+
 export interface OrchestrationCheckpointSummary {
   id: string
-  label: string
-  createdAt: string
+  turnId: string
+  assistantMessageId?: string
+  checkpointTurnCount: number
+  status: CheckpointStatus
+  files: CheckpointFileChange[]
+  completedAt: string
+  errorMessage?: string
+}
+
+export interface CheckpointDiffRequest {
+  threadId: string
+  fromTurnCount: number
+  toTurnCount: number
+}
+
+export interface CheckpointDiffResult {
+  threadId: string
+  fromTurnCount: number
+  toTurnCount: number
+  diff: string
+  truncated: boolean
 }
 
 export interface OrchestrationSession {
@@ -313,6 +345,21 @@ export type OrchestrationEvent =
     })
   | (OrchestrationEventMeta & {
       sequence: number
+      type: 'thread.turn-diff-completed'
+      threadId: string
+      checkpoint: OrchestrationCheckpointSummary
+      createdAt: string
+    })
+  | (OrchestrationEventMeta & {
+      sequence: number
+      type: 'thread.reverted'
+      threadId: string
+      turnCount: number
+      revertedAt: string
+      createdAt: string
+    })
+  | (OrchestrationEventMeta & {
+      sequence: number
       type: 'thread.created'
       threadId: string
       projectId: string
@@ -371,6 +418,13 @@ export type ClientOrchestrationCommand =
       type: 'thread.session.stop'
       commandId: string
       threadId: string
+      createdAt: string
+    }
+  | {
+      type: 'thread.checkpoint.revert'
+      commandId: string
+      threadId: string
+      turnCount: number
       createdAt: string
     }
   | {
@@ -501,9 +555,7 @@ export interface AgentApi {
     input: { threadId: string },
     listener: (item: OrchestrationThreadStreamItem) => void
   ): () => void
-  subscribeShell(
-    listener: (item: OrchestrationShellStreamItem) => void
-  ): () => void
+  subscribeShell(listener: (item: OrchestrationShellStreamItem) => void): () => void
   getShellSnapshot(): Promise<OrchestrationShellSnapshot>
   interruptTurn(input: InterruptTurnInput): Promise<void>
   respondToApproval(input: RespondToApprovalInput): Promise<void>
@@ -512,6 +564,7 @@ export interface AgentApi {
   listProviders(): Promise<ProviderSummary[]>
   listModels(): Promise<ModelInfo[]>
   clearThread(input: { threadId: string }): Promise<void>
+  getCheckpointDiff(input: CheckpointDiffRequest): Promise<CheckpointDiffResult>
   openWorkspaceFolder(): Promise<OpenWorkspaceFolderResult | null>
   revealPath(input: { path: string }): Promise<void>
 }

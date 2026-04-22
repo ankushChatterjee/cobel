@@ -53,6 +53,13 @@ export class ProviderService {
     await this.getAdapter(provider).interruptTurn(input)
   }
 
+  async rollbackConversation(
+    provider: ProviderId,
+    input: { threadId: string; numTurns: number }
+  ): Promise<void> {
+    await this.getAdapter(provider).rollbackConversation(input)
+  }
+
   async respondToApproval(provider: ProviderId, input: RespondToApprovalInput): Promise<void> {
     await this.getAdapter(provider).respondToApproval(input)
   }

@@ -638,6 +638,28 @@
   gap: 4px;
 }
 
+.message-revert-button {
+  height: 18px;
+  border: 1px solid rgba(248, 113, 113, 0.24);
+  border-radius: 999px;
+  background: rgba(248, 113, 113, 0.06);
+  color: rgba(248, 113, 113, 0.92);
+  padding: 0 7px;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 16px;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.message-revert-button:hover {
+  border-color: rgba(248, 113, 113, 0.46);
+  background: rgba(248, 113, 113, 0.11);
+  color: #fecaca;
+}
+
 .message p {
   margin: 0;
   color: var(--text-primary);
@@ -654,6 +676,141 @@
   border-radius: var(--radius-md);
   padding: 9px 13px;
   text-align: left;
+}
+
+/* ── Diff review pills ───────────────────────────────────── */
+
+.changed-files-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  min-width: 0;
+}
+
+.changed-files-strip.error {
+  align-items: baseline;
+  color: var(--error);
+  font-size: 11px;
+}
+
+.changed-files-strip.error code {
+  color: rgba(248, 113, 113, 0.72);
+  font-size: 11px;
+}
+
+.changed-files-total,
+.changed-file-pill,
+.changed-file-more,
+.floating-diff-pill {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    transform 0.14s ease,
+    border-color 0.14s ease,
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.changed-files-total {
+  height: 27px;
+  gap: 8px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.changed-file-pills {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.changed-file-pill {
+  height: 27px;
+  gap: 6px;
+  padding: 0 8px 0 7px;
+  animation: diff-pill-in 0.24s ease-out both;
+  animation-delay: calc(var(--pill-index, 0) * 24ms);
+  font-size: 11px;
+}
+
+.changed-file-more {
+  height: 27px;
+  padding: 0 9px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.changed-files-total:hover,
+.changed-file-pill:hover,
+.changed-file-more:hover,
+.floating-diff-pill:hover {
+  transform: translateY(-1px);
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.09);
+  color: var(--text-primary);
+}
+
+.file-kind {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--tool-edit);
+}
+
+.file-kind.deleted {
+  background: var(--error);
+}
+
+.file-kind.renamed {
+  background: var(--tool-terminal);
+}
+
+.file-kind.modified {
+  background: var(--accent-primary);
+}
+
+.changed-file-name {
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diff-stats {
+  display: inline-flex;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.diff-stats .additions {
+  color: #86efac;
+}
+
+.diff-stats .deletions {
+  color: #fca5a5;
+}
+
+@keyframes diff-pill-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .markdown-body {
@@ -1331,13 +1488,56 @@
   pointer-events: none;
 }
 
-.composer-wrap .composer {
+.composer-stack {
+  width: 100%;
+  max-width: 850px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.composer-wrap .composer,
+.floating-diff-row {
   pointer-events: all;
+}
+
+.floating-diff-row {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.floating-diff-row:empty {
+  display: none;
+}
+
+.floating-diff-pill {
+  position: relative;
+  z-index: 12;
+  height: 30px;
+  gap: 7px;
+  padding: 0 11px;
+  background: rgba(17, 17, 21, 0.9);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.36),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  font-size: 11.5px;
+  font-weight: 650;
+  backdrop-filter: blur(18px);
+}
+
+.floating-diff-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent-primary);
+  box-shadow: 0 0 12px var(--accent-glow);
 }
 
 .composer {
   width: 100%;
-  max-width: 850px;
   min-height: 0;
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-lg);
@@ -1612,6 +1812,401 @@
   opacity: 0.22;
 }
 
+/* ── Diff preview and sidebar ────────────────────────────── */
+
+.diff-popover-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.diff-preview-popover {
+  position: fixed;
+  z-index: 81;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(420px, calc(100vh - 32px));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: var(--radius-md);
+  background: rgba(13, 13, 16, 0.96);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.52),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  animation: diff-popover-in 0.14s ease-out;
+  backdrop-filter: blur(22px);
+}
+
+.diff-preview-header,
+.diff-review-header,
+.diff-review-controls {
+  display: flex;
+  align-items: center;
+}
+
+.diff-preview-header {
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+}
+
+.diff-preview-header p,
+.diff-review-header p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.diff-preview-header span,
+.diff-review-header span {
+  display: block;
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-preview-header button,
+.diff-close-button,
+.diff-toggle,
+.diff-segmented-control button {
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.diff-preview-header button {
+  height: 24px;
+  padding: 0 9px;
+}
+
+.diff-preview-header button:hover,
+.diff-close-button:hover,
+.diff-toggle:hover,
+.diff-toggle.active {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.09);
+  color: var(--text-primary);
+}
+
+.diff-preview-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.diff-review-sidebar {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  container-type: inline-size;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: min(var(--diff-panel-width, 640px), calc(100vw - var(--sidebar-width, 290px) - 32px));
+  min-width: 420px;
+  overflow: hidden;
+  border-left: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(9, 9, 11, 0.98);
+  box-shadow: -18px 0 56px rgba(0, 0, 0, 0.38);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(32px);
+  transition:
+    transform 0.22s ease,
+    opacity 0.18s ease;
+}
+
+.diff-review-resize-handle {
+  position: absolute;
+  top: 0;
+  left: -5px;
+  z-index: 4;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+}
+
+.diff-review-resize-handle::after {
+  position: absolute;
+  top: 0;
+  left: 4px;
+  width: 1px;
+  height: 100%;
+  background: transparent;
+  content: '';
+  transition:
+    background 0.14s ease,
+    box-shadow 0.14s ease;
+}
+
+.diff-review-resize-handle:hover::after,
+.diff-review-resize-handle:focus-visible::after,
+.diff-panel-resizing .diff-review-resize-handle::after {
+  background: var(--accent-primary);
+  box-shadow: 0 0 14px var(--accent-glow);
+}
+
+.diff-panel-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.diff-review-sidebar.open {
+  opacity: 1;
+  pointer-events: all;
+  transform: translateX(0);
+}
+
+.diff-review-header {
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 42px;
+  padding: 7px 10px 7px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+}
+
+.diff-review-header .diff-stats {
+  display: inline-flex;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.diff-close-button {
+  display: grid;
+  margin-left: auto;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.diff-review-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.diff-segmented-control {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 1px;
+  min-width: 0;
+}
+
+.diff-segmented-control button {
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0 7px;
+  font-size: 11.5px;
+  line-height: 24px;
+}
+
+.diff-segmented-control button:hover,
+.diff-segmented-control button:focus-visible {
+  background: rgba(255, 255, 255, 0.075);
+  color: var(--text-secondary);
+  outline: none;
+}
+
+.diff-segmented-control button.active {
+  background: rgba(255, 255, 255, 0.095);
+  color: var(--text-primary);
+}
+
+.diff-toggle {
+  flex: 0 0 auto;
+  height: 24px;
+  margin-left: auto;
+  padding: 0 9px;
+}
+
+.diff-turn-select {
+  flex: 0 0 auto;
+  height: 24px;
+  max-width: 112px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
+  color: var(--text-secondary);
+  padding: 0 8px;
+  font-size: 11.5px;
+}
+
+.diff-file-picker {
+  position: relative;
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+}
+
+.diff-file-trigger {
+  max-width: min(220px, 100%);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.diff-file-trigger-label {
+  max-width: 140px;
+}
+
+.diff-file-trigger-count {
+  display: inline-grid;
+  min-width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(200, 201, 212, 0.58);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.diff-file-menu {
+  top: calc(100% + 7px);
+  bottom: auto;
+  right: 0;
+  left: auto;
+  z-index: 40;
+  width: max-content;
+  min-width: 190px;
+  max-width: min(320px, calc(100vw - 32px));
+  max-height: min(330px, calc(100vh - 220px));
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-medium) transparent;
+}
+
+@container (max-width: 560px) {
+  .diff-review-controls {
+    align-items: flex-start;
+  }
+
+  .diff-toggle {
+    margin-left: 0;
+  }
+
+  .diff-file-picker {
+    order: 10;
+    flex: 1 0 100%;
+  }
+
+  .diff-file-trigger {
+    max-width: min(260px, 100%);
+  }
+
+  .diff-file-menu {
+    right: auto;
+    left: 0;
+  }
+}
+
+.diff-file-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 1px 5px;
+  padding: 5px 7px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+  color: rgba(200, 201, 212, 0.45);
+}
+
+.diff-file-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  outline: none;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+
+.diff-file-search input::placeholder {
+  color: rgba(200, 201, 212, 0.4);
+}
+
+.diff-file-option {
+  max-width: 100%;
+}
+
+.diff-file-no-results {
+  padding: 7px;
+  color: rgba(200, 201, 212, 0.45);
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+
+.diff-review-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px 18px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-medium) transparent;
+}
+
+.diff-file-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.diff-file-stack > *,
+.diff-preview-body > * {
+  min-width: 0;
+}
+
+.diff-empty-state {
+  display: grid;
+  min-height: 120px;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.diff-empty-state.error {
+  color: var(--error);
+}
+
+@keyframes diff-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 /* ── Utilities ────────────────────────────────────────────── */
 
 .sr-only {
@@ -1646,6 +2241,30 @@
 
   .composer-footer {
     flex-wrap: wrap;
+  }
+
+  .floating-diff-row {
+    padding-right: 6px;
+  }
+
+  .diff-review-sidebar {
+    top: 0;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .diff-review-controls {
+    flex-wrap: wrap;
+  }
+
+  .diff-toggle {
+    margin-left: 0;
+  }
+
+  .diff-preview-popover {
+    left: 12px !important;
+    right: 12px;
+    width: auto;
   }
 
   .tool-details {

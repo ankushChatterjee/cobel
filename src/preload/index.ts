@@ -17,6 +17,7 @@ const agentApi: AgentApi = {
   listProviders: () => ipcRenderer.invoke(AGENT_CHANNELS.listProviders),
   listModels: () => ipcRenderer.invoke(AGENT_CHANNELS.listModels),
   clearThread: (input) => ipcRenderer.invoke(AGENT_CHANNELS.clearThread, input),
+  getCheckpointDiff: (input) => ipcRenderer.invoke(AGENT_CHANNELS.getCheckpointDiff, input),
   openWorkspaceFolder: () => ipcRenderer.invoke(AGENT_CHANNELS.openWorkspaceFolder),
   revealPath: (input) => ipcRenderer.invoke(AGENT_CHANNELS.revealPath, input),
   getShellSnapshot: (): Promise<OrchestrationShellSnapshot> =>
@@ -34,20 +35,13 @@ const agentApi: AgentApi = {
 
     ipcRenderer
       .invoke(AGENT_CHANNELS.subscribeThread, { ...input, subscriptionId })
-      .then(
-        ({
-          snapshot
-        }: {
-          subscriptionId: string
-          snapshot: OrchestrationThreadStreamItem
-        }) => {
-          if (disposed) {
-            void ipcRenderer.invoke(AGENT_CHANNELS.unsubscribeThread, { subscriptionId })
-            return
-          }
-          listener(snapshot)
+      .then(({ snapshot }: { subscriptionId: string; snapshot: OrchestrationThreadStreamItem }) => {
+        if (disposed) {
+          void ipcRenderer.invoke(AGENT_CHANNELS.unsubscribeThread, { subscriptionId })
+          return
         }
-      )
+        listener(snapshot)
+      })
       .catch((error) => {
         console.error('Failed to subscribe to thread', error)
       })
@@ -63,10 +57,7 @@ const agentApi: AgentApi = {
     let disposed = false
     const subscriptionId = `shell:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`
     const channel = AGENT_CHANNELS.shellEvent(subscriptionId)
-    const eventListener = (
-      _event: IpcRendererEvent,
-      item: OrchestrationShellStreamItem
-    ): void => {
+    const eventListener = (_event: IpcRendererEvent, item: OrchestrationShellStreamItem): void => {
       listener(item)
     }
 

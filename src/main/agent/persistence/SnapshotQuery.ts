@@ -5,7 +5,8 @@ import type {
   OrchestrationThreadActivity,
   OrchestrationProposedPlan,
   OrchestrationSession,
-  OrchestrationLatestTurn
+  OrchestrationLatestTurn,
+  OrchestrationCheckpointSummary
 } from '../../../shared/agent'
 import type { ProjectSummary, ThreadShellSummary } from '../../../shared/agent'
 
@@ -63,6 +64,18 @@ interface LatestTurnRow {
   completed_at: string | null
 }
 
+interface CheckpointRow {
+  checkpoint_id: string
+  thread_id: string
+  turn_id: string
+  assistant_message_id: string | null
+  checkpoint_turn_count: number
+  status: string
+  files_json: string
+  completed_at: string
+  error_message: string | null
+}
+
 interface ThreadRow {
   thread_id: string
   project_id: string
@@ -92,7 +105,9 @@ export class SnapshotQuery {
   getShellSnapshot(): { projects: ProjectSummary[]; threads: ThreadShellSummary[] } {
     const projects = (
       this.db
-        .prepare(`SELECT * FROM projection_projects WHERE deleted_at IS NULL ORDER BY created_at ASC`)
+        .prepare(
+          `SELECT * FROM projection_projects WHERE deleted_at IS NULL ORDER BY created_at ASC`
+        )
         .all() as ProjectRow[]
     ).map(projectRowToSummary)
 
@@ -150,13 +165,19 @@ export class SnapshotQuery {
       .prepare(`SELECT * FROM projection_latest_turns WHERE thread_id = ?`)
       .get(threadId) as LatestTurnRow | undefined
 
-    const session: OrchestrationSession | null = sessionRow
-      ? sessionRowToSession(sessionRow)
-      : null
+    const session: OrchestrationSession | null = sessionRow ? sessionRowToSession(sessionRow) : null
 
     const latestTurn: OrchestrationLatestTurn | null = latestTurnRow
       ? latestTurnRowToTurn(latestTurnRow)
       : null
+
+    const checkpoints = (
+      this.db
+        .prepare(
+          `SELECT * FROM projection_thread_checkpoints WHERE thread_id = ? ORDER BY checkpoint_turn_count ASC`
+        )
+        .all(threadId) as CheckpointRow[]
+    ).map(checkpointRowToCheckpoint)
 
     return {
       id: threadRow.thread_id,
@@ -168,7 +189,7 @@ export class SnapshotQuery {
       proposedPlans,
       session,
       latestTurn,
-      checkpoints: [],
+      checkpoints,
       createdAt: threadRow.created_at,
       updatedAt: threadRow.updated_at,
       archivedAt: threadRow.archived_at ?? null
@@ -259,6 +280,19 @@ function latestTurnRowToTurn(row: LatestTurnRow): OrchestrationLatestTurn {
     status: row.status as OrchestrationLatestTurn['status'],
     startedAt: row.started_at,
     completedAt: row.completed_at ?? null
+  }
+}
+
+function checkpointRowToCheckpoint(row: CheckpointRow): OrchestrationCheckpointSummary {
+  return {
+    id: row.checkpoint_id,
+    turnId: row.turn_id,
+    assistantMessageId: row.assistant_message_id ?? undefined,
+    checkpointTurnCount: row.checkpoint_turn_count,
+    status: row.status as OrchestrationCheckpointSummary['status'],
+    files: row.files_json ? tryParse(row.files_json) : [],
+    completedAt: row.completed_at,
+    errorMessage: row.error_message ?? undefined
   }
 }
 

@@ -46,7 +46,9 @@ import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import type {
   ModelInfo,
   OpenWorkspaceFolderResult,
+  CheckpointFileChange,
   OrchestrationEvent,
+  OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationShellSnapshot,
   OrchestrationThread,
@@ -57,6 +59,15 @@ import type {
   ThreadShellSummary
 } from '../../../shared/agent'
 import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
+import {
+  ChangedFilePills,
+  DiffPreviewPopover,
+  DiffReviewSidebar,
+  FloatingDiffPill,
+  type DiffPanelMode,
+  type DiffPreviewState,
+  type DiffStyleMode
+} from '../components/diff/DiffReview'
 
 const activeSelectionKey = 'cobel.active.v1'
 const legacyActiveSelectionKeys = ['patronus.active.v1', 'gencode.active.v1']
@@ -65,10 +76,14 @@ const threadComposerPreferencesKey = 'cobel.thread-composer-prefs.v1'
 const legacyThreadComposerPreferencesKeys = ['patronus.thread-composer-prefs.v1']
 const sidebarWidthKey = 'cobel.sidebar-width.v1'
 const legacySidebarWidthKeys = ['patronus.sidebar-width.v1']
+const diffPanelWidthKey = 'cobel.diff-panel-width.v1'
 const defaultRuntimeMode: RuntimeMode = 'auto-accept-edits'
 const defaultSidebarWidth = 290
 const minSidebarWidth = 184
 const maxSidebarWidth = 420
+const defaultDiffPanelWidth = 640
+const minDiffPanelWidth = 420
+const maxDiffPanelWidth = 920
 
 SyntaxHighlighter.registerLanguage('bash', bash)
 SyntaxHighlighter.registerLanguage('css', css)
@@ -149,9 +164,7 @@ function loadThreadComposerPreferences(): ThreadComposerPreferenceMap {
     const storedPreferences =
       localStorage.getItem(threadComposerPreferencesKey) ??
       legacyThreadComposerPreferencesKeys.map((key) => localStorage.getItem(key)).find(Boolean)
-    const parsed = JSON.parse(
-      storedPreferences ?? 'null'
-    ) as Record<string, unknown> | null
+    const parsed = JSON.parse(storedPreferences ?? 'null') as Record<string, unknown> | null
     if (!parsed || typeof parsed !== 'object') return {}
     const preferences: ThreadComposerPreferenceMap = {}
     for (const [threadId, value] of Object.entries(parsed)) {
@@ -192,6 +205,25 @@ function loadSidebarWidth(): number {
 
 function saveSidebarWidth(width: number): void {
   localStorage.setItem(sidebarWidthKey, String(clampSidebarWidth(width)))
+}
+
+function clampDiffPanelWidth(width: number): number {
+  return Math.min(maxDiffPanelWidth, Math.max(minDiffPanelWidth, Math.round(width)))
+}
+
+function loadDiffPanelWidth(): number {
+  try {
+    const storedWidth = localStorage.getItem(diffPanelWidthKey)
+    if (!storedWidth) return defaultDiffPanelWidth
+    const parsed = Number(storedWidth)
+    return Number.isFinite(parsed) ? clampDiffPanelWidth(parsed) : defaultDiffPanelWidth
+  } catch {
+    return defaultDiffPanelWidth
+  }
+}
+
+function saveDiffPanelWidth(width: number): void {
+  localStorage.setItem(diffPanelWidthKey, String(clampDiffPanelWidth(width)))
 }
 
 function pickDefaultModel(models: ModelInfo[]): string {
@@ -290,6 +322,7 @@ export function HomePage(): React.JSX.Element {
   const [threadComposerPreferences, setThreadComposerPreferences] =
     useState<ThreadComposerPreferenceMap>(loadThreadComposerPreferences)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
+  const [diffPanelWidth, setDiffPanelWidth] = useState(loadDiffPanelWidth)
   const [openProjectIds, setOpenProjectIds] = useState<Set<string>>(() => new Set())
   const [thread, setThread] = useState<OrchestrationThread | null>(null)
   const [providers, setProviders] = useState<ProviderSummary[]>([])
@@ -299,6 +332,7 @@ export function HomePage(): React.JSX.Element {
   const [model, setModel] = useState<string>('')
   const lastSequenceRef = useRef(0)
   const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const diffPanelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const conversationRef = useRef<HTMLElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const shouldStickToBottomRef = useRef(true)
@@ -306,6 +340,13 @@ export function HomePage(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(() => new Set())
   const [isPendingThinking, setIsPendingThinking] = useState(false)
+  const [diffPanelOpen, setDiffPanelOpen] = useState(false)
+  const [diffPanelMode, setDiffPanelMode] = useState<DiffPanelMode>('full')
+  const [diffStyleMode, setDiffStyleMode] = useState<DiffStyleMode>('unified')
+  const [diffWrapLines, setDiffWrapLines] = useState(false)
+  const [selectedDiffTurnId, setSelectedDiffTurnId] = useState<string | null>(null)
+  const [selectedDiffFilePath, setSelectedDiffFilePath] = useState<string | null>(null)
+  const [diffPreview, setDiffPreview] = useState<DiffPreviewState | null>(null)
 
   const activeProject = useMemo(
     () => shell.projects.find((p) => p.id === selection.activeProjectId) ?? null,
@@ -324,6 +365,14 @@ export function HomePage(): React.JSX.Element {
   const activeTurnId = thread?.session?.activeTurnId
   const isRunning = sessionStatus === 'starting' || sessionStatus === 'running'
   const transcriptItems = useMemo(() => buildTranscriptItems(thread), [thread])
+  const checkpointByAssistantMessageId = useMemo(
+    () => buildCheckpointByAssistantMessageId(thread?.checkpoints ?? []),
+    [thread?.checkpoints]
+  )
+  const revertTurnCountByUserMessageId = useMemo(
+    () => buildRevertTurnCountByUserMessageId(thread),
+    [thread]
+  )
   const sessionError = useMemo(() => readSessionErrorForDisplay(thread), [thread])
   const hasActiveThinkingActivity = useMemo(
     () =>
@@ -344,6 +393,10 @@ export function HomePage(): React.JSX.Element {
   useEffect(() => {
     saveSidebarWidth(sidebarWidth)
   }, [sidebarWidth])
+
+  useEffect(() => {
+    saveDiffPanelWidth(diffPanelWidth)
+  }, [diffPanelWidth])
 
   // Shell subscription: drives sidebar state
   useEffect(() => {
@@ -809,9 +862,54 @@ export function HomePage(): React.JSX.Element {
     [activeThreadId]
   )
 
+  const openDiffPanel = useCallback(
+    (input: { mode?: DiffPanelMode; turnId?: string | null; filePath?: string | null } = {}) => {
+      setDiffPanelMode(input.mode ?? 'full')
+      setSelectedDiffTurnId(input.turnId ?? null)
+      setSelectedDiffFilePath(input.filePath ?? null)
+      setDiffPanelOpen(true)
+      setDiffPreview(null)
+    },
+    []
+  )
+
+  const showDiffPreview = useCallback(
+    (summary: OrchestrationCheckpointSummary, file: CheckpointFileChange, rect: DOMRect): void => {
+      setDiffPreview({ summary, file, rect })
+    },
+    []
+  )
+
+  const revertToCheckpoint = useCallback(
+    async (turnCount: number): Promise<void> => {
+      if (!activeThreadId) return
+      const confirmed = window.confirm(
+        `Revert workspace and conversation to checkpoint ${turnCount}? This restores files and rolls back newer assistant turns.`
+      )
+      if (!confirmed) return
+      setError(null)
+      try {
+        await window.agentApi.dispatchCommand({
+          type: 'thread.checkpoint.revert',
+          commandId: `cmd:${createId()}`,
+          threadId: activeThreadId,
+          turnCount,
+          createdAt: new Date().toISOString()
+        })
+      } catch (revertError) {
+        setError(revertError instanceof Error ? revertError.message : String(revertError))
+      }
+    },
+    [activeThreadId]
+  )
+
   const sidebarStyle = useMemo(
-    () => ({ '--sidebar-width': `${sidebarWidth}px` }) as CSSProperties,
-    [sidebarWidth]
+    () =>
+      ({
+        '--sidebar-width': `${sidebarWidth}px`,
+        '--diff-panel-width': `${diffPanelWidth}px`
+      }) as CSSProperties,
+    [diffPanelWidth, sidebarWidth]
   )
 
   const startSidebarResize = useCallback(
@@ -842,6 +940,38 @@ export function HomePage(): React.JSX.Element {
     const direction = event.key === 'ArrowLeft' ? -1 : 1
     setSidebarWidth((width) => clampSidebarWidth(width + direction * 12))
   }, [])
+
+  const startDiffPanelResize = useCallback(
+    (event: PointerEvent<HTMLDivElement>): void => {
+      diffPanelResizeRef.current = { startX: event.clientX, startWidth: diffPanelWidth }
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+      document.body.classList.add('diff-panel-resizing')
+    },
+    [diffPanelWidth]
+  )
+
+  const resizeDiffPanel = useCallback((event: PointerEvent<HTMLDivElement>): void => {
+    const resize = diffPanelResizeRef.current
+    if (!resize) return
+    setDiffPanelWidth(clampDiffPanelWidth(resize.startWidth + resize.startX - event.clientX))
+  }, [])
+
+  const stopDiffPanelResize = useCallback((event: PointerEvent<HTMLDivElement>): void => {
+    if (!diffPanelResizeRef.current) return
+    diffPanelResizeRef.current = null
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+    document.body.classList.remove('diff-panel-resizing')
+  }, [])
+
+  const handleDiffPanelResizeKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>): void => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      event.preventDefault()
+      const direction = event.key === 'ArrowLeft' ? 1 : -1
+      setDiffPanelWidth((width) => clampDiffPanelWidth(width + direction * 16))
+    },
+    []
+  )
 
   return (
     <div className="agent-shell" data-theme="linear-dark" style={sidebarStyle}>
@@ -1030,9 +1160,16 @@ export function HomePage(): React.JSX.Element {
               items={transcriptItems}
               showPendingThinking={showPendingThinking}
               expandedToolIds={expandedToolIds}
+              checkpointByAssistantMessageId={checkpointByAssistantMessageId}
+              revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
               onToggleTool={toggleToolExpanded}
               onApprove={respondToApproval}
               onAnswer={respondToUserInput}
+              onPreviewDiff={showDiffPreview}
+              onOpenDiff={(turnId, filePath) =>
+                openDiffPanel({ mode: turnId ? 'turn' : 'full', turnId, filePath })
+              }
+              onRevert={revertToCheckpoint}
             />
           )}
           {sessionError ? <SessionErrorBanner message={sessionError} /> : null}
@@ -1041,20 +1178,58 @@ export function HomePage(): React.JSX.Element {
         </section>
 
         <div className="composer-wrap">
-          <ChatComposer
-            key={composerResetToken}
-            enabled={Boolean(activeProject)}
-            isRunning={isRunning}
-            runtimeMode={runtimeMode}
-            models={models}
-            model={model}
-            onRuntimeModeChange={handleRuntimeModeChange}
-            onModelChange={handleModelChange}
-            onSubmitPrompt={sendPrompt}
-            onInterrupt={interruptTurn}
-            onStop={stopSession}
-          />
+          <div className="composer-stack">
+            <div className="floating-diff-row">
+              <FloatingDiffPill
+                summaries={thread?.checkpoints ?? []}
+                onOpen={() => openDiffPanel({ mode: 'full' })}
+              />
+            </div>
+            <ChatComposer
+              key={composerResetToken}
+              enabled={Boolean(activeProject)}
+              isRunning={isRunning}
+              runtimeMode={runtimeMode}
+              models={models}
+              model={model}
+              onRuntimeModeChange={handleRuntimeModeChange}
+              onModelChange={handleModelChange}
+              onSubmitPrompt={sendPrompt}
+              onInterrupt={interruptTurn}
+              onStop={stopSession}
+            />
+          </div>
         </div>
+        <DiffPreviewPopover
+          preview={diffPreview}
+          threadId={activeThreadId}
+          onClose={() => setDiffPreview(null)}
+          onOpenSidebar={(turnId, filePath) => openDiffPanel({ mode: 'turn', turnId, filePath })}
+        />
+        <DiffReviewSidebar
+          open={diffPanelOpen}
+          threadId={activeThreadId}
+          summaries={thread?.checkpoints ?? []}
+          mode={diffPanelMode}
+          diffStyle={diffStyleMode}
+          wrapLines={diffWrapLines}
+          selectedTurnId={selectedDiffTurnId}
+          selectedFilePath={selectedDiffFilePath}
+          onModeChange={setDiffPanelMode}
+          onDiffStyleChange={setDiffStyleMode}
+          onWrapLinesChange={setDiffWrapLines}
+          onSelectTurn={setSelectedDiffTurnId}
+          onSelectFile={setSelectedDiffFilePath}
+          onClose={() => setDiffPanelOpen(false)}
+          resizeLabel="Resize review panel"
+          resizeMin={minDiffPanelWidth}
+          resizeMax={maxDiffPanelWidth}
+          resizeValue={diffPanelWidth}
+          onResizeStart={startDiffPanelResize}
+          onResizeMove={resizeDiffPanel}
+          onResizeEnd={stopDiffPanelResize}
+          onResizeKeyDown={handleDiffPanelResizeKeyDown}
+        />
       </main>
     </div>
   )
@@ -1486,13 +1661,20 @@ const TranscriptList = memo(function TranscriptList({
   items,
   showPendingThinking,
   expandedToolIds,
+  checkpointByAssistantMessageId,
+  revertTurnCountByUserMessageId,
   onToggleTool,
   onApprove,
-  onAnswer
+  onAnswer,
+  onPreviewDiff,
+  onOpenDiff,
+  onRevert
 }: {
   items: TranscriptItem[]
   showPendingThinking: boolean
   expandedToolIds: Set<string>
+  checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
+  revertTurnCountByUserMessageId: Map<string, number>
   onToggleTool: (activityId: string) => void
   onApprove: (
     activity: OrchestrationThreadActivity,
@@ -1502,6 +1684,13 @@ const TranscriptList = memo(function TranscriptList({
     activity: OrchestrationThreadActivity,
     answer: Record<string, unknown>
   ) => Promise<void>
+  onPreviewDiff: (
+    summary: OrchestrationCheckpointSummary,
+    file: CheckpointFileChange,
+    rect: DOMRect
+  ) => void
+  onOpenDiff: (turnId: string | null, filePath?: string) => void
+  onRevert: (turnCount: number) => Promise<void>
 }): React.JSX.Element {
   const groups = useMemo(() => groupTranscriptItems(items), [items])
   return (
@@ -1512,8 +1701,13 @@ const TranscriptList = memo(function TranscriptList({
             <TranscriptRow
               key={group.item.id}
               item={group.item}
+              checkpointByAssistantMessageId={checkpointByAssistantMessageId}
+              revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
               onApprove={onApprove}
               onAnswer={onAnswer}
+              onPreviewDiff={onPreviewDiff}
+              onOpenDiff={onOpenDiff}
+              onRevert={onRevert}
             />
           )
         }
@@ -1550,10 +1744,17 @@ const TranscriptList = memo(function TranscriptList({
 
 const TranscriptRow = memo(function TranscriptRow({
   item,
+  checkpointByAssistantMessageId,
+  revertTurnCountByUserMessageId,
   onApprove,
-  onAnswer
+  onAnswer,
+  onPreviewDiff,
+  onOpenDiff,
+  onRevert
 }: {
   item: TranscriptItem
+  checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
+  revertTurnCountByUserMessageId: Map<string, number>
   onApprove: (
     activity: OrchestrationThreadActivity,
     decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'
@@ -1562,9 +1763,26 @@ const TranscriptRow = memo(function TranscriptRow({
     activity: OrchestrationThreadActivity,
     answer: Record<string, unknown>
   ) => Promise<void>
+  onPreviewDiff: (
+    summary: OrchestrationCheckpointSummary,
+    file: CheckpointFileChange,
+    rect: DOMRect
+  ) => void
+  onOpenDiff: (turnId: string | null, filePath?: string) => void
+  onRevert: (turnCount: number) => Promise<void>
 }): React.JSX.Element {
   if (item.kind === 'message') {
-    return <MessageRow message={item.message} workDurationMs={item.workDurationMs} />
+    return (
+      <MessageRow
+        message={item.message}
+        workDurationMs={item.workDurationMs}
+        checkpointSummary={checkpointByAssistantMessageId.get(item.message.id) ?? null}
+        revertTurnCount={revertTurnCountByUserMessageId.get(item.message.id) ?? null}
+        onPreviewDiff={onPreviewDiff}
+        onOpenDiff={onOpenDiff}
+        onRevert={onRevert}
+      />
+    )
   }
 
   const { activity } = item
@@ -1597,10 +1815,24 @@ const ThinkingRow = memo(function ThinkingRow({
 
 const MessageRow = memo(function MessageRow({
   message,
-  workDurationMs
+  workDurationMs,
+  checkpointSummary,
+  revertTurnCount,
+  onPreviewDiff,
+  onOpenDiff,
+  onRevert
 }: {
   message: OrchestrationMessage
   workDurationMs: number | null
+  checkpointSummary: OrchestrationCheckpointSummary | null
+  revertTurnCount: number | null
+  onPreviewDiff: (
+    summary: OrchestrationCheckpointSummary,
+    file: CheckpointFileChange,
+    rect: DOMRect
+  ) => void
+  onOpenDiff: (turnId: string | null, filePath?: string) => void
+  onRevert: (turnCount: number) => Promise<void>
 }): React.JSX.Element {
   const isAssistant = message.role === 'assistant'
   return (
@@ -1615,11 +1847,29 @@ const MessageRow = memo(function MessageRow({
           <>
             <span>you</span>
             <span>{formatTime(message.createdAt)}</span>
+            {typeof revertTurnCount === 'number' ? (
+              <button
+                type="button"
+                className="message-revert-button"
+                onClick={() => void onRevert(revertTurnCount)}
+              >
+                Revert
+              </button>
+            ) : null}
           </>
         )}
       </div>
       {isAssistant ? (
-        <MarkdownMessage text={message.text} isStreaming={message.streaming} />
+        <>
+          <MarkdownMessage text={message.text} isStreaming={message.streaming} />
+          {checkpointSummary ? (
+            <ChangedFilePills
+              summary={checkpointSummary}
+              onPreview={(file, rect) => onPreviewDiff(checkpointSummary, file, rect)}
+              onOpenDiff={(filePath) => onOpenDiff(checkpointSummary.turnId, filePath)}
+            />
+          ) : null}
+        </>
       ) : (
         <p>{message.text}</p>
       )}
@@ -2164,6 +2414,43 @@ function buildTranscriptItems(thread: OrchestrationThread | null): TranscriptIte
     if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt
     return left.sequence - right.sequence
   })
+}
+
+function buildCheckpointByAssistantMessageId(
+  checkpoints: OrchestrationCheckpointSummary[]
+): Map<string, OrchestrationCheckpointSummary> {
+  const map = new Map<string, OrchestrationCheckpointSummary>()
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.assistantMessageId) map.set(checkpoint.assistantMessageId, checkpoint)
+  }
+  return map
+}
+
+function buildRevertTurnCountByUserMessageId(
+  thread: OrchestrationThread | null
+): Map<string, number> {
+  const map = new Map<string, number>()
+  if (!thread) return map
+  const checkpointByMessageId = buildCheckpointByAssistantMessageId(thread.checkpoints)
+  const messages = [...thread.messages].sort((left, right) => {
+    const leftSequence = left.sequence ?? Number.MAX_SAFE_INTEGER
+    const rightSequence = right.sequence ?? Number.MAX_SAFE_INTEGER
+    if (leftSequence !== rightSequence) return leftSequence - rightSequence
+    return timestampForSort(left.createdAt) - timestampForSort(right.createdAt)
+  })
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (!message || message.role !== 'user') continue
+    for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
+      const candidate = messages[cursor]
+      if (!candidate || candidate.role === 'user') break
+      const checkpoint = checkpointByMessageId.get(candidate.id)
+      if (!checkpoint || checkpoint.status !== 'ready') continue
+      map.set(message.id, Math.max(0, checkpoint.checkpointTurnCount - 1))
+      break
+    }
+  }
+  return map
 }
 
 function workDurationForMessage(message: OrchestrationMessage): number | null {

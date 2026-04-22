@@ -41,6 +41,10 @@ export class CodexAdapter implements ProviderAdapter {
     await this.manager.interruptTurn(input)
   }
 
+  async rollbackConversation(input: { threadId: string; numTurns: number }): Promise<void> {
+    await this.manager.rollbackConversation(input)
+  }
+
   async respondToApproval(input: {
     threadId: string
     requestId: string
@@ -518,9 +522,7 @@ function readCompletionState(value: unknown): 'completed' | 'failed' | 'cancelle
   const record = readRecord(value)
   const turnRecord = readRecord(record['turn'])
   const state =
-    readString(turnRecord, 'status') ??
-    readString(record, 'state') ??
-    readString(record, 'status')
+    readString(turnRecord, 'status') ?? readString(record, 'state') ?? readString(record, 'status')
   if (state === 'failed' || state === 'cancelled' || state === 'interrupted') return state
   return 'completed'
 }

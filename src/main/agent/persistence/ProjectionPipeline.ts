@@ -87,6 +87,12 @@ export class ProjectionPipeline {
       case 'thread.latest-turn-set':
         this.applyLatestTurnSet(e)
         break
+      case 'thread.turn-diff-completed':
+        this.applyCheckpointUpserted(e)
+        break
+      case 'thread.reverted':
+        this.applyThreadReverted(e)
+        break
       default:
         break
     }
@@ -94,12 +100,14 @@ export class ProjectionPipeline {
 
   private upsertProject(e: KnownEvent): void {
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO projection_projects(project_id, name, path, created_at, updated_at)
         VALUES(@project_id, @name, @path, @created_at, @updated_at)
         ON CONFLICT(project_id) DO UPDATE SET
           name = @name, path = @path, updated_at = @updated_at, deleted_at = NULL, archived_at = NULL
-      `)
+      `
+      )
       .run({
         project_id: str(e.payload['projectId']) ?? e.streamId,
         name: str(e.payload['name']) ?? 'Project',
@@ -117,12 +125,14 @@ export class ProjectionPipeline {
 
   private upsertThread(e: KnownEvent): void {
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO projection_threads(thread_id, project_id, title, cwd, branch, created_at, updated_at)
         VALUES(@thread_id, @project_id, @title, @cwd, @branch, @created_at, @updated_at)
         ON CONFLICT(thread_id) DO UPDATE SET
           title = @title, cwd = @cwd, updated_at = @updated_at, deleted_at = NULL, archived_at = NULL
-      `)
+      `
+      )
       .run({
         thread_id: str(e.payload['threadId']) ?? e.streamId,
         project_id: str(e.payload['projectId']) ?? '',
@@ -136,25 +146,19 @@ export class ProjectionPipeline {
 
   private updateThreadTitle(e: KnownEvent): void {
     this.db
-      .prepare(
-        `UPDATE projection_threads SET title = ?, updated_at = ? WHERE thread_id = ?`
-      )
+      .prepare(`UPDATE projection_threads SET title = ?, updated_at = ? WHERE thread_id = ?`)
       .run(str(e.payload['title']) ?? '', e.occurredAt, e.streamId)
   }
 
   private archiveThread(e: KnownEvent): void {
     this.db
-      .prepare(
-        `UPDATE projection_threads SET archived_at = ?, updated_at = ? WHERE thread_id = ?`
-      )
+      .prepare(`UPDATE projection_threads SET archived_at = ?, updated_at = ? WHERE thread_id = ?`)
       .run(e.occurredAt, e.occurredAt, e.streamId)
   }
 
   private softDeleteThread(e: KnownEvent): void {
     this.db
-      .prepare(
-        `UPDATE projection_threads SET deleted_at = ?, updated_at = ? WHERE thread_id = ?`
-      )
+      .prepare(`UPDATE projection_threads SET deleted_at = ?, updated_at = ? WHERE thread_id = ?`)
       .run(e.occurredAt, e.occurredAt, e.streamId)
   }
 
@@ -163,11 +167,13 @@ export class ProjectionPipeline {
     if (!thread || typeof thread !== 'object') return
     const t = thread as Record<string, unknown>
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE projection_threads
         SET title = ?, cwd = ?, branch = ?, updated_at = ?
         WHERE thread_id = ?
-      `)
+      `
+      )
       .run(
         str(t['title']) ?? 'Chat title',
         str(t['cwd']) ?? null,
@@ -180,7 +186,8 @@ export class ProjectionPipeline {
   private applySessionSet(e: KnownEvent): void {
     const session = asRecord(e.payload['session'])
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO projection_thread_sessions(thread_id, status, provider_name, runtime_mode, active_turn_id, last_error, updated_at)
         VALUES(@thread_id, @status, @provider_name, @runtime_mode, @active_turn_id, @last_error, @updated_at)
         ON CONFLICT(thread_id) DO UPDATE SET
@@ -190,16 +197,15 @@ export class ProjectionPipeline {
           active_turn_id = @active_turn_id,
           last_error = @last_error,
           updated_at = @updated_at
-      `)
+      `
+      )
       .run({
         thread_id: e.streamId,
         status: str(session['status']) ?? str(e.payload['status']) ?? 'idle',
-        provider_name:
-          str(session['providerName']) ?? str(e.payload['providerName']) ?? 'codex',
+        provider_name: str(session['providerName']) ?? str(e.payload['providerName']) ?? 'codex',
         runtime_mode:
           str(session['runtimeMode']) ?? str(e.payload['runtimeMode']) ?? 'auto-accept-edits',
-        active_turn_id:
-          str(session['activeTurnId']) ?? str(e.payload['activeTurnId']) ?? null,
+        active_turn_id: str(session['activeTurnId']) ?? str(e.payload['activeTurnId']) ?? null,
         last_error: str(session['lastError']) ?? str(e.payload['lastError']) ?? null,
         updated_at: e.occurredAt
       })
@@ -213,7 +219,8 @@ export class ProjectionPipeline {
     const messageId = str(message['id'])
     if (!messageId) return
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO projection_thread_messages(message_id, thread_id, turn_id, role, text, attachments_json, is_streaming, sequence, created_at, updated_at)
         VALUES(@message_id, @thread_id, @turn_id, @role, @text, @attachments_json, @is_streaming, @sequence, @created_at, @updated_at)
         ON CONFLICT(message_id) DO UPDATE SET
@@ -222,7 +229,8 @@ export class ProjectionPipeline {
           attachments_json = @attachments_json,
           sequence = @sequence,
           updated_at = @updated_at
-      `)
+      `
+      )
       .run({
         message_id: messageId,
         thread_id: e.streamId,
@@ -245,7 +253,8 @@ export class ProjectionPipeline {
     const activityId = str(activity['id'])
     if (!activityId) return
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO projection_thread_activities(activity_id, thread_id, kind, tone, summary, payload_json, turn_id, sequence, resolved, created_at)
         VALUES(@activity_id, @thread_id, @kind, @tone, @summary, @payload_json, @turn_id, @sequence, @resolved, @created_at)
         ON CONFLICT(activity_id) DO UPDATE SET
@@ -256,7 +265,8 @@ export class ProjectionPipeline {
           turn_id = @turn_id,
           sequence = @sequence,
           resolved = @resolved
-      `)
+      `
+      )
       .run({
         activity_id: activityId,
         thread_id: e.streamId,
@@ -276,12 +286,14 @@ export class ProjectionPipeline {
     const planId = str(plan['id'])
     if (!planId) return
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO projection_thread_proposed_plans(plan_id, thread_id, turn_id, text, status, created_at, updated_at)
         VALUES(@plan_id, @thread_id, @turn_id, @text, @status, @created_at, @updated_at)
         ON CONFLICT(plan_id) DO UPDATE SET
           text = @text, status = @status, updated_at = @updated_at
-      `)
+      `
+      )
       .run({
         plan_id: planId,
         thread_id: e.streamId,
@@ -296,21 +308,21 @@ export class ProjectionPipeline {
   private applyLatestTurnSet(e: KnownEvent): void {
     const latestTurn = e.payload['latestTurn']
     if (!latestTurn || typeof latestTurn !== 'object') {
-      this.db
-        .prepare(`DELETE FROM projection_latest_turns WHERE thread_id = ?`)
-        .run(e.streamId)
+      this.db.prepare(`DELETE FROM projection_latest_turns WHERE thread_id = ?`).run(e.streamId)
       return
     }
     const turn = latestTurn as Record<string, unknown>
     const turnId = str(turn['id'])
     if (!turnId) return
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO projection_latest_turns(thread_id, turn_id, status, started_at, completed_at)
         VALUES(@thread_id, @turn_id, @status, @started_at, @completed_at)
         ON CONFLICT(thread_id) DO UPDATE SET
           turn_id = @turn_id, status = @status, started_at = @started_at, completed_at = @completed_at
-      `)
+      `
+      )
       .run({
         thread_id: e.streamId,
         turn_id: turnId,
@@ -319,8 +331,139 @@ export class ProjectionPipeline {
         completed_at: str(turn['completedAt']) ?? null
       })
     this.db
-      .prepare(`UPDATE projection_threads SET latest_turn_id = ?, updated_at = ? WHERE thread_id = ?`)
+      .prepare(
+        `UPDATE projection_threads SET latest_turn_id = ?, updated_at = ? WHERE thread_id = ?`
+      )
       .run(turnId, e.occurredAt, e.streamId)
+  }
+
+  private applyCheckpointUpserted(e: KnownEvent): void {
+    const checkpoint = asRecord(e.payload['checkpoint'])
+    const checkpointId = str(checkpoint['id'])
+    const turnId = str(checkpoint['turnId'])
+    if (!checkpointId || !turnId) return
+
+    const incomingStatus = str(checkpoint['status']) ?? 'missing'
+    const existing = this.db
+      .prepare(
+        `SELECT status FROM projection_thread_checkpoints WHERE thread_id = ? AND turn_id = ?`
+      )
+      .get(e.streamId, turnId) as { status: string } | undefined
+    if (existing && existing.status !== 'missing' && incomingStatus === 'missing') return
+
+    const completedAt = str(checkpoint['completedAt']) ?? e.occurredAt
+    this.db
+      .prepare(
+        `
+        INSERT INTO projection_thread_checkpoints(checkpoint_id, thread_id, turn_id, assistant_message_id, checkpoint_turn_count, status, files_json, completed_at, error_message)
+        VALUES(@checkpoint_id, @thread_id, @turn_id, @assistant_message_id, @checkpoint_turn_count, @status, @files_json, @completed_at, @error_message)
+        ON CONFLICT(thread_id, turn_id) DO UPDATE SET
+          checkpoint_id = @checkpoint_id,
+          assistant_message_id = @assistant_message_id,
+          checkpoint_turn_count = @checkpoint_turn_count,
+          status = @status,
+          files_json = @files_json,
+          completed_at = @completed_at,
+          error_message = @error_message
+      `
+      )
+      .run({
+        checkpoint_id: checkpointId,
+        thread_id: e.streamId,
+        turn_id: turnId,
+        assistant_message_id: str(checkpoint['assistantMessageId']) ?? null,
+        checkpoint_turn_count:
+          typeof checkpoint['checkpointTurnCount'] === 'number'
+            ? checkpoint['checkpointTurnCount']
+            : 0,
+        status: incomingStatus,
+        files_json: JSON.stringify(Array.isArray(checkpoint['files']) ? checkpoint['files'] : []),
+        completed_at: completedAt,
+        error_message: str(checkpoint['errorMessage']) ?? null
+      })
+    this.db
+      .prepare(`UPDATE projection_threads SET updated_at = ? WHERE thread_id = ?`)
+      .run(completedAt, e.streamId)
+  }
+
+  private applyThreadReverted(e: KnownEvent): void {
+    const turnCount =
+      typeof e.payload['turnCount'] === 'number'
+        ? e.payload['turnCount']
+        : Number(e.payload['turnCount'])
+    if (!Number.isFinite(turnCount)) return
+
+    const retainedRows = this.db
+      .prepare(
+        `SELECT turn_id FROM projection_thread_checkpoints WHERE thread_id = ? AND checkpoint_turn_count <= ?`
+      )
+      .all(e.streamId, turnCount) as Array<{ turn_id: string }>
+    const retainedTurnIds = retainedRows.map((row) => row.turn_id).filter(Boolean)
+    const placeholders = retainedTurnIds.map(() => '?').join(',')
+    const notInClause = retainedTurnIds.length > 0 ? `AND turn_id NOT IN (${placeholders})` : ''
+    const args = [e.streamId, ...retainedTurnIds]
+
+    this.db
+      .prepare(
+        `DELETE FROM projection_thread_messages WHERE thread_id = ? AND turn_id IS NOT NULL ${notInClause}`
+      )
+      .run(...args)
+    this.db
+      .prepare(
+        `DELETE FROM projection_thread_activities WHERE thread_id = ? AND turn_id IS NOT NULL ${notInClause}`
+      )
+      .run(...args)
+    this.db
+      .prepare(
+        `DELETE FROM projection_thread_proposed_plans WHERE thread_id = ? AND turn_id IS NOT NULL ${notInClause}`
+      )
+      .run(...args)
+    this.db
+      .prepare(
+        `DELETE FROM projection_thread_checkpoints WHERE thread_id = ? AND checkpoint_turn_count > ?`
+      )
+      .run(e.streamId, turnCount)
+
+    const latest = this.db
+      .prepare(
+        `SELECT turn_id, status, completed_at FROM projection_thread_checkpoints WHERE thread_id = ? ORDER BY checkpoint_turn_count DESC LIMIT 1`
+      )
+      .get(e.streamId) as { turn_id: string; status: string; completed_at: string } | undefined
+    if (latest) {
+      this.db
+        .prepare(
+          `
+          INSERT INTO projection_latest_turns(thread_id, turn_id, status, started_at, completed_at)
+          VALUES(@thread_id, @turn_id, @status, @started_at, @completed_at)
+          ON CONFLICT(thread_id) DO UPDATE SET
+            turn_id = @turn_id, status = @status, started_at = @started_at, completed_at = @completed_at
+        `
+        )
+        .run({
+          thread_id: e.streamId,
+          turn_id: latest.turn_id,
+          status: latest.status === 'error' ? 'failed' : 'completed',
+          started_at: latest.completed_at,
+          completed_at: latest.completed_at
+        })
+      this.db
+        .prepare(`UPDATE projection_threads SET latest_turn_id = ? WHERE thread_id = ?`)
+        .run(latest.turn_id, e.streamId)
+    } else {
+      this.db.prepare(`DELETE FROM projection_latest_turns WHERE thread_id = ?`).run(e.streamId)
+      this.db
+        .prepare(`UPDATE projection_threads SET latest_turn_id = NULL WHERE thread_id = ?`)
+        .run(e.streamId)
+    }
+
+    this.db
+      .prepare(
+        `UPDATE projection_thread_sessions SET status = 'ready', active_turn_id = NULL, updated_at = ? WHERE thread_id = ?`
+      )
+      .run(e.occurredAt, e.streamId)
+    this.db
+      .prepare(`UPDATE projection_threads SET updated_at = ? WHERE thread_id = ?`)
+      .run(e.occurredAt, e.streamId)
   }
 
   private getLastAppliedSequence(): number {

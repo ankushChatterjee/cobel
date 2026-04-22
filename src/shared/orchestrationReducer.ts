@@ -31,8 +31,45 @@ export function applyOrchestrationEvent(
       }
     case 'thread.latest-turn-set':
       return { ...thread, latestTurn: event.latestTurn, updatedAt: event.createdAt }
+    case 'thread.turn-diff-completed':
+      return {
+        ...thread,
+        checkpoints: upsertCheckpoint(thread.checkpoints, event.checkpoint),
+        updatedAt: event.createdAt
+      }
+    case 'thread.reverted':
+      return {
+        ...thread,
+        messages: thread.messages.filter(
+          (message) =>
+            !message.turnId ||
+            retainedTurnIds(thread.checkpoints, event.turnCount).has(message.turnId)
+        ),
+        activities: thread.activities.filter(
+          (activity) =>
+            !activity.turnId ||
+            retainedTurnIds(thread.checkpoints, event.turnCount).has(activity.turnId)
+        ),
+        proposedPlans: thread.proposedPlans.filter((plan) =>
+          retainedTurnIds(thread.checkpoints, event.turnCount).has(plan.turnId)
+        ),
+        checkpoints: thread.checkpoints.filter(
+          (checkpoint) => checkpoint.checkpointTurnCount <= event.turnCount
+        ),
+        latestTurn: latestRetainedTurn(thread.checkpoints, event.turnCount),
+        session: thread.session
+          ? { ...thread.session, activeTurnId: null, status: 'ready' }
+          : thread.session,
+        updatedAt: event.createdAt
+      }
     case 'thread.created':
-      return { ...thread, title: event.title, cwd: event.cwd, branch: event.branch ?? 'main', updatedAt: event.createdAt }
+      return {
+        ...thread,
+        title: event.title,
+        cwd: event.cwd,
+        branch: event.branch ?? 'main',
+        updatedAt: event.createdAt
+      }
     case 'thread.renamed':
       return { ...thread, title: event.title, updatedAt: event.createdAt }
     case 'thread.archived':
@@ -48,4 +85,46 @@ function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
   const next = [...items]
   next[index] = item
   return next
+}
+
+function upsertCheckpoint<
+  T extends { id: string; turnId: string; status: string; checkpointTurnCount: number }
+>(items: T[], item: T): T[] {
+  const existing = items.find((candidate) => candidate.turnId === item.turnId)
+  if (existing && existing.status !== 'missing' && item.status === 'missing') return items
+  return [...upsertById(items, item)].sort(
+    (left, right) => left.checkpointTurnCount - right.checkpointTurnCount
+  )
+}
+
+function retainedTurnIds(
+  checkpoints: Array<{ turnId: string; checkpointTurnCount: number }>,
+  turnCount: number
+): Set<string> {
+  return new Set(
+    checkpoints
+      .filter((checkpoint) => checkpoint.checkpointTurnCount <= turnCount)
+      .map((checkpoint) => checkpoint.turnId)
+  )
+}
+
+function latestRetainedTurn(
+  checkpoints: Array<{
+    turnId: string
+    status: string
+    checkpointTurnCount: number
+    completedAt: string
+  }>,
+  turnCount: number
+) {
+  const latest = checkpoints
+    .filter((checkpoint) => checkpoint.checkpointTurnCount <= turnCount)
+    .sort((left, right) => right.checkpointTurnCount - left.checkpointTurnCount)[0]
+  if (!latest) return null
+  return {
+    id: latest.turnId,
+    status: latest.status === 'error' ? ('failed' as const) : ('completed' as const),
+    startedAt: latest.completedAt,
+    completedAt: latest.completedAt
+  }
 }

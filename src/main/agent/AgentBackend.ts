@@ -1,5 +1,7 @@
 import type {
   ClientOrchestrationCommand,
+  CheckpointDiffRequest,
+  CheckpointDiffResult,
   DispatchResult,
   OrchestrationShellSnapshot,
   OrchestrationShellStreamItem,
@@ -21,13 +23,17 @@ import { OrchestrationEventStore } from './persistence/OrchestrationEventStore'
 import { ProjectionPipeline } from './persistence/ProjectionPipeline'
 import { ProviderSessionDirectory } from './persistence/ProviderSessionDirectory'
 import { SnapshotQuery } from './persistence/SnapshotQuery'
+import { CheckpointReactor } from './checkpointing/CheckpointReactor'
+import { CheckpointStore } from './checkpointing/CheckpointStore'
 
 export class AgentBackend {
   readonly engine: OrchestrationEngine
   readonly providers: ProviderService
   readonly ingestion: ProviderRuntimeIngestion
+  readonly checkpointReactor: CheckpointReactor
   private readonly directory: ProviderSessionDirectory
   private readonly snapshots: SnapshotQuery
+  private readonly checkpointStore: CheckpointStore
 
   constructor(options: { useFakeProvider?: boolean; db?: Database } = {}) {
     if (options.db) {
@@ -47,10 +53,19 @@ export class AgentBackend {
 
     this.providers = new ProviderService()
     this.ingestion = new ProviderRuntimeIngestion(this.engine)
+    this.checkpointStore = new CheckpointStore()
+    this.checkpointReactor = new CheckpointReactor(
+      this.engine,
+      this.ingestion,
+      this.checkpointStore
+    )
     this.providers.register(
       options.useFakeProvider ? new FakeProviderAdapter() : new CodexAdapter()
     )
-    this.providers.subscribe((event) => this.ingestion.enqueue(event))
+    this.providers.subscribe((event) => {
+      this.ingestion.enqueue(event)
+      this.checkpointReactor.enqueue(event)
+    })
   }
 
   async listProviders(): Promise<ProviderSummary[]> {
@@ -65,9 +80,7 @@ export class AgentBackend {
     return this.snapshots.getShellSnapshot()
   }
 
-  subscribeShell(
-    listener: (item: OrchestrationShellStreamItem) => void
-  ): () => void {
+  subscribeShell(listener: (item: OrchestrationShellStreamItem) => void): () => void {
     listener({ kind: 'snapshot', snapshot: this.getShellSnapshot() })
     return this.engine.subscribeShell((event) => listener({ kind: 'event', event }))
   }
@@ -141,7 +154,9 @@ export class AgentBackend {
       case 'thread.delete': {
         const thread = this.engine.getThread(input.threadId)
         if (thread.session?.providerName) {
-          await this.providers.stopSession(thread.session.providerName, { threadId: input.threadId })
+          await this.providers.stopSession(thread.session.providerName, {
+            threadId: input.threadId
+          })
         }
         this.directory.clear(input.threadId)
         this.engine.deleteThread({
@@ -179,6 +194,10 @@ export class AgentBackend {
           runtimeMode: input.runtimeMode,
           resumeCursor
         })
+        await this.checkpointReactor.ensureBaseline({
+          threadId: input.threadId,
+          cwd: input.cwd ?? this.engine.getThread(input.threadId).cwd
+        })
         const result = await this.providers.sendTurn({
           provider: input.provider,
           threadId: input.threadId,
@@ -204,6 +223,10 @@ export class AgentBackend {
 
       case 'thread.session.stop':
         await this.stopSession({ threadId: input.threadId })
+        return { accepted: true, commandId: input.commandId, threadId: input.threadId }
+
+      case 'thread.checkpoint.revert':
+        await this.revertCheckpoint(input)
         return { accepted: true, commandId: input.commandId, threadId: input.threadId }
     }
   }
@@ -233,12 +256,75 @@ export class AgentBackend {
     this.engine.resetThread({ threadId: input.threadId, cwd: thread.cwd })
   }
 
+  async getCheckpointDiff(input: CheckpointDiffRequest): Promise<CheckpointDiffResult> {
+    const thread = this.engine.getThread(input.threadId)
+    if (!thread.cwd) throw new Error('No workspace is attached to this thread.')
+    if (input.fromTurnCount < 0 || input.toTurnCount < 0) {
+      throw new Error('Checkpoint turn counts must be non-negative.')
+    }
+    if (input.toTurnCount < input.fromTurnCount) {
+      throw new Error('The checkpoint diff range is invalid.')
+    }
+    const result = await this.checkpointStore.diffCheckpoints(
+      thread.cwd,
+      input.threadId,
+      input.fromTurnCount,
+      input.toTurnCount
+    )
+    return { ...input, ...result }
+  }
+
   async drain(): Promise<void> {
     await this.ingestion.drain()
+    await this.checkpointReactor.drain()
   }
 
   private providerForThread(threadId: string): ProviderId {
     return this.engine.getThread(threadId).session?.providerName ?? 'codex'
+  }
+
+  private async revertCheckpoint(
+    input: Extract<ClientOrchestrationCommand, { type: 'thread.checkpoint.revert' }>
+  ): Promise<void> {
+    const thread = this.engine.getThread(input.threadId)
+    if (
+      thread.session?.activeTurnId ||
+      thread.session?.status === 'running' ||
+      thread.session?.status === 'starting'
+    ) {
+      throw new Error('Interrupt the current turn before reverting checkpoints.')
+    }
+    if (!thread.cwd) throw new Error('No workspace is attached to this thread.')
+    if (!Number.isInteger(input.turnCount) || input.turnCount < 0) {
+      throw new Error('Revert checkpoint turn count is invalid.')
+    }
+    const latestTurnCount = thread.checkpoints.reduce(
+      (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
+      0
+    )
+    if (input.turnCount > latestTurnCount) {
+      throw new Error('Cannot revert to a future checkpoint.')
+    }
+
+    await this.checkpointStore.restoreCheckpoint(thread.cwd, input.threadId, input.turnCount)
+    const rolledBackTurns = latestTurnCount - input.turnCount
+    if (rolledBackTurns > 0) {
+      await this.providers.rollbackConversation(this.providerForThread(input.threadId), {
+        threadId: input.threadId,
+        numTurns: rolledBackTurns
+      })
+    }
+    await this.checkpointStore.deleteCheckpointsNewerThan(
+      thread.cwd,
+      input.threadId,
+      input.turnCount
+    )
+    this.engine.revertThread({
+      threadId: input.threadId,
+      turnCount: input.turnCount,
+      commandId: input.commandId,
+      createdAt: input.createdAt
+    })
   }
 }
 

@@ -266,6 +266,25 @@ export class CodexAppServerManager {
     })
   }
 
+  async rollbackConversation(input: { threadId: string; numTurns: number }): Promise<void> {
+    if (!Number.isInteger(input.numTurns) || input.numTurns < 1) {
+      throw new Error('numTurns must be an integer >= 1.')
+    }
+    const context = this.requireContext(input.threadId)
+    const providerThreadId = readResumeThreadId(context.session.resumeCursor)
+    if (!providerThreadId) throw new Error('Session is missing a provider resume thread id.')
+    await this.sendRequest(context, 'thread/rollback', {
+      threadId: providerThreadId,
+      numTurns: input.numTurns
+    })
+    context.session = {
+      ...context.session,
+      status: 'ready',
+      activeTurnId: undefined,
+      updatedAt: nowIso()
+    }
+  }
+
   async respondToApproval(input: {
     threadId: string
     requestId: string
@@ -672,7 +691,12 @@ export function buildCodexInitializeParams(): {
 
 export function parseCodexStderr(
   chunk: string
-): Array<{ level: 'error' | 'warning' | 'ignore'; message: string; detail?: unknown; key?: string }> {
+): Array<{
+  level: 'error' | 'warning' | 'ignore'
+  message: string
+  detail?: unknown
+  key?: string
+}> {
   const messages: Array<{
     level: 'error' | 'warning' | 'ignore'
     message: string

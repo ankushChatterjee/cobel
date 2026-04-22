@@ -30,6 +30,7 @@ export interface ProviderAdapter {
   getSummary(): Promise<ProviderSummary>
   startSession(input: StartSessionInput): Promise<ProviderSession>
   sendTurn(input: SendTurnInput): Promise<{ turnId: string; resumeCursor?: unknown }>
+  rollbackConversation(input: { threadId: string; numTurns: number }): Promise<void>
   interruptTurn(input: { threadId: string; turnId?: string }): Promise<void>
   respondToApproval(input: {
     threadId: string

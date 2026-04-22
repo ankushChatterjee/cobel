@@ -5,6 +5,7 @@ import type {
   OrchestrationEvent,
   OrchestrationLatestTurn,
   OrchestrationMessage,
+  OrchestrationCheckpointSummary,
   OrchestrationProposedPlan,
   OrchestrationSession,
   OrchestrationShellEvent,
@@ -265,6 +266,36 @@ export class OrchestrationEngine {
     })
   }
 
+  upsertCheckpoint(checkpoint: OrchestrationCheckpointSummary, threadId: string): void {
+    this.ensureThread({ threadId })
+    this.apply({
+      sequence: this.nextSequence(),
+      type: 'thread.turn-diff-completed',
+      threadId,
+      checkpoint,
+      createdAt: checkpoint.completedAt
+    })
+  }
+
+  revertThread(input: {
+    threadId: string
+    turnCount: number
+    createdAt?: string
+    commandId?: string
+  }): void {
+    const now = input.createdAt ?? nowIso()
+    this.ensureThread({ threadId: input.threadId })
+    this.apply({
+      sequence: this.nextSequence(),
+      type: 'thread.reverted',
+      threadId: input.threadId,
+      turnCount: input.turnCount,
+      revertedAt: now,
+      createdAt: now,
+      commandId: input.commandId
+    })
+  }
+
   createThread(input: {
     threadId: string
     projectId: string
@@ -303,7 +334,11 @@ export class OrchestrationEngine {
         createdAt: now,
         commandId: input.commandId
       },
-      { aggregateKind: 'thread', streamId: input.threadId, payloadExtra: { projectId: input.projectId } }
+      {
+        aggregateKind: 'thread',
+        streamId: input.threadId,
+        payloadExtra: { projectId: input.projectId }
+      }
     )
     return thread
   }
@@ -316,7 +351,11 @@ export class OrchestrationEngine {
   }): void {
     const record = this.threads.get(input.threadId)
     if (record) {
-      record.thread = { ...record.thread, title: input.title, updatedAt: input.createdAt ?? nowIso() }
+      record.thread = {
+        ...record.thread,
+        title: input.title,
+        updatedAt: input.createdAt ?? nowIso()
+      }
     }
     this.apply(
       {
@@ -483,7 +522,9 @@ export class OrchestrationEngine {
       event.type === 'thread.renamed' ||
       event.type === 'thread.session-set' ||
       event.type === 'thread.latest-turn-set' ||
-      event.type === 'thread.message-upserted'
+      event.type === 'thread.message-upserted' ||
+      event.type === 'thread.turn-diff-completed' ||
+      event.type === 'thread.reverted'
     ) {
       const thread = this.threads.get(event.threadId)?.thread
       if (!thread) return
@@ -559,6 +600,9 @@ function buildEventPayload(
   if ('activity' in event) base['activity'] = event.activity
   if ('proposedPlan' in event) base['proposedPlan'] = event.proposedPlan
   if ('latestTurn' in event) base['latestTurn'] = event.latestTurn
+  if ('checkpoint' in event) base['checkpoint'] = event.checkpoint
+  if ('turnCount' in event) base['turnCount'] = event.turnCount
+  if ('revertedAt' in event) base['revertedAt'] = event.revertedAt
   if ('title' in event) base['title'] = event.title
   if ('projectId' in event) base['projectId'] = event.projectId
   if ('cwd' in event) base['cwd'] = event.cwd
@@ -567,10 +611,7 @@ function buildEventPayload(
   return base
 }
 
-function readProjectIdFromThread(
-  thread: OrchestrationThread,
-  event: OrchestrationEvent
-): string {
+function readProjectIdFromThread(thread: OrchestrationThread, event: OrchestrationEvent): string {
   if (event.type === 'thread.created' && 'projectId' in event) return event.projectId
   // Try to get projectId from the thread's id convention (project:xxx:chat:yyy)
   const match = /^project:([^:]+):/.exec(thread.id)

@@ -12,6 +12,7 @@ export const AGENT_CHANNELS = {
   listProviders: 'agent:list-providers',
   listModels: 'agent:list-models',
   clearThread: 'agent:clear-thread',
+  getCheckpointDiff: 'agent:get-checkpoint-diff',
   openWorkspaceFolder: 'agent:open-workspace-folder',
   revealPath: 'agent:reveal-path',
   threadEvent: (subscriptionId: string) => `agent:thread-event:${subscriptionId}`,

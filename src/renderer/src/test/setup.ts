@@ -166,6 +166,7 @@ const agentApiMock: AgentApi = {
   ]),
   listModels: vi.fn(async () => []),
   clearThread: vi.fn(async () => {}),
+  getCheckpointDiff: vi.fn(async (input) => ({ ...input, diff: '', truncated: false })),
   openWorkspaceFolder: vi.fn(async () => ({
     path: '/Users/ankush/codespace/gencode',
     name: 'gencode'

@@ -91,6 +91,10 @@ export class FakeProviderAdapter implements ProviderAdapter {
     await Promise.resolve()
   }
 
+  async rollbackConversation(): Promise<void> {
+    await Promise.resolve()
+  }
+
   async respondToApproval(): Promise<void> {
     await Promise.resolve()
   }

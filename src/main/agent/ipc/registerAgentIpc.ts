@@ -39,6 +39,19 @@ export function registerAgentIpc(backend: AgentBackend): void {
     await backend.clearThread(input)
   })
 
+  ipcMain.handle(AGENT_CHANNELS.getCheckpointDiff, async (event, input) => {
+    validateSender(event)
+    assertThreadInput(input)
+    if (typeof input.fromTurnCount !== 'number' || typeof input.toTurnCount !== 'number') {
+      throw new Error('checkpoint turn range is required.')
+    }
+    return backend.getCheckpointDiff({
+      threadId: input.threadId,
+      fromTurnCount: input.fromTurnCount,
+      toTurnCount: input.toTurnCount
+    })
+  })
+
   ipcMain.handle(AGENT_CHANNELS.openWorkspaceFolder, async (event) => {
     validateSender(event)
     const result = await dialog.showOpenDialog({
@@ -191,6 +204,7 @@ export function removeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_CHANNELS.listProviders)
   ipcMain.removeHandler(AGENT_CHANNELS.listModels)
   ipcMain.removeHandler(AGENT_CHANNELS.clearThread)
+  ipcMain.removeHandler(AGENT_CHANNELS.getCheckpointDiff)
   ipcMain.removeHandler(AGENT_CHANNELS.openWorkspaceFolder)
   ipcMain.removeHandler(AGENT_CHANNELS.revealPath)
   ipcMain.removeHandler(AGENT_CHANNELS.subscribeThread)

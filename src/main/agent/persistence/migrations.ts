@@ -151,6 +151,27 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
         runtime_payload_json TEXT
       );
     `
+  },
+  {
+    name: '002_checkpoint_summaries',
+    sql: `
+      CREATE TABLE IF NOT EXISTS projection_thread_checkpoints (
+        checkpoint_id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        assistant_message_id TEXT,
+        checkpoint_turn_count INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        files_json TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        error_message TEXT,
+        UNIQUE(thread_id, turn_id),
+        UNIQUE(thread_id, checkpoint_turn_count)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_projection_thread_checkpoints_thread_id
+        ON projection_thread_checkpoints(thread_id, checkpoint_turn_count);
+    `
   }
 ]
 
