@@ -2543,6 +2543,16 @@ button.diff-toolbar-pill:focus-visible,
   color: var(--text-muted);
 }
 
+.diff-tree-toggle {
+  gap: 6px;
+  padding: 0 9px;
+  color: var(--text-secondary);
+}
+
+.diff-tree-toggle svg {
+  opacity: 0.72;
+}
+
 .diff-header-wrap {
   margin-left: auto;
 }
@@ -2607,40 +2617,6 @@ button.diff-toolbar-pill:focus-visible,
   line-height: 1;
 }
 
-.diff-file-picker {
-  position: relative;
-  display: inline-flex;
-  flex: 0 1 auto;
-  min-width: 0;
-  min-height: 0;
-  height: auto;
-}
-
-.diff-file-trigger {
-  max-width: min(150px, 100%);
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.diff-file-trigger-label {
-  max-width: 116px;
-}
-
-.diff-file-menu {
-  top: calc(100% + 7px);
-  bottom: auto;
-  right: 0;
-  left: auto;
-  z-index: 40;
-  width: max-content;
-  min-width: 190px;
-  max-width: min(320px, calc(100vw - 32px));
-  max-height: min(330px, calc(100vh - 220px));
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-medium) transparent;
-}
-
 @container (max-width: 560px) {
   .diff-review-controls {
     align-items: center;
@@ -2648,19 +2624,6 @@ button.diff-toolbar-pill:focus-visible,
 
   .diff-toggle {
     margin-left: 0;
-  }
-
-  .diff-file-picker {
-    flex: 0 0 auto;
-  }
-
-  .diff-file-trigger {
-    max-width: 100%;
-  }
-
-  .diff-file-menu {
-    right: auto;
-    left: 0;
   }
 }
 
@@ -2703,10 +2666,186 @@ button.diff-toolbar-pill:focus-visible,
 
 .diff-review-body {
   min-height: 0;
-  overflow: auto;
+  height: 100%;
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 10px 12px 18px;
+  display: flex;
+  flex-direction: column;
   scrollbar-width: thin;
   scrollbar-color: var(--border-medium) transparent;
+}
+
+.diff-review-body-layout {
+  position: relative;
+  display: block;
+  min-height: 100%;
+  overflow-x: clip;
+}
+
+.diff-review-main {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.diff-review-tree-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border: 0;
+  background: rgba(4, 4, 6, 0);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.18s ease,
+    background 0.18s ease;
+}
+
+.diff-review-tree-scrim.open {
+  background: rgba(4, 4, 6, 0.18);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.diff-review-tree-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: min(310px, calc(100% - 36px));
+  gap: 10px;
+  padding: 12px 12px 10px;
+  background: rgba(9, 9, 11, 0.98);
+  box-shadow: -22px 0 44px rgba(0, 0, 0, 0.34);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(calc(100% + 12px));
+  transition:
+    transform 0.22s cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 0.18s ease;
+}
+
+.diff-review-tree-drawer.open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+.diff-review-tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.diff-review-tree-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.diff-review-tree-reset {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(200, 201, 212, 0.58);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.diff-review-tree-reset:hover,
+.diff-review-tree-reset:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.diff-review-tree-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.diff-review-tree-close:hover,
+.diff-review-tree-close:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.diff-review-tree-search {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  margin: 0 0 1px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  gap: 4px;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.diff-review-tree-search:focus-within {
+  background: rgba(255, 255, 255, 0.075);
+  color: var(--text-secondary);
+}
+
+.diff-review-tree-search input {
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 24px;
+  color: var(--text-secondary);
+}
+
+.diff-review-tree-search input::placeholder {
+  color: rgba(200, 201, 212, 0.4);
+}
+
+.diff-review-tree-shell {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  border-radius: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.diff-review-tree {
+  width: 100%;
+  height: 100%;
+}
+
+.diff-review-content {
+  min-width: 0;
+  transition: filter 0.18s ease;
 }
 
 .diff-file-stack {
@@ -2827,6 +2966,12 @@ button.diff-toolbar-pill:focus-visible,
 
 .diff-empty-state.error {
   color: var(--error);
+}
+
+@container (max-width: 720px) {
+  .diff-review-tree-drawer {
+    width: min(100%, calc(100% - 8px));
+  }
 }
 
 @keyframes diff-popover-in {

@@ -1,0 +1,313 @@
+import { useState, type ReactNode } from 'react'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { OrchestrationCheckpointSummary } from '../../../../shared/agent'
+import { DiffReviewSidebar, type DiffPanelMode, type DiffStyleMode } from './DiffReview'
+
+vi.mock('@pierre/diffs/react', () => ({
+  FileDiff: ({ fileDiff }: { fileDiff: { name: string; prevName?: string } }) => (
+    <div data-testid="mock-file-diff">{fileDiff.prevName ? `${fileDiff.prevName} -> ${fileDiff.name}` : fileDiff.name}</div>
+  ),
+  WorkerPoolContextProvider: ({ children }: { children: ReactNode }) => <>{children}</>
+}))
+
+if (!globalThis.ResizeObserver) {
+  globalThis.ResizeObserver = class ResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+}
+
+const fullDiff = `diff --git a/src/app.ts b/src/app.ts
+index 1111111..2222222 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1 +1 @@
+-old app
++new app
+diff --git a/src/components/Button.tsx b/src/components/Button.tsx
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/src/components/Button.tsx
+@@ -0,0 +1 @@
++export const Button = () => null
+diff --git a/docs/guide.md b/docs/guide.md
+deleted file mode 100644
+index 4444444..0000000
+--- a/docs/guide.md
++++ /dev/null
+@@ -1 +0,0 @@
+-legacy docs
+`
+
+const lastTurnDiff = `diff --git a/src/components/Button.tsx b/src/components/Button.tsx
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/src/components/Button.tsx
+@@ -0,0 +1 @@
++export const Button = () => null
+diff --git a/web/index.ts b/web/index.ts
+index 5555555..6666666 100644
+--- a/web/index.ts
++++ b/web/index.ts
+@@ -1 +1 @@
+-export const page = 'old'
++export const page = 'new'
+`
+
+const summaries: OrchestrationCheckpointSummary[] = [
+  {
+    id: 'checkpoint-1',
+    turnId: 'turn-1',
+    checkpointTurnCount: 1,
+    status: 'ready',
+    files: [
+      {
+        path: 'src/app.ts',
+        kind: 'modified',
+        additions: 1,
+        deletions: 1
+      },
+      {
+        path: 'docs/guide.md',
+        kind: 'deleted',
+        additions: 0,
+        deletions: 1
+      }
+    ],
+    completedAt: '2026-04-23T10:00:00.000Z'
+  },
+  {
+    id: 'checkpoint-2',
+    turnId: 'turn-2',
+    checkpointTurnCount: 2,
+    status: 'ready',
+    files: [
+      {
+        path: 'src/components/Button.tsx',
+        kind: 'added',
+        additions: 1,
+        deletions: 0
+      },
+      {
+        path: 'web/index.ts',
+        kind: 'modified',
+        additions: 1,
+        deletions: 1
+      }
+    ],
+    completedAt: '2026-04-23T10:01:00.000Z'
+  }
+]
+
+function DiffReviewHarness({
+  open = true,
+  initialMode = 'full',
+  initialSelectedFilePath = null,
+  summariesOverride = summaries
+}: {
+  open?: boolean
+  initialMode?: DiffPanelMode
+  initialSelectedFilePath?: string | null
+  summariesOverride?: OrchestrationCheckpointSummary[]
+}): React.JSX.Element {
+  const [mode, setMode] = useState<DiffPanelMode>(initialMode)
+  const [diffStyle, setDiffStyle] = useState<DiffStyleMode>('unified')
+  const [wrapLines, setWrapLines] = useState(false)
+  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null)
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(initialSelectedFilePath)
+
+  return (
+    <DiffReviewSidebar
+      open={open}
+      threadId="thread:test"
+      summaries={summariesOverride}
+      mode={mode}
+      diffStyle={diffStyle}
+      wrapLines={wrapLines}
+      selectedTurnId={selectedTurnId}
+      selectedFilePath={selectedFilePath}
+      workspaceDiffVersion={0}
+      onModeChange={setMode}
+      onDiffStyleChange={setDiffStyle}
+      onWrapLinesChange={setWrapLines}
+      onSelectTurn={setSelectedTurnId}
+      onSelectFile={setSelectedFilePath}
+      onCommitFull={() => {}}
+      onRefresh={() => {}}
+      onClose={() => {}}
+      resizeLabel="Resize review panel"
+      resizeMin={420}
+      resizeMax={920}
+      resizeValue={640}
+      onResizeStart={() => {}}
+      onResizeMove={() => {}}
+      onResizeEnd={() => {}}
+      onResizeKeyDown={() => {}}
+    />
+  )
+}
+
+function getTreeShadowRoot(container: HTMLElement): ShadowRoot {
+  const treeHost = container.querySelector<HTMLElement>('.diff-review-tree')
+  expect(treeHost).not.toBeNull()
+  expect(treeHost?.shadowRoot).not.toBeNull()
+  return treeHost?.shadowRoot as ShadowRoot
+}
+
+function getTreeQueries(container: HTMLElement) {
+  return within(getTreeShadowRoot(container) as unknown as HTMLElement)
+}
+
+describe('DiffReviewSidebar tree integration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    window.agentApi.getCheckpointWorktreeDiff = vi.fn(async (input) => ({
+      ...input,
+      diff: fullDiff,
+      files: [...summaries[0].files, ...summaries[1].files],
+      truncated: false
+    }))
+    window.agentApi.getCheckpointDiff = vi.fn(async (input) => ({
+      ...input,
+      diff: lastTurnDiff,
+      truncated: false
+    }))
+  })
+
+  it('shows the tree toggle and opens a nested changed-files tree', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<DiffReviewHarness />)
+
+    const toggle = await screen.findByRole('button', { name: /show changed files tree/i })
+    await user.click(toggle)
+
+    expect(await screen.findByLabelText('Changed files tree')).toBeInTheDocument()
+    expect(container.querySelector('.diff-review-tree-drawer.open')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Search files')).toBeInTheDocument()
+
+    const treeRoot = getTreeQueries(container)
+    await waitFor(() => {
+      expect(treeRoot.getByText('src')).toBeInTheDocument()
+      expect(treeRoot.getByText('docs')).toBeInTheDocument()
+      expect(treeRoot.getByText('web')).toBeInTheDocument()
+    })
+  })
+
+  it('selecting a file in the tree filters the diff body to that file', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<DiffReviewHarness />)
+
+    await user.click(await screen.findByRole('button', { name: /show changed files tree/i }))
+
+    const treeRoot = getTreeQueries(container)
+    const buttonFile = await treeRoot.findByText('Button.tsx')
+    await user.click(buttonFile)
+
+    await waitFor(() => {
+      const renderedDiffs = screen.getAllByTestId('mock-file-diff')
+      expect(renderedDiffs).toHaveLength(1)
+      expect(renderedDiffs[0]).toHaveTextContent('src/components/Button.tsx')
+    })
+  })
+
+  it('selecting a folder in the tree filters the diff body to matching descendants', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<DiffReviewHarness />)
+
+    await user.click(await screen.findByRole('button', { name: /show changed files tree/i }))
+
+    const treeRoot = getTreeQueries(container)
+    const srcFolder = await treeRoot.findByText('src')
+    await user.click(srcFolder)
+
+    await waitFor(() => {
+      const renderedDiffs = screen.getAllByTestId('mock-file-diff')
+      expect(renderedDiffs).toHaveLength(2)
+      expect(screen.getByText('src/app.ts')).toBeInTheDocument()
+      expect(screen.getByText('src/components/Button.tsx')).toBeInTheDocument()
+      expect(screen.queryByText('docs/guide.md')).not.toBeInTheDocument()
+    })
+  })
+
+  it('rebuilds the tree when switching from full diff to the last turn', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<DiffReviewHarness />)
+
+    await user.click(await screen.findByRole('button', { name: /show changed files tree/i }))
+
+    const initialTreeRoot = getTreeQueries(container)
+    expect(await initialTreeRoot.findByText('docs')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Last turn' }))
+
+    const updatedTreeRoot = getTreeQueries(container)
+    await waitFor(() => {
+      expect(updatedTreeRoot.queryByText('docs')).not.toBeInTheDocument()
+      expect(updatedTreeRoot.getByText('web')).toBeInTheDocument()
+      expect(updatedTreeRoot.getByText('Button.tsx')).toBeInTheDocument()
+    })
+  })
+
+  it('keeps the diff controls intact with the tree rail open and hides the toggle when no files exist', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<DiffReviewHarness />)
+    expect(await screen.findByRole('button', { name: /show changed files tree/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /show changed files tree/i }))
+    expect(container.querySelector('.diff-review-controls')).toBeInTheDocument()
+    expect(container.querySelector('.diff-review-tree-drawer.open')).toBeInTheDocument()
+  })
+
+  it('filters the changed files tree with the custom drawer search input', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<DiffReviewHarness />)
+
+    await user.click(await screen.findByRole('button', { name: /show changed files tree/i }))
+
+    const searchInput = screen.getByPlaceholderText('Search files')
+    await user.type(searchInput, 'button')
+
+    const treeRoot = getTreeQueries(container)
+    await waitFor(() => {
+      expect(treeRoot.getByText('Button.tsx')).toBeInTheDocument()
+      expect(treeRoot.queryByText('app.ts')).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows a scoped empty state when the selected path has no diff matches', async () => {
+    render(<DiffReviewHarness initialSelectedFilePath="src/missing" />)
+
+    expect(await screen.findByText('No changed files match "src/missing".')).toBeInTheDocument()
+  })
+
+  it('treats trailing-slash selections as folder filters', async () => {
+    render(<DiffReviewHarness initialSelectedFilePath="src/components/" />)
+
+    await waitFor(() => {
+      const renderedDiffs = screen.getAllByTestId('mock-file-diff')
+      expect(renderedDiffs).toHaveLength(1)
+      expect(renderedDiffs[0]).toHaveTextContent('src/components/Button.tsx')
+    })
+  })
+
+  it('does not render a tree toggle when the diff has no changed files', async () => {
+    window.agentApi.getCheckpointWorktreeDiff = vi.fn(async (input) => ({
+      ...input,
+      diff: '',
+      files: [],
+      truncated: false
+    }))
+
+    render(<DiffReviewHarness summariesOverride={[]} />)
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /show changed files tree/i })).not.toBeInTheDocument()
+      expect(screen.getByText('No completed checkpoint diffs yet.')).toBeInTheDocument()
+    })
+  })
+})

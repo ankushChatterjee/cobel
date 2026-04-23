@@ -12,11 +12,9 @@ import {
 import { FileDiff, WorkerPoolContextProvider } from '@pierre/diffs/react'
 import { parsePatchFiles, trimPatchContext, type FileDiffMetadata } from '@pierre/diffs'
 import {
-  Check,
   ChevronDown,
   GitCommitHorizontal,
   RefreshCw,
-  Search,
   TextWrap,
   Undo2
 } from 'lucide-react'
@@ -26,6 +24,7 @@ import type {
   CheckpointWorktreeDiffResult,
   OrchestrationCheckpointSummary
 } from '../../../../shared/agent'
+import { DiffChangedFilesTree, DiffTreeToggleButton, type DiffChangedFileChoice } from './DiffChangedFilesTree'
 import { DiffTurnPager } from './DiffTurnPager'
 
 export type DiffPanelMode = 'full' | 'turn'
@@ -248,9 +247,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   )
   const latest = readySummaries[readySummaries.length - 1] ?? null
   const selectedTurn = readySummaries.find((summary) => summary.turnId === selectedTurnId) ?? latest
-  const [fileMenuOpen, setFileMenuOpen] = useState(false)
-  const [fileSearch, setFileSearch] = useState('')
-  const fileMenuRef = useRef<HTMLDivElement | null>(null)
+  const [treeOpen, setTreeOpen] = useState(false)
   const range =
     mode === 'turn' && selectedTurn
       ? {
@@ -289,10 +286,18 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   const loading = mode === 'turn' ? checkpointDiff.loading : worktreeDiff.loading
   const error = mode === 'turn' ? checkpointDiff.error : worktreeDiff.error
   const files = useMemo(() => parsePatch(result?.diff ?? '', range), [result?.diff, range])
-  const visibleFiles = selectedFilePath
-    ? files.filter((file) => file.name === selectedFilePath || file.prevName === selectedFilePath)
-    : files
-  const fileChoices = useMemo(() => {
+  const summaryFiles = useMemo(
+    () =>
+      mode === 'turn' && selectedTurn
+        ? selectedTurn.files
+        : (worktreeDiff.result?.files ?? readySummaries.flatMap((summary) => summary.files)),
+    [mode, readySummaries, selectedTurn, worktreeDiff.result?.files]
+  )
+  const visibleFiles = useMemo(
+    () => filterDiffFiles(files, selectedFilePath),
+    [files, selectedFilePath]
+  )
+  const fileChoices = useMemo<DiffChangedFileChoice[]>(() => {
     if (files.length > 0) {
       return files.map((file) => ({
         path: file.name,
@@ -300,11 +305,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
         detail: file.name
       }))
     }
-    const summaryFiles =
-      mode === 'turn' && selectedTurn
-        ? selectedTurn.files
-        : (worktreeDiff.result?.files ?? readySummaries.flatMap((summary) => summary.files))
-    const byPath = new Map<string, { path: string; label: string; detail: string }>()
+    const byPath = new Map<string, DiffChangedFileChoice>()
     for (const file of summaryFiles) {
       byPath.set(file.path, {
         path: file.path,
@@ -313,19 +314,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
       })
     }
     return [...byPath.values()]
-  }, [files, mode, readySummaries, selectedTurn, worktreeDiff.result?.files])
-  const selectedFile = selectedFilePath
-    ? fileChoices.find((file) => file.path === selectedFilePath)
-    : null
-  const normalizedFileSearch = fileSearch.trim().toLowerCase()
-  const filteredFileChoices = useMemo(() => {
-    if (!normalizedFileSearch) return fileChoices
-    return fileChoices.filter(
-      (file) =>
-        file.label.toLowerCase().startsWith(normalizedFileSearch) ||
-        file.detail.toLowerCase().startsWith(normalizedFileSearch)
-    )
-  }, [fileChoices, normalizedFileSearch])
+  }, [files, summaryFiles])
   const options = useMemo(
     () => ({
       ...diffOptionsBase,
@@ -338,30 +327,12 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
     mode === 'full' &&
     range !== null &&
     headerCopy.subtitle.additions + headerCopy.subtitle.deletions > 0
+  const hasTreeFiles = fileChoices.length > 0
 
   useEffect(() => {
-    if (!fileMenuOpen) return
-    const onPointerDown = (event: globalThis.PointerEvent): void => {
-      const target = event.target
-      if (!(target instanceof Node)) return
-      if (!fileMenuRef.current?.contains(target)) setFileMenuOpen(false)
-    }
-    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        setFileMenuOpen(false)
-      }
-    }
-    window.addEventListener('pointerdown', onPointerDown)
-    window.addEventListener('keydown', onKeyDown)
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown)
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [fileMenuOpen])
-
-  useEffect(() => {
-    if (!fileMenuOpen) setFileSearch('')
-  }, [fileMenuOpen])
+    if (hasTreeFiles) return
+    setTreeOpen(false)
+  }, [hasTreeFiles])
 
   return (
     <aside className={`diff-review-sidebar ${open ? 'open' : ''}`} aria-hidden={!open}>
@@ -427,88 +398,12 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
               onSelectTurn={onSelectTurn}
             />
           ) : null}
-
-          <div className="diff-file-picker composer-select-shell" ref={fileMenuRef}>
-            <button
-              type="button"
-              className="diff-file-trigger diff-toolbar-pill composer-select-trigger"
-              onClick={() => setFileMenuOpen((isOpen) => !isOpen)}
-              aria-haspopup="listbox"
-              aria-expanded={fileMenuOpen}
-              aria-label={
-                selectedFile ? `Changed file: ${selectedFile.detail}` : 'All changed files'
-              }
-              title={selectedFile?.detail ?? 'All changed files'}
-            >
-              <span className="composer-select-value diff-file-trigger-label">
-                {selectedFile ? selectedFile.label : 'Files'}
-              </span>
-              <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
-            </button>
-            {fileMenuOpen ? (
-              <div
-                className="diff-file-menu composer-select-popover"
-                role="listbox"
-                aria-label="Changed files"
-              >
-                <label className="diff-file-search">
-                  <Search size={11} strokeWidth={1.8} aria-hidden="true" />
-                  <span className="sr-only">Search changed files</span>
-                  <input
-                    value={fileSearch}
-                    onChange={(event) => setFileSearch(event.target.value)}
-                    placeholder="Search files"
-                    autoFocus
-                  />
-                </label>
-                <div className="composer-select-options" role="listbox" aria-label="Changed files">
-                  {!normalizedFileSearch ? (
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={!selectedFilePath}
-                      className="diff-file-option composer-select-option"
-                      onClick={() => {
-                        onSelectFile(null)
-                        setFileMenuOpen(false)
-                      }}
-                    >
-                      <span>All files</span>
-                      {!selectedFilePath ? (
-                        <Check size={12} strokeWidth={1.8} aria-hidden="true" />
-                      ) : null}
-                    </button>
-                  ) : null}
-                  {filteredFileChoices.map((file) => {
-                    const isSelected = selectedFilePath === file.path
-                    return (
-                      <button
-                        key={file.path}
-                        type="button"
-                        role="option"
-                        aria-selected={isSelected}
-                        className="diff-file-option composer-select-option"
-                        onClick={() => {
-                          onSelectFile(file.path)
-                          setFileMenuOpen(false)
-                        }}
-                        title={file.detail}
-                      >
-                        <span>{file.label}</span>
-                        {isSelected ? (
-                          <Check size={12} strokeWidth={1.8} aria-hidden="true" />
-                        ) : null}
-                      </button>
-                    )
-                  })}
-                  {filteredFileChoices.length === 0 ? (
-                    <div className="diff-file-no-results">No matching files</div>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-          </div>
         </div>
+        <DiffTreeToggleButton
+          active={treeOpen}
+          disabled={!hasTreeFiles}
+          onClick={() => setTreeOpen((isOpen) => !isOpen)}
+        />
         <DiffToolbarPill
           iconOnly
           className={`diff-toggle diff-header-wrap ${wrapLines ? 'active' : ''}`}
@@ -537,26 +432,50 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
         </button>
       </div>
 
-      <div className="diff-review-body">
-        {!range ? <DiffEmptyState label="No completed checkpoint diffs yet." /> : null}
-        {loading ? <DiffEmptyState label="Loading diff..." /> : null}
-        {error ? <DiffEmptyState label={error} tone="error" /> : null}
-        {result && result.diff.trim().length === 0 ? (
-          <DiffEmptyState label="No net changes in this range." />
-        ) : null}
-        {visibleFiles.length > 0 ? (
-          <WorkerPoolContextProvider {...diffWorkerPool}>
-            <div className="diff-file-stack">
-              {visibleFiles.map((file) => (
-                <CollapsibleFileDiff
-                  key={`${file.prevName ?? ''}:${file.name}`}
-                  fileDiff={file}
-                  options={options}
-                />
-              ))}
+      <div className="diff-review-main">
+        <DiffChangedFilesTree
+          mode={mode}
+          threadId={threadId}
+          fileChoices={fileChoices}
+          summaryFiles={summaryFiles}
+          selectedFilePath={selectedFilePath}
+          open={treeOpen && hasTreeFiles}
+          onSelectFile={onSelectFile}
+          onClose={() => setTreeOpen(false)}
+        />
+        <div className="diff-review-body">
+          <div className="diff-review-body-layout">
+            <div className="diff-review-content">
+              {!range ? <DiffEmptyState label="No completed checkpoint diffs yet." /> : null}
+              {loading ? <DiffEmptyState label="Loading diff..." /> : null}
+              {error ? <DiffEmptyState label={error} tone="error" /> : null}
+              {result && result.diff.trim().length === 0 ? (
+                <DiffEmptyState label="No net changes in this range." />
+              ) : null}
+              {!loading &&
+              !error &&
+              result &&
+              result.diff.trim().length > 0 &&
+              selectedFilePath &&
+              visibleFiles.length === 0 ? (
+                <DiffEmptyState label={`No changed files match "${formatSelectedPath(selectedFilePath)}".`} />
+              ) : null}
+              {visibleFiles.length > 0 ? (
+                <WorkerPoolContextProvider {...diffWorkerPool}>
+                  <div className="diff-file-stack">
+                    {visibleFiles.map((file) => (
+                      <CollapsibleFileDiff
+                        key={`${file.prevName ?? ''}:${file.name}`}
+                        fileDiff={file}
+                        options={options}
+                      />
+                    ))}
+                  </div>
+                </WorkerPoolContextProvider>
+              ) : null}
             </div>
-          </WorkerPoolContextProvider>
-        ) : null}
+          </div>
+        </div>
       </div>
     </aside>
   )
@@ -882,6 +801,22 @@ function SegmentedControl({
 
 function DiffEmptyState({ label, tone }: { label: string; tone?: 'error' }): React.JSX.Element {
   return <div className={`diff-empty-state ${tone ?? ''}`}>{label}</div>
+}
+
+function filterDiffFiles(
+  files: FileDiffMetadata[],
+  selectedPath: string | null
+): FileDiffMetadata[] {
+  if (!selectedPath) return files
+  return files.filter(
+    (file) =>
+      file.name === selectedPath ||
+      file.prevName === selectedPath
+  )
+}
+
+function formatSelectedPath(path: string): string {
+  return path.endsWith('/') ? path : path
 }
 
 function summarizeFiles(files: CheckpointFileChange[]): {
