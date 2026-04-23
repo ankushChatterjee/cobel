@@ -612,7 +612,7 @@ function CollapsibleFileDiff({
       >
         <ChevronDown size={13} strokeWidth={1.8} aria-hidden="true" />
         <span className="diff-file-collapse-name">{title}</span>
-        <DiffStats additions={totals.additions} deletions={totals.deletions} />
+        <DiffStatsPill additions={totals.additions} deletions={totals.deletions} />
       </button>
       {!collapsed ? (
         <FileDiff
@@ -809,6 +809,20 @@ function parsePatch(
     console.error('[cobel:parse-diff]', error)
     return []
   }
+}
+
+function DiffStatsPill({
+  additions,
+  deletions
+}: {
+  additions: number
+  deletions: number
+}): React.JSX.Element {
+  return (
+    <span className="diff-stats-pill">
+      <DiffStats additions={additions} deletions={deletions} />
+    </span>
+  )
 }
 
 function DiffStats({
