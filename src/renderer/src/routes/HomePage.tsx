@@ -892,6 +892,10 @@ export function HomePage(): React.JSX.Element {
     setCommitDialogOpen(true)
   }, [])
 
+  const refreshDiffReview = useCallback((): void => {
+    setWorkspaceDiffVersion((version) => version + 1)
+  }, [])
+
   const commitFullChanges = useCallback(
     async (message: string): Promise<void> => {
       if (!activeThreadId) return
@@ -1259,6 +1263,7 @@ export function HomePage(): React.JSX.Element {
           onSelectTurn={setSelectedDiffTurnId}
           onSelectFile={setSelectedDiffFilePath}
           onCommitFull={requestCommitFullChanges}
+          onRefresh={refreshDiffReview}
           onClose={() => setDiffPanelOpen(false)}
           resizeLabel="Resize review panel"
           resizeMin={minDiffPanelWidth}

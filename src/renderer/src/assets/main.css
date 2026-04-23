@@ -2531,45 +2531,64 @@ button.diff-toolbar-pill:focus-visible,
   margin-left: auto;
 }
 
+.diff-refresh-button.loading svg {
+  animation: diff-refresh-spin 0.8s linear infinite;
+}
+
 .diff-commit-button {
   color: var(--text-secondary);
 }
 
-.diff-turn-picker {
-  position: relative;
-  display: inline-flex;
-  flex: 0 0 auto;
-  height: 24px;
-  min-width: 0;
-}
-
-.diff-turn-trigger {
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.diff-turn-trigger-count {
+.diff-turn-pager {
   display: inline-grid;
-  min-width: 16px;
-  height: 16px;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr);
   place-items: center;
+  width: 64px;
+  height: 27px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.055);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.055);
-  color: rgba(200, 201, 212, 0.58);
-  font-size: 10px;
-  font-weight: 650;
-  line-height: 1;
+  background: rgba(255, 255, 255, 0.025);
 }
 
-.diff-turn-menu {
-  top: calc(100% + 7px);
-  right: 0;
-  bottom: auto;
-  left: auto;
-  z-index: 40;
-  width: max-content;
-  min-width: 138px;
-  max-width: min(220px, calc(100vw - 32px));
+.diff-turn-page-button {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: rgba(200, 201, 212, 0.56);
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease,
+    transform 0.12s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.diff-turn-page-button:hover:not(:disabled),
+.diff-turn-page-button:focus-visible {
+  background: rgba(255, 255, 255, 0.065);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.diff-turn-page-button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.diff-turn-page-button:disabled {
+  color: rgba(200, 201, 212, 0.22);
+  cursor: default;
+}
+
+.diff-turn-page-number {
+  color: rgba(230, 231, 238, 0.74);
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .diff-file-picker {
@@ -2742,7 +2761,6 @@ button.diff-toolbar-pill:focus-visible,
   white-space: nowrap;
 }
 
-
 .diff-stats-pill {
   display: inline-flex;
   align-items: center;
@@ -2803,6 +2821,12 @@ button.diff-toolbar-pill:focus-visible,
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes diff-refresh-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

@@ -11,13 +11,22 @@ import {
 } from 'react'
 import { FileDiff, WorkerPoolContextProvider } from '@pierre/diffs/react'
 import { parsePatchFiles, trimPatchContext, type FileDiffMetadata } from '@pierre/diffs'
-import { Check, ChevronDown, GitCommitHorizontal, Search, TextWrap, Undo2 } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  GitCommitHorizontal,
+  RefreshCw,
+  Search,
+  TextWrap,
+  Undo2
+} from 'lucide-react'
 import type {
   CheckpointDiffResult,
   CheckpointFileChange,
   CheckpointWorktreeDiffResult,
   OrchestrationCheckpointSummary
 } from '../../../../shared/agent'
+import { DiffTurnPager } from './DiffTurnPager'
 
 export type DiffPanelMode = 'full' | 'turn'
 export type DiffStyleMode = 'unified' | 'split'
@@ -59,6 +68,7 @@ interface DiffReviewSidebarProps {
   onSelectTurn: (turnId: string | null) => void
   onSelectFile: (path: string | null) => void
   onCommitFull: () => void
+  onRefresh: () => void
   onClose: () => void
   resizeLabel: string
   resizeMin: number
@@ -218,6 +228,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   onSelectTurn,
   onSelectFile,
   onCommitFull,
+  onRefresh,
   onClose,
   resizeLabel,
   resizeMin,
@@ -238,10 +249,8 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   const latest = readySummaries[readySummaries.length - 1] ?? null
   const selectedTurn = readySummaries.find((summary) => summary.turnId === selectedTurnId) ?? latest
   const [fileMenuOpen, setFileMenuOpen] = useState(false)
-  const [turnMenuOpen, setTurnMenuOpen] = useState(false)
   const [fileSearch, setFileSearch] = useState('')
   const fileMenuRef = useRef<HTMLDivElement | null>(null)
-  const turnMenuRef = useRef<HTMLDivElement | null>(null)
   const range =
     mode === 'turn' && selectedTurn
       ? {
@@ -270,7 +279,12 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
             worktreeDiff.result?.files ?? readySummaries.flatMap((summary) => summary.files)
           )
         }
-  const checkpointDiff = useCheckpointDiff(threadId, range, open && mode === 'turn')
+  const checkpointDiff = useCheckpointDiff(
+    threadId,
+    range,
+    open && mode === 'turn',
+    workspaceDiffVersion
+  )
   const result = mode === 'turn' ? checkpointDiff.result : worktreeDiff.result
   const loading = mode === 'turn' ? checkpointDiff.loading : worktreeDiff.loading
   const error = mode === 'turn' ? checkpointDiff.error : worktreeDiff.error
@@ -303,12 +317,6 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   const selectedFile = selectedFilePath
     ? fileChoices.find((file) => file.path === selectedFilePath)
     : null
-  const selectedTurnLabel =
-    selectedTurn === latest
-      ? 'Latest turn'
-      : selectedTurn
-        ? `Turn ${selectedTurn.checkpointTurnCount}`
-        : 'Select turn'
   const normalizedFileSearch = fileSearch.trim().toLowerCase()
   const filteredFileChoices = useMemo(() => {
     if (!normalizedFileSearch) return fileChoices
@@ -332,17 +340,15 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
     headerCopy.subtitle.additions + headerCopy.subtitle.deletions > 0
 
   useEffect(() => {
-    if (!fileMenuOpen && !turnMenuOpen) return
+    if (!fileMenuOpen) return
     const onPointerDown = (event: globalThis.PointerEvent): void => {
       const target = event.target
       if (!(target instanceof Node)) return
       if (!fileMenuRef.current?.contains(target)) setFileMenuOpen(false)
-      if (!turnMenuRef.current?.contains(target)) setTurnMenuOpen(false)
     }
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === 'Escape') {
         setFileMenuOpen(false)
-        setTurnMenuOpen(false)
       }
     }
     window.addEventListener('pointerdown', onPointerDown)
@@ -351,7 +357,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
       window.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [fileMenuOpen, turnMenuOpen])
+  }, [fileMenuOpen])
 
   useEffect(() => {
     if (!fileMenuOpen) setFileSearch('')
@@ -414,55 +420,12 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
           ) : null}
 
           {mode === 'turn' && readySummaries.length > 1 ? (
-            <div className="diff-turn-picker composer-select-shell" ref={turnMenuRef}>
-              <button
-                type="button"
-                className="diff-turn-trigger diff-toolbar-pill composer-select-trigger"
-                onClick={() => setTurnMenuOpen((isOpen) => !isOpen)}
-                aria-haspopup="listbox"
-                aria-expanded={turnMenuOpen}
-                aria-label={`Select turn: ${selectedTurnLabel}`}
-                title={selectedTurnLabel}
-              >
-                <span className="diff-turn-trigger-count" aria-hidden="true">
-                  {selectedTurn?.checkpointTurnCount ?? readySummaries.length}
-                </span>
-                <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
-              </button>
-              {turnMenuOpen ? (
-                <div
-                  className="diff-turn-menu composer-select-popover"
-                  role="listbox"
-                  aria-label="Turns"
-                >
-                  <div className="composer-select-options" role="listbox" aria-label="Turns">
-                    {readySummaries.map((summary) => {
-                      const isSelected = selectedTurn?.turnId === summary.turnId
-                      const label =
-                        summary === latest ? 'Latest turn' : `Turn ${summary.checkpointTurnCount}`
-                      return (
-                        <button
-                          key={summary.turnId}
-                          type="button"
-                          role="option"
-                          aria-selected={isSelected}
-                          className="diff-turn-option composer-select-option"
-                          onClick={() => {
-                            onSelectTurn(summary.turnId)
-                            setTurnMenuOpen(false)
-                          }}
-                        >
-                          <span>{label}</span>
-                          {isSelected ? (
-                            <Check size={12} strokeWidth={1.8} aria-hidden="true" />
-                          ) : null}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </div>
+            <DiffTurnPager
+              summaries={readySummaries}
+              selectedTurn={selectedTurn}
+              latest={latest}
+              onSelectTurn={onSelectTurn}
+            />
           ) : null}
 
           <div className="diff-file-picker composer-select-shell" ref={fileMenuRef}>
@@ -554,6 +517,15 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
           title={wrapLines ? 'Disable line wrapping' : 'Enable line wrapping'}
         >
           <TextWrap size={13} strokeWidth={1.8} aria-hidden="true" />
+        </DiffToolbarPill>
+        <DiffToolbarPill
+          iconOnly
+          className={`diff-refresh-button ${loading ? 'loading' : ''}`}
+          onClick={onRefresh}
+          ariaLabel="Refresh review diff"
+          title="Refresh review"
+        >
+          <RefreshCw size={13} strokeWidth={1.8} aria-hidden="true" />
         </DiffToolbarPill>
         <button
           type="button"
@@ -711,12 +683,14 @@ export const DiffPreviewPopover = memo(function DiffPreviewPopover({
 function useCheckpointDiff(
   threadId: string | null,
   range: { fromTurnCount: number; toTurnCount: number } | null,
-  enabled: boolean
+  enabled: boolean,
+  version = 0
 ): { result: CheckpointDiffResult | null; loading: boolean; error: string | null } {
   const [result, setResult] = useState<CheckpointDiffResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const key = threadId && range ? `${threadId}:${range.fromTurnCount}:${range.toTurnCount}` : null
+  const key =
+    threadId && range ? `${threadId}:${range.fromTurnCount}:${range.toTurnCount}:${version}` : null
   const latestKeyRef = useRef<string | null>(null)
 
   const fromTurnCount = range?.fromTurnCount
@@ -839,7 +813,6 @@ function DiffStats({
     </span>
   )
 }
-
 
 function DiffToolbarPill({
   as = 'button',
