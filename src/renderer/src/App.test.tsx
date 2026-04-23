@@ -21,7 +21,7 @@ describe('renderer app', () => {
 
     expect(await screen.findByRole('heading', { name: /open a project/i })).toBeInTheDocument()
     expect(screen.getByLabelText(/no projects open/i)).toHaveTextContent(/no projects open/i)
-    expect(screen.getAllByRole('button', { name: /add project/i })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: /add project/i })).toHaveLength(1)
     expect(screen.queryByRole('button', { name: /open folder/i })).not.toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: /ask codex/i })).toBeInTheDocument()
     expect(screen.getByText(/codex-cli 0\.121\.0/i)).toBeInTheDocument()
@@ -89,11 +89,11 @@ describe('renderer app', () => {
     await user.selectOptions(runtimeSelect, 'full-access')
     await user.selectOptions(modelSelect, 'gpt-5.4')
 
-    const headerNewButton = document.querySelector<HTMLButtonElement>(
-      '.chat-header .text-button[aria-label="New chat"]'
+    const sidebarNewButton = document.querySelector<HTMLButtonElement>(
+      '.thread-list .thread-link.new-thread'
     )
-    expect(headerNewButton).not.toBeNull()
-    await user.click(headerNewButton as HTMLButtonElement)
+    expect(sidebarNewButton).not.toBeNull()
+    await user.click(sidebarNewButton as HTMLButtonElement)
 
     const runtimeSelectAfterNew = (await screen.findByLabelText(
       /runtime mode/i
@@ -906,9 +906,10 @@ describe('renderer app', () => {
     expect(screen.queryByLabelText('Thought')).not.toBeInTheDocument()
   })
 
-  it('opens projects and clears the active chat from controls', async () => {
+  it('opens projects and deletes the active chat from controls', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
 
     render(<RouterProvider router={router} />)
 
@@ -917,10 +918,14 @@ describe('renderer app', () => {
     expect(window.agentApi.openWorkspaceFolder).toHaveBeenCalled()
     expect(await screen.findByText('Cobel')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /clear chat/i }))
-    expect(window.agentApi.clearThread).toHaveBeenCalledWith({
-      threadId: expect.stringMatching(/^project:/)
-    })
+    await user.click(screen.getByRole('button', { name: /delete new chat/i }))
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Delete "New chat"?'))
+    expect(window.agentApi.dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'thread.delete',
+        threadId: expect.stringMatching(/^project:/)
+      })
+    )
   })
 
   it('deletes a sidebar thread from the hover action', async () => {

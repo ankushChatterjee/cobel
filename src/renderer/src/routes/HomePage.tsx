@@ -27,7 +27,6 @@ import {
   RotateCcw,
   Square,
   TriangleAlert,
-  ExternalLink,
   FilePen
 } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
@@ -675,16 +674,6 @@ export function HomePage(): React.JSX.Element {
     }
   }
 
-  async function revealWorkspaceFolder(): Promise<void> {
-    if (!activeProject) return
-    setError(null)
-    try {
-      await window.agentApi.revealPath({ path: activeProject.path })
-    } catch (revealError) {
-      setError(revealError instanceof Error ? revealError.message : String(revealError))
-    }
-  }
-
   async function startNewChat(): Promise<void> {
     if (!activeProject) {
       void openWorkspaceFolder()
@@ -706,18 +695,6 @@ export function HomePage(): React.JSX.Element {
     setThread(null)
     setIsPendingThinking(false)
     setError(null)
-  }
-
-  async function clearCurrentChat(): Promise<void> {
-    if (!activeThreadId) return
-    setComposerResetToken((token) => token + 1)
-    setIsPendingThinking(false)
-    setError(null)
-    try {
-      await window.agentApi.clearThread({ threadId: activeThreadId })
-    } catch (clearError) {
-      setError(clearError instanceof Error ? clearError.message : String(clearError))
-    }
   }
 
   function selectProject(project: ProjectSummary): void {
@@ -1130,44 +1107,6 @@ export function HomePage(): React.JSX.Element {
             </span>
           </div>
           <div className="header-actions">
-            <button
-              type="button"
-              className="text-button"
-              title="New chat"
-              aria-label="New chat"
-              onClick={() => void startNewChat()}
-            >
-              New
-            </button>
-            <button
-              type="button"
-              className="text-button"
-              title="Clear chat"
-              aria-label="Clear chat"
-              onClick={() => void clearCurrentChat()}
-              disabled={!activeThreadId}
-            >
-              Clear
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              title="Reveal workspace"
-              aria-label="Reveal workspace"
-              onClick={revealWorkspaceFolder}
-              disabled={!activeProject}
-            >
-              <ExternalLink size={13} strokeWidth={1.8} />
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              title="Add project"
-              aria-label="Add project"
-              onClick={openWorkspaceFolder}
-            >
-              <FolderOpen size={13} strokeWidth={1.8} />
-            </button>
           </div>
         </header>
 
