@@ -174,4 +174,31 @@ describe('parseCodexStderr', () => {
       { level: 'error', message: 'something broke' }
     ])
   })
+
+  it('keeps multiline tool errors in a single runtime error entry', () => {
+    expect(
+      parseCodexStderr(`apply_patch verification failed: Failed to find expected lines in /tmp/SqlEditor.tsx:
+useEffect(() => {
+const onKeyDown = (event: KeyboardEvent) => {
+if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+event.preventDefault();
+setIsSearchOpen(true);
+return;
+}
+if (event.key === "Escape" && isSearchOpen) {`)
+    ).toEqual([
+      {
+        level: 'error',
+        message: `apply_patch verification failed: Failed to find expected lines in /tmp/SqlEditor.tsx:
+useEffect(() => {
+const onKeyDown = (event: KeyboardEvent) => {
+if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+event.preventDefault();
+setIsSearchOpen(true);
+return;
+}
+if (event.key === "Escape" && isSearchOpen) {`
+      }
+    ])
+  })
 })

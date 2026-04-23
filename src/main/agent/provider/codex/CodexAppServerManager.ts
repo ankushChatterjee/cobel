@@ -703,6 +703,25 @@ export function parseCodexStderr(
     detail?: unknown
     key?: string
   }> = []
+  const pushOrAppend = (entry: {
+    level: 'error' | 'warning' | 'ignore'
+    message: string
+    detail?: unknown
+    key?: string
+  }): void => {
+    const previous = messages.at(-1)
+    if (!previous || !shouldAppendStderrLine(previous, entry.message)) {
+      messages.push(entry)
+      return
+    }
+
+    previous.message = `${previous.message}\n${entry.message}`
+    const previousRaw = readRawDetail(previous.detail)
+    if (previousRaw) {
+      previous.detail = { ...readRecord(previous.detail), raw: `${previousRaw}\n${entry.message}` }
+    }
+  }
+
   for (const line of chunk.split(/\r?\n/)) {
     const trimmed = stripAnsi(line).trim()
     if (!trimmed) continue
@@ -710,7 +729,7 @@ export function parseCodexStderr(
     if (!parsed) {
       const message = readTracingErrorMessage(trimmed) ?? trimmed
       const warning = classifyCodexWarning(trimmed)
-      messages.push({
+      pushOrAppend({
         level: warning ? 'warning' : 'error',
         message: warning?.message ?? message,
         detail: warning || message !== trimmed ? { raw: trimmed } : undefined,
@@ -723,7 +742,7 @@ export function parseCodexStderr(
       messages.push({ level: 'ignore', message: stripAnsi(readCodexLogMessage(parsed) ?? trimmed) })
       continue
     }
-    messages.push({
+    pushOrAppend({
       level: 'error',
       message: stripAnsi(readCodexLogMessage(parsed) ?? trimmed),
       detail: parsed
@@ -755,6 +774,31 @@ function classifyCodexWarning(value: string): { message: string; key: string } |
     }
   }
   return null
+}
+
+function shouldAppendStderrLine(
+  previous: { level: 'error' | 'warning' | 'ignore'; message: string; detail?: unknown },
+  line: string
+): boolean {
+  if (previous.level !== 'error') return false
+  if (parseJsonRecord(line)) return false
+  if (readTracingErrorMessage(line)) return false
+  if (classifyCodexWarning(line)) return false
+  if (/^\d{4}-\d{2}-\d{2}T\S+\s+(ERROR|WARN|INFO|DEBUG|TRACE)\b/.test(line)) return false
+
+  const previousMessage = previous.message.trimEnd()
+  return (
+    previousMessage.endsWith(':') ||
+    /[([{]$/.test(previousMessage) ||
+    /^[)}\]}]/.test(line) ||
+    /^[A-Za-z_$]/.test(line)
+  )
+}
+
+function readRawDetail(detail: unknown): string | undefined {
+  const record = readRecord(detail)
+  const raw = record.raw
+  return typeof raw === 'string' && raw.length > 0 ? raw : undefined
 }
 
 function isServerRequest(value: unknown): value is JsonRpcRequest {
