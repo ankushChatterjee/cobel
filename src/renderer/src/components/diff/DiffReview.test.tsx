@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OrchestrationCheckpointSummary } from '../../../../shared/agent'
-import { DiffReviewSidebar, type DiffPanelMode, type DiffStyleMode } from './DiffReview'
+import { DiffReviewSidebar, FloatingDiffPill, type DiffPanelMode, type DiffStyleMode } from './DiffReview'
 
 vi.mock('@pierre/diffs/react', () => ({
   FileDiff: ({ fileDiff }: { fileDiff: { name: string; prevName?: string } }) => (
@@ -309,5 +309,61 @@ describe('DiffReviewSidebar tree integration', () => {
       expect(screen.queryByRole('button', { name: /show changed files tree/i })).not.toBeInTheDocument()
       expect(screen.getByText('No completed checkpoint diffs yet.')).toBeInTheDocument()
     })
+  })
+})
+
+describe('FloatingDiffPill', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('refreshes when new checkpoint summaries arrive', async () => {
+    const initialSummaries = [summaries[0]]
+    const updatedSummaries = summaries
+    const getCheckpointWorktreeDiff = vi
+      .fn()
+      .mockResolvedValueOnce({
+        threadId: 'thread:test',
+        fromTurnCount: 0,
+        diff: fullDiff,
+        files: initialSummaries[0].files,
+        truncated: false
+      })
+      .mockResolvedValueOnce({
+        threadId: 'thread:test',
+        fromTurnCount: 0,
+        diff: fullDiff,
+        files: [...summaries[0].files, ...summaries[1].files],
+        truncated: false
+      })
+
+    window.agentApi.getCheckpointWorktreeDiff = getCheckpointWorktreeDiff
+
+    const { rerender } = render(
+      <FloatingDiffPill
+        threadId="thread:test"
+        summaries={initialSummaries}
+        workspaceDiffVersion={0}
+        onOpen={() => {}}
+      />
+    )
+
+    expect(await screen.findByRole('button', { name: /review/i })).toHaveTextContent('+1')
+    expect(screen.getByRole('button', { name: /review/i })).toHaveTextContent('-2')
+
+    rerender(
+      <FloatingDiffPill
+        threadId="thread:test"
+        summaries={updatedSummaries}
+        workspaceDiffVersion={0}
+        onOpen={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /review/i })).toHaveTextContent('+3')
+      expect(screen.getByRole('button', { name: /review/i })).toHaveTextContent('-3')
+    })
+    expect(getCheckpointWorktreeDiff).toHaveBeenCalledTimes(2)
   })
 })

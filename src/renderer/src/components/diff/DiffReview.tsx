@@ -197,7 +197,8 @@ export const FloatingDiffPill = memo(function FloatingDiffPill({
   onOpen
 }: FloatingDiffPillProps): React.JSX.Element | null {
   const ready = summaries.filter((summary) => summary.status === 'ready')
-  const { result } = useCheckpointWorktreeDiff(threadId, 0, ready.length > 0, workspaceDiffVersion)
+  const refreshKey = `${workspaceDiffVersion}:${buildCheckpointRefreshKey(ready)}`
+  const { result } = useCheckpointWorktreeDiff(threadId, 0, ready.length > 0, refreshKey)
   if (ready.length === 0) return null
   const files = result?.files ?? ready.flatMap((summary) => summary.files)
   const totals = summarizeFiles(files)
@@ -261,7 +262,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
     threadId,
     0,
     open && mode !== 'turn' && readySummaries.length > 0,
-    workspaceDiffVersion
+    `${workspaceDiffVersion}:${buildCheckpointRefreshKey(readySummaries)}`
   )
   const headerCopy =
     mode === 'turn' && selectedTurn
@@ -603,7 +604,7 @@ function useCheckpointDiff(
   threadId: string | null,
   range: { fromTurnCount: number; toTurnCount: number } | null,
   enabled: boolean,
-  version = 0
+  version: string | number = 0
 ): { result: CheckpointDiffResult | null; loading: boolean; error: string | null } {
   const [result, setResult] = useState<CheckpointDiffResult | null>(null)
   const [loading, setLoading] = useState(false)
@@ -651,7 +652,7 @@ function useCheckpointWorktreeDiff(
   threadId: string | null,
   fromTurnCount: number,
   enabled: boolean,
-  version: number
+  version: string | number
 ): { result: CheckpointWorktreeDiffResult | null; loading: boolean; error: string | null } {
   const [result, setResult] = useState<CheckpointWorktreeDiffResult | null>(null)
   const [loading, setLoading] = useState(false)
@@ -817,6 +818,22 @@ function filterDiffFiles(
 
 function formatSelectedPath(path: string): string {
   return path.endsWith('/') ? path : path
+}
+
+function buildCheckpointRefreshKey(summaries: OrchestrationCheckpointSummary[]): string {
+  if (summaries.length === 0) return 'none'
+  return summaries
+    .map((summary) =>
+      [
+        summary.id,
+        summary.status,
+        summary.checkpointTurnCount,
+        summary.completedAt,
+        summary.files.length,
+        summary.errorMessage ?? ''
+      ].join(':')
+    )
+    .join('|')
 }
 
 function summarizeFiles(files: CheckpointFileChange[]): {
