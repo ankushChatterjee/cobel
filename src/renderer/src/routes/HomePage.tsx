@@ -2445,7 +2445,7 @@ const ActivityRow = memo(function ActivityRow({
         <span className="activity-row-icon" aria-hidden="true">
           <TriangleAlert size={11} strokeWidth={2.1} />
         </span>
-        <code>{activity.summary}</code>
+        <p className="activity-row-warning-message">{activity.summary}</p>
       </article>
     )
   }
