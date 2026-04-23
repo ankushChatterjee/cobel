@@ -22,6 +22,7 @@ import {
   Trash2,
   Folder,
   FolderOpen,
+  GitCommitHorizontal,
   Plus,
   RotateCcw,
   Square,
@@ -348,6 +349,9 @@ export function HomePage(): React.JSX.Element {
   const [selectedDiffFilePath, setSelectedDiffFilePath] = useState<string | null>(null)
   const [diffPreview, setDiffPreview] = useState<DiffPreviewState | null>(null)
   const [pendingRevertTurnCount, setPendingRevertTurnCount] = useState<number | null>(null)
+  const [commitDialogOpen, setCommitDialogOpen] = useState(false)
+  const [commitSubmitting, setCommitSubmitting] = useState(false)
+  const [commitError, setCommitError] = useState<string | null>(null)
   const [workspaceDiffVersion, setWorkspaceDiffVersion] = useState(0)
 
   const activeProject = useMemo(
@@ -370,10 +374,6 @@ export function HomePage(): React.JSX.Element {
   const checkpointByAssistantMessageId = useMemo(
     () => buildCheckpointByAssistantMessageId(thread?.checkpoints ?? []),
     [thread?.checkpoints]
-  )
-  const revertTurnCountByUserMessageId = useMemo(
-    () => buildRevertTurnCountByUserMessageId(thread),
-    [thread]
   )
   const sessionError = useMemo(() => readSessionErrorForDisplay(thread), [thread])
   const hasActiveThinkingActivity = useMemo(
@@ -887,6 +887,35 @@ export function HomePage(): React.JSX.Element {
     return Promise.resolve()
   }, [])
 
+  const requestCommitFullChanges = useCallback((): void => {
+    setCommitError(null)
+    setCommitDialogOpen(true)
+  }, [])
+
+  const commitFullChanges = useCallback(
+    async (message: string): Promise<void> => {
+      if (!activeThreadId) return
+      setCommitSubmitting(true)
+      setCommitError(null)
+      try {
+        await window.agentApi.dispatchCommand({
+          type: 'thread.checkpoint.commit',
+          commandId: `cmd:${createId()}`,
+          threadId: activeThreadId,
+          message,
+          createdAt: new Date().toISOString()
+        })
+        setCommitDialogOpen(false)
+        setWorkspaceDiffVersion((version) => version + 1)
+      } catch (commitError) {
+        setCommitError(errorMessageForDisplay(commitError))
+      } finally {
+        setCommitSubmitting(false)
+      }
+    },
+    [activeThreadId]
+  )
+
   const revertToCheckpoint = useCallback(
     async (turnCount: number): Promise<void> => {
       if (!activeThreadId) return
@@ -1167,7 +1196,6 @@ export function HomePage(): React.JSX.Element {
                 showPendingThinking={showPendingThinking}
                 expandedToolIds={expandedToolIds}
                 checkpointByAssistantMessageId={checkpointByAssistantMessageId}
-                revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onToggleTool={toggleToolExpanded}
                 onApprove={respondToApproval}
                 onAnswer={respondToUserInput}
@@ -1230,6 +1258,7 @@ export function HomePage(): React.JSX.Element {
           onWrapLinesChange={setDiffWrapLines}
           onSelectTurn={setSelectedDiffTurnId}
           onSelectFile={setSelectedDiffFilePath}
+          onCommitFull={requestCommitFullChanges}
           onClose={() => setDiffPanelOpen(false)}
           resizeLabel="Resize review panel"
           resizeMin={minDiffPanelWidth}
@@ -1245,6 +1274,18 @@ export function HomePage(): React.JSX.Element {
           workspacePath={activeProject?.path ?? thread?.cwd ?? null}
           onCancel={() => setPendingRevertTurnCount(null)}
           onConfirm={(turnCount) => void revertToCheckpoint(turnCount)}
+        />
+        <CommitMessageDialog
+          open={commitDialogOpen}
+          workspacePath={activeProject?.path ?? thread?.cwd ?? null}
+          error={commitError}
+          submitting={commitSubmitting}
+          onCancel={() => {
+            if (commitSubmitting) return
+            setCommitDialogOpen(false)
+            setCommitError(null)
+          }}
+          onConfirm={(message) => void commitFullChanges(message)}
         />
       </main>
     </div>
@@ -1678,7 +1719,6 @@ const TranscriptList = memo(function TranscriptList({
   showPendingThinking,
   expandedToolIds,
   checkpointByAssistantMessageId,
-  revertTurnCountByUserMessageId,
   onToggleTool,
   onApprove,
   onAnswer,
@@ -1690,7 +1730,6 @@ const TranscriptList = memo(function TranscriptList({
   showPendingThinking: boolean
   expandedToolIds: Set<string>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
-  revertTurnCountByUserMessageId: Map<string, number>
   onToggleTool: (activityId: string) => void
   onApprove: (
     activity: OrchestrationThreadActivity,
@@ -1718,7 +1757,6 @@ const TranscriptList = memo(function TranscriptList({
               key={group.item.id}
               item={group.item}
               checkpointByAssistantMessageId={checkpointByAssistantMessageId}
-              revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
               onApprove={onApprove}
               onAnswer={onAnswer}
               onPreviewDiff={onPreviewDiff}
@@ -1761,7 +1799,6 @@ const TranscriptList = memo(function TranscriptList({
 const TranscriptRow = memo(function TranscriptRow({
   item,
   checkpointByAssistantMessageId,
-  revertTurnCountByUserMessageId,
   onApprove,
   onAnswer,
   onPreviewDiff,
@@ -1770,7 +1807,6 @@ const TranscriptRow = memo(function TranscriptRow({
 }: {
   item: TranscriptItem
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
-  revertTurnCountByUserMessageId: Map<string, number>
   onApprove: (
     activity: OrchestrationThreadActivity,
     decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'
@@ -1793,7 +1829,6 @@ const TranscriptRow = memo(function TranscriptRow({
         message={item.message}
         workDurationMs={item.workDurationMs}
         checkpointSummary={checkpointByAssistantMessageId.get(item.message.id) ?? null}
-        revertTurnCount={revertTurnCountByUserMessageId.get(item.message.id) ?? null}
         onPreviewDiff={onPreviewDiff}
         onOpenDiff={onOpenDiff}
         onRevert={onRevert}
@@ -1833,7 +1868,6 @@ const MessageRow = memo(function MessageRow({
   message,
   workDurationMs,
   checkpointSummary,
-  revertTurnCount,
   onPreviewDiff,
   onOpenDiff,
   onRevert
@@ -1841,7 +1875,6 @@ const MessageRow = memo(function MessageRow({
   message: OrchestrationMessage
   workDurationMs: number | null
   checkpointSummary: OrchestrationCheckpointSummary | null
-  revertTurnCount: number | null
   onPreviewDiff: (
     summary: OrchestrationCheckpointSummary,
     file: CheckpointFileChange,
@@ -1863,15 +1896,6 @@ const MessageRow = memo(function MessageRow({
           <>
             <span>you</span>
             <span>{formatTime(message.createdAt)}</span>
-            {typeof revertTurnCount === 'number' ? (
-              <button
-                type="button"
-                className="message-revert-button"
-                onClick={() => void onRevert(revertTurnCount)}
-              >
-                Revert
-              </button>
-            ) : null}
           </>
         )}
       </div>
@@ -1883,6 +1907,12 @@ const MessageRow = memo(function MessageRow({
               summary={checkpointSummary}
               onPreview={(file, rect) => onPreviewDiff(checkpointSummary, file, rect)}
               onOpenDiff={(filePath) => onOpenDiff(checkpointSummary.turnId, filePath)}
+              revertTurnCount={
+                checkpointSummary.status === 'ready'
+                  ? Math.max(0, checkpointSummary.checkpointTurnCount - 1)
+                  : null
+              }
+              onRevert={onRevert}
             />
           ) : null}
         </>
@@ -1957,6 +1987,118 @@ function RevertWarningDialog({
           </button>
         </div>
       </section>
+    </div>
+  )
+}
+
+function CommitMessageDialog({
+  open,
+  workspacePath,
+  error,
+  submitting,
+  onCancel,
+  onConfirm
+}: {
+  open: boolean
+  workspacePath: string | null
+  error: string | null
+  submitting: boolean
+  onCancel: () => void
+  onConfirm: (message: string) => void
+}): React.JSX.Element | null {
+  const [message, setMessage] = useState('')
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const titleId = useId()
+  const descriptionId = useId()
+  const trimmedMessage = message.trim()
+
+  useEffect(() => {
+    if (!open) {
+      setMessage('')
+      return
+    }
+    const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 20)
+    return () => window.clearTimeout(focusTimer)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === 'Escape' && !submitting) onCancel()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onCancel, open, submitting])
+
+  const handleSubmit = useCallback(
+    (event: FormEvent<HTMLFormElement>): void => {
+      event.preventDefault()
+      if (!trimmedMessage || submitting) return
+      onConfirm(trimmedMessage)
+    },
+    [onConfirm, submitting, trimmedMessage]
+  )
+
+  if (!open) return null
+
+  return (
+    <div className="commit-dialog-layer" role="presentation">
+      <button
+        type="button"
+        className="commit-dialog-scrim"
+        aria-label="Cancel commit"
+        onClick={onCancel}
+        disabled={submitting}
+      />
+      <form
+        className="commit-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        onSubmit={handleSubmit}
+      >
+        <div className="commit-dialog-icon" aria-hidden="true">
+          <GitCommitHorizontal size={15} strokeWidth={2} />
+        </div>
+        <div className="commit-dialog-copy">
+          <p className="commit-dialog-kicker">Commit all changes</p>
+          <h2 id={titleId}>Commit review diff?</h2>
+          <p id={descriptionId}>
+            This stages the current workspace changes and creates a Git commit.
+          </p>
+          {workspacePath ? <code>{workspacePath}</code> : null}
+        </div>
+        <label className="commit-message-field">
+          <span>Message</span>
+          <input
+            ref={inputRef}
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            placeholder="Describe the change"
+            disabled={submitting}
+          />
+        </label>
+        {error ? <p className="commit-dialog-error">{error}</p> : null}
+        <div className="commit-dialog-actions">
+          <button
+            type="button"
+            className="commit-dialog-secondary"
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="commit-dialog-primary"
+            disabled={!trimmedMessage || submitting}
+          >
+            <GitCommitHorizontal size={13} strokeWidth={2} />
+            {submitting ? 'Committing...' : 'Commit'}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }
@@ -2507,33 +2649,6 @@ function buildCheckpointByAssistantMessageId(
   const map = new Map<string, OrchestrationCheckpointSummary>()
   for (const checkpoint of checkpoints) {
     if (checkpoint.assistantMessageId) map.set(checkpoint.assistantMessageId, checkpoint)
-  }
-  return map
-}
-
-function buildRevertTurnCountByUserMessageId(
-  thread: OrchestrationThread | null
-): Map<string, number> {
-  const map = new Map<string, number>()
-  if (!thread) return map
-  const checkpointByMessageId = buildCheckpointByAssistantMessageId(thread.checkpoints)
-  const messages = [...thread.messages].sort((left, right) => {
-    const leftSequence = left.sequence ?? Number.MAX_SAFE_INTEGER
-    const rightSequence = right.sequence ?? Number.MAX_SAFE_INTEGER
-    if (leftSequence !== rightSequence) return leftSequence - rightSequence
-    return timestampForSort(left.createdAt) - timestampForSort(right.createdAt)
-  })
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index]
-    if (!message || message.role !== 'user') continue
-    for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
-      const candidate = messages[cursor]
-      if (!candidate || candidate.role === 'user') break
-      const checkpoint = checkpointByMessageId.get(candidate.id)
-      if (!checkpoint || checkpoint.status !== 'ready') continue
-      map.set(message.id, Math.max(0, checkpoint.checkpointTurnCount - 1))
-      break
-    }
   }
   return map
 }

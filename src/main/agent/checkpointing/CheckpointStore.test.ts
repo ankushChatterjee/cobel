@@ -61,6 +61,18 @@ describe('CheckpointStore', () => {
     ])
     expect(worktreeDiff.diff).toContain('+live')
     expect(worktreeDiff.diff).toContain('+current')
+
+    const commitSha = await store.commitWorktree(cwd, 'commit review changes')
+    expect(commitSha).toMatch(/^[0-9a-f]{40}$/u)
+    const status = await gitOutput(cwd, ['status', '--porcelain', '--untracked-files=all'])
+    expect(status).toBe('')
+    const subject = await gitOutput(cwd, ['log', '-1', '--format=%s'])
+    expect(subject).toBe('commit review changes')
+
+    await store.captureCheckpoint(cwd, 'thread:test', 0)
+    const clearedDiff = await store.diffCheckpointToWorktree(cwd, 'thread:test', 0)
+    expect(clearedDiff.files).toEqual([])
+    expect(clearedDiff.diff).toBe('')
   })
 })
 
@@ -68,9 +80,16 @@ async function createGitRepo(): Promise<string> {
   const cwd = await mkdtemp(join(tmpdir(), 'cobel-checkpoint-test-'))
   tempDirs.push(cwd)
   await git(cwd, ['init'])
+  await git(cwd, ['config', 'user.name', 'Test'])
+  await git(cwd, ['config', 'user.email', 'test@example.invalid'])
   return cwd
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync('git', args, { cwd })
+}
+
+async function gitOutput(cwd: string, args: string[]): Promise<string> {
+  const result = await execFileAsync('git', args, { cwd })
+  return result.stdout.trim()
 }

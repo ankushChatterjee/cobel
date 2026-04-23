@@ -6,11 +6,12 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent,
+  type ReactNode,
   type PointerEvent
 } from 'react'
 import { FileDiff, WorkerPoolContextProvider } from '@pierre/diffs/react'
 import { parsePatchFiles, trimPatchContext, type FileDiffMetadata } from '@pierre/diffs'
-import { Check, ChevronDown, Search } from 'lucide-react'
+import { Check, ChevronDown, GitCommitHorizontal, Search, TextWrap, Undo2 } from 'lucide-react'
 import type {
   CheckpointDiffResult,
   CheckpointFileChange,
@@ -31,6 +32,8 @@ interface ChangedFilePillsProps {
   summary: OrchestrationCheckpointSummary
   onPreview: (file: CheckpointFileChange, rect: DOMRect) => void
   onOpenDiff: (filePath?: string) => void
+  revertTurnCount?: number | null
+  onRevert?: (turnCount: number) => void
 }
 
 interface FloatingDiffPillProps {
@@ -55,6 +58,7 @@ interface DiffReviewSidebarProps {
   onWrapLinesChange: (wrap: boolean) => void
   onSelectTurn: (turnId: string | null) => void
   onSelectFile: (path: string | null) => void
+  onCommitFull: () => void
   onClose: () => void
   resizeLabel: string
   resizeMin: number
@@ -71,6 +75,17 @@ interface DiffPreviewPopoverProps {
   threadId: string | null
   onClose: () => void
   onOpenSidebar: (turnId: string, filePath: string) => void
+}
+
+interface DiffToolbarPillProps {
+  as?: 'button' | 'span'
+  active?: boolean
+  iconOnly?: boolean
+  className?: string
+  children: ReactNode
+  title?: string
+  ariaLabel?: string
+  onClick?: () => void
 }
 
 const diffWorkerPool = {
@@ -103,7 +118,9 @@ const diffCache = new Map<string, Promise<CheckpointDiffResult>>()
 export const ChangedFilePills = memo(function ChangedFilePills({
   summary,
   onPreview,
-  onOpenDiff
+  onOpenDiff,
+  revertTurnCount,
+  onRevert
 }: ChangedFilePillsProps): React.JSX.Element | null {
   if (summary.status === 'error') {
     return (
@@ -149,6 +166,17 @@ export const ChangedFilePills = memo(function ChangedFilePills({
           </button>
         ) : null}
       </div>
+      {typeof revertTurnCount === 'number' && onRevert ? (
+        <button
+          type="button"
+          className="changed-file-undo"
+          onClick={() => onRevert(revertTurnCount)}
+          title="Undo changes from this turn"
+        >
+          <Undo2 size={11} strokeWidth={2} aria-hidden="true" />
+          Undo
+        </button>
+      ) : null}
     </div>
   )
 })
@@ -160,12 +188,7 @@ export const FloatingDiffPill = memo(function FloatingDiffPill({
   onOpen
 }: FloatingDiffPillProps): React.JSX.Element | null {
   const ready = summaries.filter((summary) => summary.status === 'ready')
-  const { result } = useCheckpointWorktreeDiff(
-    threadId,
-    0,
-    ready.length > 0,
-    workspaceDiffVersion
-  )
+  const { result } = useCheckpointWorktreeDiff(threadId, 0, ready.length > 0, workspaceDiffVersion)
   if (ready.length === 0) return null
   const files = result?.files ?? ready.flatMap((summary) => summary.files)
   const totals = summarizeFiles(files)
@@ -194,6 +217,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   onWrapLinesChange,
   onSelectTurn,
   onSelectFile,
+  onCommitFull,
   onClose,
   resizeLabel,
   resizeMin,
@@ -214,8 +238,10 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   const latest = readySummaries[readySummaries.length - 1] ?? null
   const selectedTurn = readySummaries.find((summary) => summary.turnId === selectedTurnId) ?? latest
   const [fileMenuOpen, setFileMenuOpen] = useState(false)
+  const [turnMenuOpen, setTurnMenuOpen] = useState(false)
   const [fileSearch, setFileSearch] = useState('')
   const fileMenuRef = useRef<HTMLDivElement | null>(null)
+  const turnMenuRef = useRef<HTMLDivElement | null>(null)
   const range =
     mode === 'turn' && selectedTurn
       ? {
@@ -235,9 +261,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
     mode === 'turn' && selectedTurn
       ? {
           title:
-            selectedTurn === latest
-              ? 'Latest turn'
-              : `Turn ${selectedTurn.checkpointTurnCount}`,
+            selectedTurn === latest ? 'Latest turn' : `Turn ${selectedTurn.checkpointTurnCount}`,
           subtitle: summarizeFiles(selectedTurn.files)
         }
       : {
@@ -266,10 +290,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
       mode === 'turn' && selectedTurn
         ? selectedTurn.files
         : (worktreeDiff.result?.files ?? readySummaries.flatMap((summary) => summary.files))
-    const byPath = new Map<
-      string,
-      { path: string; label: string; detail: string }
-    >()
+    const byPath = new Map<string, { path: string; label: string; detail: string }>()
     for (const file of summaryFiles) {
       byPath.set(file.path, {
         path: file.path,
@@ -282,7 +303,12 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   const selectedFile = selectedFilePath
     ? fileChoices.find((file) => file.path === selectedFilePath)
     : null
-  const selectedFileLabel = selectedFile ? selectedFile.label : 'All files'
+  const selectedTurnLabel =
+    selectedTurn === latest
+      ? 'Latest turn'
+      : selectedTurn
+        ? `Turn ${selectedTurn.checkpointTurnCount}`
+        : 'Select turn'
   const normalizedFileSearch = fileSearch.trim().toLowerCase()
   const filteredFileChoices = useMemo(() => {
     if (!normalizedFileSearch) return fileChoices
@@ -300,16 +326,24 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
     }),
     [diffStyle, wrapLines]
   )
+  const canCommitFull =
+    mode === 'full' &&
+    range !== null &&
+    headerCopy.subtitle.additions + headerCopy.subtitle.deletions > 0
 
   useEffect(() => {
-    if (!fileMenuOpen) return
+    if (!fileMenuOpen && !turnMenuOpen) return
     const onPointerDown = (event: globalThis.PointerEvent): void => {
       const target = event.target
       if (!(target instanceof Node)) return
       if (!fileMenuRef.current?.contains(target)) setFileMenuOpen(false)
+      if (!turnMenuRef.current?.contains(target)) setTurnMenuOpen(false)
     }
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key === 'Escape') setFileMenuOpen(false)
+      if (event.key === 'Escape') {
+        setFileMenuOpen(false)
+        setTurnMenuOpen(false)
+      }
     }
     window.addEventListener('pointerdown', onPointerDown)
     window.addEventListener('keydown', onKeyDown)
@@ -317,7 +351,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
       window.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [fileMenuOpen])
+  }, [fileMenuOpen, turnMenuOpen])
 
   useEffect(() => {
     if (!fileMenuOpen) setFileSearch('')
@@ -341,15 +375,186 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
         onPointerCancel={onResizeEnd}
       />
       <div className="diff-review-header">
-        <p>{headerCopy.title}</p>
         {range ? (
           <DiffStats
             additions={headerCopy.subtitle.additions}
             deletions={headerCopy.subtitle.deletions}
           />
         ) : (
-          <span>No completed changes yet</span>
+          <span className="diff-header-empty">No completed changes yet</span>
         )}
+        <div className="diff-review-controls">
+          <SegmentedControl
+            label="Diff range"
+            value={mode}
+            options={[
+              { value: 'full', label: 'Full' },
+              { value: 'turn', label: 'Last turn' }
+            ]}
+            onChange={(value) => onModeChange(value as DiffPanelMode)}
+          />
+          <SegmentedControl
+            label="Layout"
+            value={diffStyle}
+            options={[
+              { value: 'unified', label: 'Inline' },
+              { value: 'split', label: 'Split' }
+            ]}
+            onChange={(value) => onDiffStyleChange(value as DiffStyleMode)}
+          />
+          {canCommitFull ? (
+            <DiffToolbarPill
+              className="diff-commit-button"
+              onClick={onCommitFull}
+              title="Commit all current changes"
+            >
+              <GitCommitHorizontal size={13} strokeWidth={1.8} aria-hidden="true" />
+              Commit
+            </DiffToolbarPill>
+          ) : null}
+
+          {mode === 'turn' && readySummaries.length > 1 ? (
+            <div className="diff-turn-picker composer-select-shell" ref={turnMenuRef}>
+              <button
+                type="button"
+                className="diff-turn-trigger diff-toolbar-pill composer-select-trigger"
+                onClick={() => setTurnMenuOpen((isOpen) => !isOpen)}
+                aria-haspopup="listbox"
+                aria-expanded={turnMenuOpen}
+                aria-label={`Select turn: ${selectedTurnLabel}`}
+                title={selectedTurnLabel}
+              >
+                <span className="diff-turn-trigger-count" aria-hidden="true">
+                  {selectedTurn?.checkpointTurnCount ?? readySummaries.length}
+                </span>
+                <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
+              </button>
+              {turnMenuOpen ? (
+                <div
+                  className="diff-turn-menu composer-select-popover"
+                  role="listbox"
+                  aria-label="Turns"
+                >
+                  <div className="composer-select-options" role="listbox" aria-label="Turns">
+                    {readySummaries.map((summary) => {
+                      const isSelected = selectedTurn?.turnId === summary.turnId
+                      const label =
+                        summary === latest ? 'Latest turn' : `Turn ${summary.checkpointTurnCount}`
+                      return (
+                        <button
+                          key={summary.turnId}
+                          type="button"
+                          role="option"
+                          aria-selected={isSelected}
+                          className="diff-turn-option composer-select-option"
+                          onClick={() => {
+                            onSelectTurn(summary.turnId)
+                            setTurnMenuOpen(false)
+                          }}
+                        >
+                          <span>{label}</span>
+                          {isSelected ? (
+                            <Check size={12} strokeWidth={1.8} aria-hidden="true" />
+                          ) : null}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="diff-file-picker composer-select-shell" ref={fileMenuRef}>
+            <button
+              type="button"
+              className="diff-file-trigger diff-toolbar-pill composer-select-trigger"
+              onClick={() => setFileMenuOpen((isOpen) => !isOpen)}
+              aria-haspopup="listbox"
+              aria-expanded={fileMenuOpen}
+              aria-label={
+                selectedFile ? `Changed file: ${selectedFile.detail}` : 'All changed files'
+              }
+              title={selectedFile?.detail ?? 'All changed files'}
+            >
+              <span className="composer-select-value diff-file-trigger-label">
+                {selectedFile ? selectedFile.label : 'Files'}
+              </span>
+              <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+            {fileMenuOpen ? (
+              <div
+                className="diff-file-menu composer-select-popover"
+                role="listbox"
+                aria-label="Changed files"
+              >
+                <label className="diff-file-search">
+                  <Search size={11} strokeWidth={1.8} aria-hidden="true" />
+                  <span className="sr-only">Search changed files</span>
+                  <input
+                    value={fileSearch}
+                    onChange={(event) => setFileSearch(event.target.value)}
+                    placeholder="Search files"
+                    autoFocus
+                  />
+                </label>
+                <div className="composer-select-options" role="listbox" aria-label="Changed files">
+                  {!normalizedFileSearch ? (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={!selectedFilePath}
+                      className="diff-file-option composer-select-option"
+                      onClick={() => {
+                        onSelectFile(null)
+                        setFileMenuOpen(false)
+                      }}
+                    >
+                      <span>All files</span>
+                      {!selectedFilePath ? (
+                        <Check size={12} strokeWidth={1.8} aria-hidden="true" />
+                      ) : null}
+                    </button>
+                  ) : null}
+                  {filteredFileChoices.map((file) => {
+                    const isSelected = selectedFilePath === file.path
+                    return (
+                      <button
+                        key={file.path}
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        className="diff-file-option composer-select-option"
+                        onClick={() => {
+                          onSelectFile(file.path)
+                          setFileMenuOpen(false)
+                        }}
+                        title={file.detail}
+                      >
+                        <span>{file.label}</span>
+                        {isSelected ? (
+                          <Check size={12} strokeWidth={1.8} aria-hidden="true" />
+                        ) : null}
+                      </button>
+                    )
+                  })}
+                  {filteredFileChoices.length === 0 ? (
+                    <div className="diff-file-no-results">No matching files</div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <DiffToolbarPill
+          iconOnly
+          className={`diff-toggle diff-header-wrap ${wrapLines ? 'active' : ''}`}
+          onClick={() => onWrapLinesChange(!wrapLines)}
+          ariaLabel={wrapLines ? 'Disable line wrapping' : 'Enable line wrapping'}
+          title={wrapLines ? 'Disable line wrapping' : 'Enable line wrapping'}
+        >
+          <TextWrap size={13} strokeWidth={1.8} aria-hidden="true" />
+        </DiffToolbarPill>
         <button
           type="button"
           className="diff-close-button"
@@ -358,126 +563,6 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
         >
           ×
         </button>
-      </div>
-
-      <div className="diff-review-controls">
-        <SegmentedControl
-          label="Diff range"
-          value={mode}
-          options={[
-            { value: 'full', label: 'Full' },
-            { value: 'turn', label: 'Last turn' }
-          ]}
-          onChange={(value) => onModeChange(value as DiffPanelMode)}
-        />
-        <SegmentedControl
-          label="Layout"
-          value={diffStyle}
-          options={[
-            { value: 'unified', label: 'Inline' },
-            { value: 'split', label: 'Split' }
-          ]}
-          onChange={(value) => onDiffStyleChange(value as DiffStyleMode)}
-        />
-        <button
-          type="button"
-          className={`diff-toggle ${wrapLines ? 'active' : ''}`}
-          onClick={() => onWrapLinesChange(!wrapLines)}
-        >
-          Wrap
-        </button>
-
-        {mode === 'turn' && readySummaries.length > 1 ? (
-          <select
-            className="diff-turn-select"
-            value={selectedTurn?.turnId ?? ''}
-            onChange={(event) => onSelectTurn(event.target.value || null)}
-            aria-label="Select turn"
-          >
-            {readySummaries.map((summary) => (
-              <option key={summary.turnId} value={summary.turnId}>
-                Turn {summary.checkpointTurnCount}
-              </option>
-            ))}
-          </select>
-        ) : null}
-
-        <div className="diff-file-picker composer-select-shell" ref={fileMenuRef}>
-          <button
-            type="button"
-            className="diff-file-trigger composer-select-trigger"
-            onClick={() => setFileMenuOpen((isOpen) => !isOpen)}
-            aria-haspopup="listbox"
-            aria-expanded={fileMenuOpen}
-            title={selectedFile?.detail ?? 'All changed files'}
-          >
-            <span className="composer-select-value diff-file-trigger-label">{selectedFileLabel}</span>
-            <span className="diff-file-trigger-count" aria-hidden="true">
-              {selectedFile ? '1' : fileChoices.length}
-            </span>
-            <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
-          </button>
-          {fileMenuOpen ? (
-            <div
-              className="diff-file-menu composer-select-popover"
-              role="listbox"
-              aria-label="Changed files"
-            >
-              <label className="diff-file-search">
-                <Search size={11} strokeWidth={1.8} aria-hidden="true" />
-                <span className="sr-only">Search changed files</span>
-                <input
-                  value={fileSearch}
-                  onChange={(event) => setFileSearch(event.target.value)}
-                  placeholder="Search files"
-                  autoFocus
-                />
-              </label>
-              <div className="composer-select-options" role="listbox" aria-label="Changed files">
-                {!normalizedFileSearch ? (
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={!selectedFilePath}
-                    className="diff-file-option composer-select-option"
-                    onClick={() => {
-                      onSelectFile(null)
-                      setFileMenuOpen(false)
-                    }}
-                  >
-                    <span>All files</span>
-                    {!selectedFilePath ? (
-                      <Check size={12} strokeWidth={1.8} aria-hidden="true" />
-                    ) : null}
-                  </button>
-                ) : null}
-                {filteredFileChoices.map((file) => {
-                  const isSelected = selectedFilePath === file.path
-                  return (
-                    <button
-                      key={file.path}
-                      type="button"
-                      role="option"
-                      aria-selected={isSelected}
-                      className="diff-file-option composer-select-option"
-                      onClick={() => {
-                        onSelectFile(file.path)
-                        setFileMenuOpen(false)
-                      }}
-                      title={file.detail}
-                    >
-                      <span>{file.label}</span>
-                      {isSelected ? <Check size={12} strokeWidth={1.8} aria-hidden="true" /> : null}
-                    </button>
-                  )
-                })}
-                {filteredFileChoices.length === 0 ? (
-                  <div className="diff-file-no-results">No matching files</div>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-        </div>
       </div>
 
       <div className="diff-review-body">
@@ -491,7 +576,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
           <WorkerPoolContextProvider {...diffWorkerPool}>
             <div className="diff-file-stack">
               {visibleFiles.map((file) => (
-                <FileDiff
+                <CollapsibleFileDiff
                   key={`${file.prevName ?? ''}:${file.name}`}
                   fileDiff={file}
                   options={options}
@@ -504,6 +589,43 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
     </aside>
   )
 })
+
+function CollapsibleFileDiff({
+  fileDiff,
+  options
+}: {
+  fileDiff: FileDiffMetadata
+  options: typeof diffOptionsBase & { diffStyle: DiffStyleMode; overflow: 'wrap' | 'scroll' }
+}): React.JSX.Element {
+  const [collapsed, setCollapsed] = useState(false)
+  const totals = summarizeFileDiff(fileDiff)
+  const title = fileDiff.prevName ? `${fileDiff.prevName} -> ${fileDiff.name}` : fileDiff.name
+
+  return (
+    <section className={`diff-file-panel ${collapsed ? 'collapsed' : ''}`}>
+      <button
+        type="button"
+        className="diff-file-collapse-header"
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed((isCollapsed) => !isCollapsed)}
+        title={title}
+      >
+        <ChevronDown size={13} strokeWidth={1.8} aria-hidden="true" />
+        <span className="diff-file-collapse-name">{title}</span>
+        <DiffStats additions={totals.additions} deletions={totals.deletions} />
+      </button>
+      {!collapsed ? (
+        <FileDiff
+          fileDiff={fileDiff}
+          options={{
+            ...options,
+            disableFileHeader: true
+          }}
+        />
+      ) : null}
+    </section>
+  )
+}
 
 export const DiffPreviewPopover = memo(function DiffPreviewPopover({
   preview,
@@ -704,6 +826,47 @@ function DiffStats({
   )
 }
 
+
+function DiffToolbarPill({
+  as = 'button',
+  active = false,
+  iconOnly = false,
+  className,
+  children,
+  title,
+  ariaLabel,
+  onClick
+}: DiffToolbarPillProps): React.JSX.Element {
+  const classes = [
+    'diff-toolbar-pill',
+    active ? 'active' : '',
+    iconOnly ? 'icon-only' : '',
+    className ?? ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  if (as === 'span') {
+    return (
+      <span className={classes} title={title} aria-label={ariaLabel}>
+        {children}
+      </span>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      className={classes}
+      onClick={onClick}
+      title={title}
+      aria-label={ariaLabel}
+    >
+      {children}
+    </button>
+  )
+}
+
 function SegmentedControl({
   label,
   value,
@@ -718,14 +881,13 @@ function SegmentedControl({
   return (
     <div className="diff-segmented-control" aria-label={label}>
       {options.map((option) => (
-        <button
+        <DiffToolbarPill
           key={option.value}
-          type="button"
-          className={option.value === value ? 'active' : ''}
+          active={option.value === value}
           onClick={() => onChange(option.value)}
         >
           {option.label}
-        </button>
+        </DiffToolbarPill>
       ))}
     </div>
   )
@@ -743,6 +905,19 @@ function summarizeFiles(files: CheckpointFileChange[]): {
     (totals, file) => ({
       additions: totals.additions + file.additions,
       deletions: totals.deletions + file.deletions
+    }),
+    { additions: 0, deletions: 0 }
+  )
+}
+
+function summarizeFileDiff(file: FileDiffMetadata): {
+  additions: number
+  deletions: number
+} {
+  return file.hunks.reduce(
+    (totals, hunk) => ({
+      additions: totals.additions + hunk.additionLines,
+      deletions: totals.deletions + hunk.deletionLines
     }),
     { additions: 0, deletions: 0 }
   )

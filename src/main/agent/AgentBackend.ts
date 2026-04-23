@@ -230,6 +230,10 @@ export class AgentBackend {
       case 'thread.checkpoint.revert':
         await this.revertCheckpoint(input)
         return { accepted: true, commandId: input.commandId, threadId: input.threadId }
+
+      case 'thread.checkpoint.commit':
+        await this.commitCheckpoint(input)
+        return { accepted: true, commandId: input.commandId, threadId: input.threadId }
     }
   }
 
@@ -326,6 +330,24 @@ export class AgentBackend {
 
     await this.checkpointStore.restoreCheckpoint(thread.cwd, input.threadId, input.turnCount)
   }
+
+  private async commitCheckpoint(
+    input: Extract<ClientOrchestrationCommand, { type: 'thread.checkpoint.commit' }>
+  ): Promise<void> {
+    const thread = this.engine.getThread(input.threadId)
+    if (
+      thread.session?.activeTurnId ||
+      thread.session?.status === 'running' ||
+      thread.session?.status === 'starting'
+    ) {
+      throw new Error('Interrupt the current turn before committing changes.')
+    }
+    if (!thread.cwd) throw new Error('No workspace is attached to this thread.')
+    const message = input.message.trim()
+    if (!message) throw new Error('Commit message is required.')
+    await this.checkpointStore.commitWorktree(thread.cwd, message)
+    await this.checkpointStore.captureCheckpoint(thread.cwd, input.threadId, 0)
+  }
 }
 
 function assertCommand(input: ClientOrchestrationCommand): void {
@@ -336,6 +358,9 @@ function assertCommand(input: ClientOrchestrationCommand): void {
     if (typeof input.input !== 'string' || input.input.trim().length === 0) {
       throw new Error('Prompt input is required.')
     }
+  }
+  if (input.type === 'thread.checkpoint.commit' && input.message.trim().length === 0) {
+    throw new Error('Commit message is required.')
   }
 }
 

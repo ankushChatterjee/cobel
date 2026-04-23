@@ -441,6 +441,13 @@ export type ClientOrchestrationCommand =
       createdAt: string
     }
   | {
+      type: 'thread.checkpoint.commit'
+      commandId: string
+      threadId: string
+      message: string
+      createdAt: string
+    }
+  | {
       type: 'project.create'
       commandId: string
       projectId: string

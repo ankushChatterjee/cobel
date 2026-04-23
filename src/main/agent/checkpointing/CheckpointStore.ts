@@ -157,6 +157,22 @@ export class CheckpointStore {
     }
   }
 
+  async commitWorktree(cwd: string, message: string): Promise<string> {
+    const trimmedMessage = message.trim()
+    if (!trimmedMessage) throw new Error('Commit message is required.')
+    const status = await this.git(cwd, ['status', '--porcelain', '--untracked-files=all'])
+    if (!status.stdout.trim()) throw new Error('There are no worktree changes to commit.')
+
+    await this.git(cwd, ['add', '-A', '--', '.'])
+    const staged = await this.git(cwd, ['diff', '--cached', '--quiet', '--exit-code'], {
+      allowNonZeroExit: true
+    })
+    if (staged.code === 0) throw new Error('There are no staged changes to commit.')
+
+    await this.git(cwd, ['commit', '-m', trimmedMessage])
+    return (await this.git(cwd, ['rev-parse', '--verify', 'HEAD'])).stdout.trim()
+  }
+
   async deleteCheckpointsNewerThan(
     cwd: string,
     threadId: string,
