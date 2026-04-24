@@ -761,12 +761,10 @@
   grid-template-columns: 24px minmax(0, 1fr);
   gap: 12px;
   width: min(500px, 100%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
   background: rgba(10, 10, 10, 0.98);
-  box-shadow:
-    0 22px 64px rgba(0, 0, 0, 0.42),
-    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
   padding: 16px;
   pointer-events: all;
   animation: revert-warning-in 0.16s ease-out;
@@ -819,7 +817,7 @@
   overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.028);
+  background: var(--surface-panel);
   color: var(--text-muted);
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 11px;
@@ -921,12 +919,10 @@
   grid-template-columns: 24px minmax(0, 1fr);
   gap: 12px;
   width: min(520px, 100%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
   background: rgba(10, 10, 10, 0.98);
-  box-shadow:
-    0 22px 64px rgba(0, 0, 0, 0.42),
-    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
   padding: 16px;
   pointer-events: all;
   animation: revert-warning-in 0.16s ease-out;
@@ -979,7 +975,7 @@
   overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.028);
+  background: var(--surface-panel);
   color: var(--text-muted);
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 11px;
@@ -996,7 +992,7 @@
 }
 
 .commit-message-field span {
-  color: rgba(200, 201, 212, 0.54);
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 650;
 }
@@ -1004,9 +1000,9 @@
 .commit-message-field input {
   width: 100%;
   height: 34px;
-  border: 1px solid rgba(255, 255, 255, 0.075);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--surface-hover);
   color: var(--text-primary);
   font: inherit;
   font-size: 12.5px;
@@ -1018,12 +1014,12 @@
 }
 
 .commit-message-field input::placeholder {
-  color: rgba(200, 201, 212, 0.38);
+  color: var(--text-muted);
 }
 
 .commit-message-field input:focus {
   border-color: rgba(232, 98, 26, 0.34);
-  background: rgba(255, 255, 255, 0.052);
+  background: var(--surface-hover);
 }
 
 .commit-message-field input:disabled {
@@ -1883,8 +1879,8 @@
 
 .pending-prompt.approval-prompt {
   grid-template-columns: 92px minmax(0, 1fr) auto;
-  border-color: rgba(255, 255, 255, 0.075);
-  background: rgba(255, 255, 255, 0.035);
+  border-color: var(--border-medium);
+  background: var(--surface-hover);
 }
 
 .pending-prompt.approval-prompt.resolved {
@@ -1950,9 +1946,9 @@
   display: grid;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.075);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.032);
+  background: var(--surface-panel);
   color: var(--text-secondary);
 }
 
@@ -2014,7 +2010,7 @@
   min-height: 22px;
   padding: 0 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.045);
+  background: var(--surface-hover);
 }
 
 .embedded-diff-actions {
@@ -2337,14 +2333,11 @@
   min-width: 164px;
   max-width: min(260px, calc(100vw - 32px));
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.075);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: #151515;
   padding: 5px;
-  box-shadow:
-    0 18px 44px rgba(0, 0, 0, 0.44),
-    0 2px 10px rgba(0, 0, 0, 0.24),
-    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
 }
 
 .composer-select-options {
@@ -2377,13 +2370,13 @@
 .composer-select-option:hover,
 .composer-select-option:focus-visible,
 .composer-select-option[data-highlighted='true'] {
-  background: rgba(255, 255, 255, 0.075);
+  background: var(--surface-hover);
   color: var(--text-primary);
   outline: none;
 }
 
 .composer-select-option[aria-selected='true'] {
-  background: rgba(255, 255, 255, 0.095);
+  background: var(--surface-active);
   color: var(--text-primary);
 }
 
@@ -2399,8 +2392,8 @@
   gap: 18px;
   margin: 5px -1px -1px;
   padding: 6px 7px 2px;
-  border-top: 1px solid rgba(255, 255, 255, 0.065);
-  color: rgba(200, 201, 212, 0.45);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
   font-size: 10.5px;
   line-height: 1;
 }
@@ -2409,8 +2402,8 @@
   min-width: 0;
   border: 0;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.055);
-  color: rgba(246, 246, 248, 0.58);
+  background: var(--surface-active);
+  color: var(--text-secondary);
   padding: 3px 5px 3.5px;
   font-family: inherit;
   font-size: 10px;
@@ -2510,14 +2503,11 @@
   width: min(520px, calc(100vw - 32px));
   max-height: min(420px, calc(100vh - 32px));
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
-  background: rgba(10, 10, 10, 0.96);
-  box-shadow:
-    0 24px 70px rgba(0, 0, 0, 0.52),
-    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  background: var(--surface-panel);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   animation: diff-popover-in 0.14s ease-out;
-  backdrop-filter: blur(22px);
 }
 
 .diff-preview-header,
@@ -2532,7 +2522,7 @@
   gap: 12px;
   min-width: 0;
   padding: 10px 11px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .diff-preview-header p,
@@ -2540,7 +2530,7 @@
   margin: 0;
   color: var(--text-primary);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .diff-preview-header span,
@@ -2556,7 +2546,7 @@
 
 .diff-preview-header button,
 .diff-close-button {
-  border: 1px solid rgba(255, 255, 255, 0.075);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
@@ -2575,8 +2565,8 @@
 
 .diff-preview-header button:hover,
 .diff-close-button:hover {
-  border-color: rgba(232, 98, 26, 0.32);
-  background: rgba(232, 98, 26, 0.09);
+  border-color: var(--border-medium);
+  background: var(--surface-hover);
   color: var(--text-primary);
 }
 
@@ -2596,9 +2586,9 @@
   grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
   overflow: hidden;
-  border-left: 1px solid rgba(255, 255, 255, 0.09);
-  background: rgba(10, 10, 10, 0.98);
-  box-shadow: -10px 0 34px rgba(0, 0, 0, 0.24);
+  border-left: 1px solid var(--border-subtle);
+  background: var(--surface-root);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.3);
   opacity: 0;
   pointer-events: none;
   transform: translateX(16px);
@@ -2653,7 +2643,7 @@
   gap: 8px;
   min-height: 42px;
   padding: 7px 10px 7px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .diff-review-header p {
@@ -2700,7 +2690,7 @@ span.diff-toolbar-pill {
 button.diff-toolbar-pill:hover,
 button.diff-toolbar-pill:focus-visible,
 .diff-toolbar-pill.active {
-  background: rgba(255, 255, 255, 0.075);
+  background: var(--surface-hover);
   color: var(--text-primary);
   outline: none;
 }
@@ -2712,7 +2702,7 @@ button.diff-toolbar-pill:focus-visible,
 
 .diff-toolbar-pill svg {
   flex: 0 0 auto;
-  opacity: 0.64;
+  color: currentColor;
 }
 
 .diff-header-empty {
@@ -2754,7 +2744,7 @@ button.diff-toolbar-pill:focus-visible,
 }
 
 .diff-segmented-control .diff-toolbar-pill.active {
-  background: rgba(255, 255, 255, 0.095);
+  background: var(--surface-active);
   color: var(--text-primary);
 }
 
@@ -2775,7 +2765,7 @@ button.diff-toolbar-pill:focus-visible,
 }
 
 .diff-tree-toggle svg {
-  opacity: 0.72;
+  color: currentColor;
 }
 
 .diff-header-wrap {
@@ -2798,9 +2788,9 @@ button.diff-toolbar-pill:focus-visible,
   width: 64px;
   height: 27px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--surface-panel);
 }
 
 .diff-turn-page-button {
@@ -2810,7 +2800,7 @@ button.diff-toolbar-pill:focus-visible,
   height: 100%;
   border: 0;
   background: transparent;
-  color: rgba(200, 201, 212, 0.56);
+  color: var(--text-muted);
   cursor: pointer;
   transition:
     background 0.14s ease,
@@ -2820,7 +2810,7 @@ button.diff-toolbar-pill:focus-visible,
 
 .diff-turn-page-button:hover:not(:disabled),
 .diff-turn-page-button:focus-visible {
-  background: rgba(255, 255, 255, 0.065);
+  background: var(--surface-hover);
   color: var(--text-primary);
   outline: none;
 }
@@ -2830,12 +2820,13 @@ button.diff-toolbar-pill:focus-visible,
 }
 
 .diff-turn-page-button:disabled {
-  color: rgba(200, 201, 212, 0.22);
+  color: var(--text-muted);
+  opacity: 0.35;
   cursor: default;
 }
 
 .diff-turn-page-number {
-  color: rgba(230, 231, 238, 0.74);
+  color: var(--text-secondary);
   font-size: 10.5px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -2858,8 +2849,8 @@ button.diff-toolbar-pill:focus-visible,
   gap: 6px;
   margin: 0 1px 5px;
   padding: 5px 7px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
-  color: rgba(200, 201, 212, 0.45);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
 }
 
 .diff-file-search input {
@@ -2875,7 +2866,7 @@ button.diff-toolbar-pill:focus-visible,
 }
 
 .diff-file-search input::placeholder {
-  color: rgba(200, 201, 212, 0.4);
+  color: var(--text-muted);
 }
 
 .diff-file-option {
@@ -2884,7 +2875,7 @@ button.diff-toolbar-pill:focus-visible,
 
 .diff-file-no-results {
   padding: 7px;
-  color: rgba(200, 201, 212, 0.45);
+  color: var(--text-muted);
   font-size: 11.5px;
   line-height: 1.25;
 }
@@ -2945,8 +2936,9 @@ button.diff-toolbar-pill:focus-visible,
   width: min(310px, calc(100% - 36px));
   gap: 10px;
   padding: 12px 12px 10px;
-  background: rgba(10, 10, 10, 0.98);
-  box-shadow: -22px 0 44px rgba(0, 0, 0, 0.34);
+  background: var(--surface-root);
+  box-shadow: -12px 0 28px rgba(0, 0, 0, 0.35);
+  border-left: 1px solid var(--border-subtle);
   opacity: 0;
   pointer-events: none;
   transform: translateX(calc(100% + 12px));
@@ -2983,7 +2975,7 @@ button.diff-toolbar-pill:focus-visible,
   border: 0;
   border-radius: 999px;
   background: transparent;
-  color: rgba(200, 201, 212, 0.58);
+  color: var(--text-muted);
   cursor: pointer;
   font: inherit;
   font-size: 11px;
@@ -2995,7 +2987,7 @@ button.diff-toolbar-pill:focus-visible,
 
 .diff-review-tree-reset:hover,
 .diff-review-tree-reset:focus-visible {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--surface-hover);
   color: var(--text-primary);
   outline: none;
 }
@@ -3017,7 +3009,7 @@ button.diff-toolbar-pill:focus-visible,
 
 .diff-review-tree-close:hover,
 .diff-review-tree-close:focus-visible {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--surface-hover);
   color: var(--text-primary);
   outline: none;
 }
@@ -3028,18 +3020,20 @@ button.diff-toolbar-pill:focus-visible,
   height: 24px;
   margin: 0 0 1px;
   padding: 0 8px;
-  border: 0;
+  border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-panel);
   color: var(--text-muted);
   gap: 4px;
   transition:
     background 0.14s ease,
+    border-color 0.14s ease,
     color 0.14s ease;
 }
 
 .diff-review-tree-search:focus-within {
-  background: rgba(255, 255, 255, 0.075);
+  background: var(--surface-hover);
+  border-color: var(--border-medium);
   color: var(--text-secondary);
 }
 
@@ -3051,7 +3045,7 @@ button.diff-toolbar-pill:focus-visible,
 }
 
 .diff-review-tree-search input::placeholder {
-  color: rgba(200, 201, 212, 0.4);
+  color: var(--text-muted);
 }
 
 .diff-review-tree-shell {
@@ -3080,9 +3074,9 @@ button.diff-toolbar-pill:focus-visible,
 
 .diff-file-panel {
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: rgba(10, 10, 10, 0.58);
+  background: var(--surface-sidebar);
 }
 
 .diff-file-collapse-header {
@@ -3094,8 +3088,8 @@ button.diff-toolbar-pill:focus-visible,
   gap: 8px;
   padding: 0 13px 0 11px;
   border: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-  background: rgba(10, 10, 10, 0.88);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-panel);
   color: var(--text-primary);
   cursor: pointer;
   font: inherit;
@@ -3103,7 +3097,7 @@ button.diff-toolbar-pill:focus-visible,
 }
 
 .diff-file-collapse-header:hover {
-  background: rgba(14, 14, 14, 0.92);
+  background: var(--surface-hover);
 }
 
 .diff-file-collapse-header:focus-visible {
@@ -3133,10 +3127,10 @@ button.diff-toolbar-pill:focus-visible,
 .diff-file-collapse-name {
   min-width: 0;
   overflow: hidden;
-  color: rgba(245, 245, 246, 0.9);
+  color: var(--text-primary);
   font-family: var(--mono-font);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
