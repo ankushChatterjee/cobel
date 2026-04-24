@@ -46,7 +46,8 @@ interface FloatingDiffPillProps {
   threadId: string | null
   summaries: OrchestrationCheckpointSummary[]
   workspaceDiffVersion: number
-  onOpen: () => void
+  open: boolean
+  onToggle: () => void
 }
 
 interface DiffReviewSidebarProps {
@@ -208,7 +209,8 @@ export const FloatingDiffPill = memo(function FloatingDiffPill({
   threadId,
   summaries,
   workspaceDiffVersion,
-  onOpen
+  open,
+  onToggle
 }: FloatingDiffPillProps): React.JSX.Element | null {
   const ready = summaries.filter((summary) => summary.status === 'ready')
   const refreshKey = `${workspaceDiffVersion}:${buildCheckpointRefreshKey(ready)}`
@@ -218,9 +220,12 @@ export const FloatingDiffPill = memo(function FloatingDiffPill({
   const totals = summarizeFiles(files)
   if (totals.additions === 0 && totals.deletions === 0) return null
   return (
-    <button type="button" className="floating-diff-pill" onClick={onOpen} title="Open review diff">
-      <span className="floating-diff-dot" aria-hidden="true" />
-      <span>Review</span>
+    <button
+      type="button"
+      className={`header-diff-pill ${open ? 'active' : ''}`}
+      onClick={onToggle}
+      title={open ? 'Close review diff' : 'Open review diff'}
+    >
       <DiffStats additions={totals.additions} deletions={totals.deletions} />
     </button>
   )
@@ -506,8 +511,28 @@ function CollapsibleFileDiff({
   options: typeof diffOptionsBase & { diffStyle: DiffStyleMode; overflow: 'wrap' | 'scroll' }
 }): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
+  const [contentVisible, setContentVisible] = useState(false)
+  const contentRef = useRef<HTMLDivElement>(null)
   const totals = summarizeFileDiff(fileDiff)
   const title = fileDiff.prevName ? `${fileDiff.prevName} -> ${fileDiff.name}` : fileDiff.name
+
+  // The <diffs-container> web component starts empty (height 0) and fills in once its
+  // internal worker finishes syntax highlighting. Watch for the first non-zero height
+  // to fade the content in only after it's actually rendered.
+  useEffect(() => {
+    if (collapsed) return
+    setContentVisible(false)
+    const el = contentRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      if (el.offsetHeight > 0) {
+        setContentVisible(true)
+        observer.disconnect()
+      }
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [collapsed, fileDiff])
 
   return (
     <section className={`diff-file-panel ${collapsed ? 'collapsed' : ''}`}>
@@ -523,13 +548,18 @@ function CollapsibleFileDiff({
         <DiffStatsPill additions={totals.additions} deletions={totals.deletions} />
       </button>
       {!collapsed ? (
-        <FileDiff
-          fileDiff={fileDiff}
-          options={{
-            ...options,
-            disableFileHeader: true
-          }}
-        />
+        <div
+          ref={contentRef}
+          className={`diff-file-content ${contentVisible ? 'visible' : ''}`}
+        >
+          <FileDiff
+            fileDiff={fileDiff}
+            options={{
+              ...options,
+              disableFileHeader: true
+            }}
+          />
+        </div>
       ) : null}
     </section>
   )

@@ -1134,7 +1134,17 @@ export function HomePage(): React.JSX.Element {
               {sessionStatus}
             </span>
           </div>
-          <div className="header-actions"></div>
+          <div className="header-actions">
+            <FloatingDiffPill
+              threadId={activeThreadId}
+              summaries={thread?.checkpoints ?? []}
+              workspaceDiffVersion={workspaceDiffVersion}
+              open={diffPanelOpen}
+              onToggle={() =>
+                diffPanelOpen ? setDiffPanelOpen(false) : openDiffPanel({ mode: 'full' })
+              }
+            />
+          </div>
         </header>
 
         <div className="chat-primary">
@@ -1184,14 +1194,6 @@ export function HomePage(): React.JSX.Element {
 
           <div className="composer-wrap">
             <div className="composer-stack">
-              <div className="floating-diff-row">
-                <FloatingDiffPill
-                  threadId={activeThreadId}
-                  summaries={thread?.checkpoints ?? []}
-                  workspaceDiffVersion={workspaceDiffVersion}
-                  onOpen={() => openDiffPanel({ mode: 'full' })}
-                />
-              </div>
               <ChatComposer
                 key={composerResetToken}
                 enabled={Boolean(activeProject)}
@@ -2465,13 +2467,8 @@ const SessionErrorBanner = memo(function SessionErrorBanner({
   const displayMessage = errorMessageForDisplay(message)
   return (
     <div className="session-error-banner" role="alert" aria-live="assertive">
-      <span className="session-error-icon" aria-hidden="true">
-        ⚠
-      </span>
-      <div className="session-error-body">
-        <p className="session-error-title">Codex returned an error</p>
-        <p className="session-error-message">{renderTextWithLinks(displayMessage)}</p>
-      </div>
+      <span className="session-error-icon" aria-hidden="true">⚠</span>
+      <p className="session-error-message">{renderTextWithLinks(displayMessage)}</p>
     </div>
   )
 })
