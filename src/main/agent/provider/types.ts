@@ -25,11 +25,20 @@ export interface SendTurnInput {
   model?: string
 }
 
+export interface GenerateThreadTitleInput {
+  cwd?: string
+  input: string
+  model?: string
+  useStructuredOutput?: boolean
+}
+
 export interface ProviderAdapter {
   readonly id: ProviderId
+  readonly supportsStructuredOutput: boolean
   getSummary(): Promise<ProviderSummary>
   startSession(input: StartSessionInput): Promise<ProviderSession>
   sendTurn(input: SendTurnInput): Promise<{ turnId: string; resumeCursor?: unknown }>
+  generateThreadTitle(input: GenerateThreadTitleInput): Promise<string | null>
   rollbackConversation(input: { threadId: string; numTurns: number }): Promise<void>
   interruptTurn(input: { threadId: string; turnId?: string }): Promise<void>
   respondToApproval(input: {

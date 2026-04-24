@@ -17,6 +17,7 @@ import type {
   ThreadShellSummary
 } from '../../../shared/agent'
 import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
+import { DEFAULT_THREAD_TITLE, deriveTitleSeed } from '../../../shared/threadTitle'
 import type { OrchestrationEventStore } from '../persistence/OrchestrationEventStore'
 import type { ProjectionPipeline } from '../persistence/ProjectionPipeline'
 import type { SnapshotQuery } from '../persistence/SnapshotQuery'
@@ -74,7 +75,7 @@ export class OrchestrationEngine {
     const now = nowIso()
     const thread: OrchestrationThread = {
       id: input.threadId,
-      title: input.title ?? 'Chat title',
+      title: input.title ?? DEFAULT_THREAD_TITLE,
       cwd: input.cwd,
       branch: input.branch ?? 'main',
       messages: [],
@@ -108,7 +109,7 @@ export class OrchestrationEngine {
     const now = nowIso()
     const thread: OrchestrationThread = {
       ...previous,
-      title: input.title ?? 'Chat title',
+      title: input.title ?? DEFAULT_THREAD_TITLE,
       cwd: input.cwd ?? previous.cwd,
       messages: [],
       activities: [],
@@ -157,7 +158,7 @@ export class OrchestrationEngine {
   }): OrchestrationMessage {
     const thread = this.ensureThread({
       threadId: input.threadId,
-      title: firstLineTitle(input.text)
+      title: deriveTitleSeed(input.text)
     })
     const sequence = this.nextSequence()
     const message: OrchestrationMessage = {
@@ -620,12 +621,6 @@ function readProjectIdFromThread(thread: OrchestrationThread, event: Orchestrati
 
 function nowIso(): string {
   return new Date().toISOString()
-}
-
-function firstLineTitle(text: string): string {
-  const firstLine = text.trim().split(/\r?\n/u)[0]?.trim()
-  if (!firstLine) return 'Chat title'
-  return firstLine.length > 54 ? `${firstLine.slice(0, 51)}...` : firstLine
 }
 
 function logEvent(label: string, payload: unknown): void {

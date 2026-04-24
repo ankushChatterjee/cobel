@@ -1,9 +1,11 @@
 import type { ProviderRuntimeEvent, ProviderSession } from '../../../../shared/agent'
+import { parseThreadTitleResponse } from '../../../../shared/threadTitle'
 import { createEventId, nowIso, ProviderEventBus } from '../types'
 import type { ProviderAdapter, SendTurnInput, StartSessionInput } from '../types'
 
 export class FakeProviderAdapter implements ProviderAdapter {
   readonly id = 'codex' as const
+  readonly supportsStructuredOutput = false
   private readonly bus = new ProviderEventBus()
   private readonly sessions = new Map<string, ProviderSession>()
 
@@ -85,6 +87,16 @@ export class FakeProviderAdapter implements ProviderAdapter {
       payload: { state: 'completed' }
     })
     return { turnId, resumeCursor: session?.resumeCursor }
+  }
+
+  async generateThreadTitle(input: { input: string }): Promise<string | null> {
+    if (/provider layer/iu.test(input.input)) {
+      return parseThreadTitleResponse('{"title":"Provider Layer"}')
+    }
+    if (/sidebar layout/iu.test(input.input)) {
+      return parseThreadTitleResponse('{"title":"Sidebar Layout"}')
+    }
+    return parseThreadTitleResponse('{"title":"Coding Task"}')
   }
 
   async interruptTurn(): Promise<void> {

@@ -1,6 +1,7 @@
 import type { Database } from 'better-sqlite3'
 import type { StoredOrchestrationEvent } from './OrchestrationEventStore'
 import type { OrchestrationEventStore } from './OrchestrationEventStore'
+import { DEFAULT_THREAD_TITLE } from '../../../shared/threadTitle'
 
 interface ProjectionStateRow {
   projector: string
@@ -136,7 +137,7 @@ export class ProjectionPipeline {
       .run({
         thread_id: str(e.payload['threadId']) ?? e.streamId,
         project_id: str(e.payload['projectId']) ?? '',
-        title: str(e.payload['title']) ?? 'Chat title',
+        title: str(e.payload['title']) ?? DEFAULT_THREAD_TITLE,
         cwd: str(e.payload['cwd']) ?? null,
         branch: str(e.payload['branch']) ?? 'main',
         created_at: e.occurredAt,
@@ -175,7 +176,7 @@ export class ProjectionPipeline {
       `
       )
       .run(
-        str(t['title']) ?? 'Chat title',
+        str(t['title']) ?? DEFAULT_THREAD_TITLE,
         str(t['cwd']) ?? null,
         str(t['branch']) ?? 'main',
         e.occurredAt,

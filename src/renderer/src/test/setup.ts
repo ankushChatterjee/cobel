@@ -9,6 +9,7 @@ import type {
   OrchestrationThread
 } from '../../../shared/agent'
 import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
+import { DEFAULT_THREAD_TITLE } from '../../../shared/threadTitle'
 
 window.scrollTo = vi.fn()
 Element.prototype.scrollIntoView = vi.fn()
@@ -25,7 +26,7 @@ export function createTestThread(
 ): OrchestrationThread {
   return {
     id: 'local:main',
-    title: 'Chat title',
+    title: DEFAULT_THREAD_TITLE,
     cwd: '/Users/ankush/codespace/gencode',
     branch: 'main',
     messages: [],
@@ -61,6 +62,31 @@ const agentApiMock: AgentApi = {
         },
         createdAt: input.createdAt
       })
+      const existingThread = getTestThread(input.threadId)
+      if (input.titleSeed && existingThread.title === DEFAULT_THREAD_TITLE) {
+        const existingShellThread = shellSnapshot.threads.find((thread) => thread.id === input.threadId)
+        if (existingShellThread) {
+          const updatedShellThread = {
+            ...existingShellThread,
+            title: input.titleSeed,
+            updatedAt: input.createdAt
+          }
+          shellSnapshot = {
+            ...shellSnapshot,
+            threads: shellSnapshot.threads.map((thread) =>
+              thread.id === input.threadId ? updatedShellThread : thread
+            )
+          }
+          emitShellEvent({ type: 'shell.thread-upserted', thread: updatedShellThread })
+        }
+        emitThreadEvent(input.threadId, {
+          sequence: nextSequence(),
+          type: 'thread.renamed',
+          threadId: input.threadId,
+          title: input.titleSeed,
+          createdAt: input.createdAt
+        })
+      }
     } else if (input.type === 'project.create') {
       const project = {
         id: input.projectId,

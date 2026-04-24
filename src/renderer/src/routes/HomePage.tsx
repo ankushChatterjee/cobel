@@ -59,6 +59,7 @@ import type {
   ThreadShellSummary
 } from '../../../shared/agent'
 import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
+import { DEFAULT_THREAD_TITLE, deriveTitleSeed } from '../../../shared/threadTitle'
 import {
   ChangedFilePills,
   DiffPreviewPopover,
@@ -304,7 +305,7 @@ function runLegacyMigration(loadedShell: OrchestrationShellSnapshot): void {
           commandId: `cmd:${createId()}`,
           threadId: chat.id,
           projectId: project.id,
-          title: chat.label ?? 'New chat',
+          title: chat.label ?? DEFAULT_THREAD_TITLE,
           cwd: project.path,
           createdAt: chat.createdAt ?? createdAt
         })
@@ -591,26 +592,16 @@ export function HomePage(): React.JSX.Element {
         updatedAt: createdAt
       }
       pendingUserMessagesRef.current.set(optimisticMessage.id, optimisticMessage)
+      const titleSeed = deriveTitleSeed(input)
       setThread((current) =>
         upsertOptimisticUserMessage({
           thread: current,
           threadId: activeThreadId,
           cwd: activeProject.path,
-          title: titleFromPrompt(input),
+          title: titleSeed,
           message: optimisticMessage
         })
       )
-
-      // Rename the chat if it still has the default label
-      if (activeChat && activeChat.title === 'New chat') {
-        void window.agentApi.dispatchCommand({
-          type: 'thread.rename',
-          commandId: `cmd:${createId()}`,
-          threadId: activeThreadId,
-          title: titleFromPrompt(input),
-          createdAt
-        })
-      }
 
       try {
         await window.agentApi.dispatchCommand({
@@ -619,6 +610,7 @@ export function HomePage(): React.JSX.Element {
           threadId: activeThreadId,
           provider: 'codex',
           input,
+          titleSeed,
           cwd: activeProject.path,
           model,
           runtimeMode,
@@ -631,7 +623,7 @@ export function HomePage(): React.JSX.Element {
       }
       return true
     },
-    [activeChat, activeProject, activeThreadId, isRunning, model, runtimeMode]
+    [activeProject, activeThreadId, isRunning, model, runtimeMode]
   )
 
   const stopSession = useCallback(async (): Promise<void> => {
@@ -686,7 +678,7 @@ export function HomePage(): React.JSX.Element {
       commandId: `cmd:${createId()}`,
       threadId: chatId,
       projectId: activeProject.id,
-      title: 'New chat',
+      title: DEFAULT_THREAD_TITLE,
       cwd: activeProject.path,
       createdAt
     })
@@ -786,7 +778,7 @@ export function HomePage(): React.JSX.Element {
         commandId: `cmd:${createId()}`,
         threadId: chatId,
         projectId,
-        title: 'New chat',
+        title: DEFAULT_THREAD_TITLE,
         cwd: folder.path,
         createdAt
       })
@@ -1070,7 +1062,7 @@ export function HomePage(): React.JSX.Element {
                           onClick={() => void startNewChat()}
                         >
                           <Plus size={11} strokeWidth={2} />
-                          <span>New chat</span>
+                          <span>{DEFAULT_THREAD_TITLE}</span>
                         </button>
                       </div>
                     ) : null}
@@ -2522,7 +2514,7 @@ function upsertOptimisticUserMessage({
     })
   return {
     ...current,
-    title: current.title === 'Chat title' || current.title === 'New chat' ? title : current.title,
+    title: canAutoReplaceOptimisticTitle(current.title) ? title : current.title,
     cwd: current.cwd ?? cwd,
     messages: upsertById(current.messages, message),
     updatedAt: now
@@ -2536,7 +2528,7 @@ function createEmptyThread(
 ): OrchestrationThread {
   return {
     id: threadId,
-    title: overrides.title ?? 'Chat title',
+    title: overrides.title ?? DEFAULT_THREAD_TITLE,
     cwd: overrides.cwd,
     branch: 'main',
     messages: [],
@@ -2947,9 +2939,8 @@ function projectIdForPath(path: string): string {
   )
 }
 
-function titleFromPrompt(input: string): string {
-  const firstLine = input.trim().split(/\r?\n/u)[0] ?? 'New chat'
-  return firstLine.length > 42 ? `${firstLine.slice(0, 39)}...` : firstLine
+function canAutoReplaceOptimisticTitle(title: string): boolean {
+  return title === DEFAULT_THREAD_TITLE
 }
 
 function requestIdFromActivity(activity: OrchestrationThreadActivity): string {

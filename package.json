@@ -13,7 +13,7 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "bun run typecheck:node && bun run typecheck:web",
     "start": "electron-vite preview",
-    "dev": "electron-vite dev",
+    "dev": "bun run rebuild:electron && electron-vite dev",
     "build": "bun run typecheck && electron-vite build",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "bun run build && electron-builder --dir",

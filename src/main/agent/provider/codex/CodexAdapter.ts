@@ -13,6 +13,7 @@ import type { ModelInfo } from './codex-api-types'
 
 export class CodexAdapter implements ProviderAdapter {
   readonly id = 'codex' as const
+  readonly supportsStructuredOutput = true
   private readonly bus = new ProviderEventBus()
 
   constructor(private readonly manager = new CodexAppServerManager()) {
@@ -35,6 +36,15 @@ export class CodexAdapter implements ProviderAdapter {
 
   async sendTurn(input: SendTurnInput): Promise<{ turnId: string; resumeCursor?: unknown }> {
     return this.manager.sendTurn(input)
+  }
+
+  async generateThreadTitle(input: {
+    cwd?: string
+    input: string
+    model?: string
+    useStructuredOutput?: boolean
+  }): Promise<string | null> {
+    return this.manager.generateThreadTitle(input)
   }
 
   async interruptTurn(input: { threadId: string; turnId?: string }): Promise<void> {

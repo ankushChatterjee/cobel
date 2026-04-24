@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { DEFAULT_THREAD_ID } from '../../shared/agent'
+import { DEFAULT_THREAD_TITLE } from '../../shared/threadTitle'
 import { AgentBackend } from './AgentBackend'
 import { CheckpointStore } from './checkpointing/CheckpointStore'
 import { openInMemoryDatabase } from './persistence/Sqlite'
@@ -44,6 +45,146 @@ describe('AgentBackend', () => {
     expect(streamItems).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: 'event' })])
     )
+  })
+
+  it('persists the first-turn title seed and then applies an automatic rename', async () => {
+    const backend = new AgentBackend({ useFakeProvider: true })
+    const threadId = 'thread:first-turn-title'
+    const projectId = 'project:first-turn-title'
+    const createdAt = '2026-04-24T00:00:00.000Z'
+
+    await backend.dispatchCommand({
+      type: 'project.create',
+      commandId: 'cmd-project',
+      projectId,
+      name: 'Naming Project',
+      path: '/tmp/naming',
+      createdAt
+    })
+    await backend.dispatchCommand({
+      type: 'thread.create',
+      commandId: 'cmd-thread',
+      threadId,
+      projectId,
+      title: DEFAULT_THREAD_TITLE,
+      cwd: '/tmp/naming',
+      createdAt
+    })
+
+    await backend.dispatchCommand({
+      type: 'thread.turn.start',
+      commandId: 'cmd-turn',
+      threadId,
+      provider: 'codex',
+      input: 'Please build the provider layer',
+      titleSeed: 'Please build the provider layer',
+      cwd: '/tmp/naming',
+      runtimeMode: 'auto-accept-edits',
+      createdAt
+    })
+    await backend.drain()
+
+    expect(backend.engine.getThread(threadId).title).toBe('Provider Layer')
+  })
+
+  it('does not let automatic first-turn naming overwrite a manual rename', async () => {
+    const backend = new AgentBackend({ useFakeProvider: true })
+    const threadId = 'thread:manual-rename-wins'
+    const projectId = 'project:manual-rename-wins'
+    const createdAt = '2026-04-24T00:00:00.000Z'
+
+    await backend.dispatchCommand({
+      type: 'project.create',
+      commandId: 'cmd-project',
+      projectId,
+      name: 'Naming Project',
+      path: '/tmp/naming',
+      createdAt
+    })
+    await backend.dispatchCommand({
+      type: 'thread.create',
+      commandId: 'cmd-thread',
+      threadId,
+      projectId,
+      title: DEFAULT_THREAD_TITLE,
+      cwd: '/tmp/naming',
+      createdAt
+    })
+
+    await backend.dispatchCommand({
+      type: 'thread.turn.start',
+      commandId: 'cmd-turn',
+      threadId,
+      provider: 'codex',
+      input: 'Please build the provider layer',
+      titleSeed: 'Please build the provider layer',
+      cwd: '/tmp/naming',
+      runtimeMode: 'auto-accept-edits',
+      createdAt
+    })
+    await backend.dispatchCommand({
+      type: 'thread.rename',
+      commandId: 'cmd-manual-rename',
+      threadId,
+      title: 'Manual title wins',
+      createdAt: '2026-04-24T00:00:01.000Z'
+    })
+    await backend.drain()
+
+    expect(backend.engine.getThread(threadId).title).toBe('Manual title wins')
+  })
+
+  it('does not auto-rename non-first turns', async () => {
+    const backend = new AgentBackend({ useFakeProvider: true })
+    const threadId = 'thread:later-turns'
+    const projectId = 'project:later-turns'
+    const createdAt = '2026-04-24T00:00:00.000Z'
+
+    await backend.dispatchCommand({
+      type: 'project.create',
+      commandId: 'cmd-project',
+      projectId,
+      name: 'Naming Project',
+      path: '/tmp/naming',
+      createdAt
+    })
+    await backend.dispatchCommand({
+      type: 'thread.create',
+      commandId: 'cmd-thread',
+      threadId,
+      projectId,
+      title: DEFAULT_THREAD_TITLE,
+      cwd: '/tmp/naming',
+      createdAt
+    })
+
+    await backend.dispatchCommand({
+      type: 'thread.turn.start',
+      commandId: 'cmd-turn-1',
+      threadId,
+      provider: 'codex',
+      input: 'Please build the provider layer',
+      titleSeed: 'Please build the provider layer',
+      cwd: '/tmp/naming',
+      runtimeMode: 'auto-accept-edits',
+      createdAt
+    })
+    await backend.drain()
+
+    await backend.dispatchCommand({
+      type: 'thread.turn.start',
+      commandId: 'cmd-turn-2',
+      threadId,
+      provider: 'codex',
+      input: 'Please refactor the sidebar layout',
+      titleSeed: 'Please refactor the sidebar layout',
+      cwd: '/tmp/naming',
+      runtimeMode: 'auto-accept-edits',
+      createdAt: '2026-04-24T00:00:02.000Z'
+    })
+    await backend.drain()
+
+    expect(backend.engine.getThread(threadId).title).toBe('Provider Layer')
   })
 
   it('persists thread content to SQLite and rehydrates after restart', async () => {

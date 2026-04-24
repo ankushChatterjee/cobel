@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildCodexInitializeParams,
+  buildThreadTitleTurnParams,
   mapCodexRuntimeMode,
   parseCodexStderr,
   parseModelList,
   readProviderThreadId
 } from './CodexAppServerManager'
+import { THREAD_TITLE_OUTPUT_SCHEMA } from '../../../../shared/threadTitle'
 
 describe('buildCodexInitializeParams', () => {
   it('sends client info and experimental api capability required by codex app-server', () => {
@@ -92,6 +94,35 @@ describe('parseModelList', () => {
   })
 })
 
+describe('buildThreadTitleTurnParams', () => {
+  it('adds outputSchema when the provider supports structured output', () => {
+    expect(
+      buildThreadTitleTurnParams({
+        providerThreadId: 'thread-1',
+        input: 'Fix the sidebar',
+        model: 'gpt-5.4',
+        useStructuredOutput: true
+      })
+    ).toEqual(
+      expect.objectContaining({
+        threadId: 'thread-1',
+        model: 'gpt-5.4',
+        outputSchema: THREAD_TITLE_OUTPUT_SCHEMA
+      })
+    )
+  })
+
+  it('omits outputSchema when falling back to plain text generation', () => {
+    expect(
+      buildThreadTitleTurnParams({
+        providerThreadId: 'thread-1',
+        input: 'Fix the sidebar',
+        useStructuredOutput: false
+      })
+    ).not.toHaveProperty('outputSchema')
+  })
+})
+
 describe('parseCodexStderr', () => {
   it('ignores structured Codex warn logs from stderr', () => {
     expect(
@@ -163,6 +194,23 @@ describe('parseCodexStderr', () => {
         message: 'MCP transport unavailable: local MCP server connection was refused.',
         detail: {
           raw: '2026-04-21T16:31:40.213832Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(Reqwest(reqwest::Error { kind: Request, url: "http://127.0.0.1:29979/mcp", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:29979, Os { code: 61, kind: ConnectionRefused, message: "Connection refused" })) }))'
+        },
+        key: 'rmcp-transport-connection-refused'
+      }
+    ])
+  })
+
+  it('classifies collapsed local MCP transport refusals as a warning', () => {
+    expect(
+      parseCodexStderr(
+        'worker quit with fatal: Transport channel closed, when Client(Reqwest(reqwest::Error { kind: Request, url: "http://127.0.0.1:29979/mcp", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:29979, Os { code: 61, kind: ConnectionRefused, message: "Connection refused" })) }))'
+      )
+    ).toEqual([
+      {
+        level: 'warning',
+        message: 'MCP transport unavailable: local MCP server connection was refused.',
+        detail: {
+          raw: 'worker quit with fatal: Transport channel closed, when Client(Reqwest(reqwest::Error { kind: Request, url: "http://127.0.0.1:29979/mcp", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:29979, Os { code: 61, kind: ConnectionRefused, message: "Connection refused" })) }))'
         },
         key: 'rmcp-transport-connection-refused'
       }

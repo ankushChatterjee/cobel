@@ -7,7 +7,12 @@ import type {
   RespondToUserInputInput,
   StopSessionInput
 } from '../../../shared/agent'
-import type { ProviderAdapter, SendTurnInput, StartSessionInput } from './types'
+import type {
+  GenerateThreadTitleInput,
+  ProviderAdapter,
+  SendTurnInput,
+  StartSessionInput
+} from './types'
 import type { ModelInfo } from './codex/codex-api-types'
 
 export class ProviderService {
@@ -44,6 +49,16 @@ export class ProviderService {
     input: SendTurnInput & { provider: ProviderId }
   ): Promise<{ turnId: string; resumeCursor?: unknown }> {
     return this.getAdapter(input.provider).sendTurn(input)
+  }
+
+  async generateThreadTitle(
+    input: GenerateThreadTitleInput & { provider: ProviderId }
+  ): Promise<string | null> {
+    const adapter = this.getAdapter(input.provider)
+    return adapter.generateThreadTitle({
+      ...input,
+      useStructuredOutput: adapter.supportsStructuredOutput
+    })
   }
 
   async interruptTurn(

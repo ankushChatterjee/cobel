@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OrchestrationThreadStreamItem } from '../../shared/agent'
+import { DEFAULT_THREAD_TITLE } from '../../shared/threadTitle'
 import { createAppRouter } from './router'
 import { resetAgentApiMock } from './test/setup'
 
@@ -57,14 +58,19 @@ describe('renderer app', () => {
         type: 'thread.turn.start',
         provider: 'codex',
         input: 'Build the provider layer',
+        titleSeed: 'Build the provider layer',
         cwd: '/Users/ankush/codespace/gencode',
         runtimeMode: 'auto-accept-edits'
       })
+    )
+    expect(window.agentApi.dispatchCommand).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'thread.rename' })
     )
     const transcript = await screen.findByLabelText(/conversation transcript/i)
     expect(within(transcript).getByText('Build the provider layer')).toBeInTheDocument()
     expect(screen.getByLabelText('Thinking')).toBeInTheDocument()
     expect(screen.getByText('thinking…')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Build the provider layer' })).toBeInTheDocument()
   })
 
   it('persists model and runtime mode per thread', async () => {
@@ -192,7 +198,7 @@ describe('renderer app', () => {
           snapshotSequence: 0,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [],
@@ -227,7 +233,7 @@ describe('renderer app', () => {
           snapshotSequence: 1,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [
@@ -298,7 +304,7 @@ describe('renderer app', () => {
           snapshotSequence: 3,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [
@@ -366,7 +372,7 @@ describe('renderer app', () => {
           snapshotSequence: 3,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [],
@@ -429,7 +435,7 @@ describe('renderer app', () => {
           snapshotSequence: 1,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [],
@@ -511,7 +517,7 @@ describe('renderer app', () => {
           snapshotSequence: 1,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [],
@@ -561,7 +567,7 @@ describe('renderer app', () => {
           snapshotSequence: 2,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [
@@ -647,7 +653,7 @@ describe('renderer app', () => {
           snapshotSequence: 2,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [],
@@ -699,7 +705,7 @@ describe('renderer app', () => {
           snapshotSequence: 2,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [],
@@ -756,7 +762,7 @@ describe('renderer app', () => {
           snapshotSequence: 0,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [],
@@ -855,7 +861,7 @@ describe('renderer app', () => {
           snapshotSequence: 3,
           thread: {
             id: _input.threadId,
-            title: 'Chat title',
+            title: DEFAULT_THREAD_TITLE,
             cwd: '/Users/ankush/codespace/gencode',
             branch: 'main',
             messages: [],
@@ -918,8 +924,10 @@ describe('renderer app', () => {
     expect(window.agentApi.openWorkspaceFolder).toHaveBeenCalled()
     expect(await screen.findByText('Cobel')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /delete new chat/i }))
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Delete "New chat"?'))
+    await user.click(screen.getByRole('button', { name: /delete new thread/i }))
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`Delete "${DEFAULT_THREAD_TITLE}"?`)
+    )
     expect(window.agentApi.dispatchCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'thread.delete',
@@ -938,9 +946,11 @@ describe('renderer app', () => {
     const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
     await user.click(openFolderButtons[0])
 
-    await user.click(await screen.findByRole('button', { name: /delete new chat/i }))
+    await user.click(await screen.findByRole('button', { name: /delete new thread/i }))
 
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Delete "New chat"?'))
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`Delete "${DEFAULT_THREAD_TITLE}"?`)
+    )
     expect(window.agentApi.dispatchCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'thread.delete',
@@ -948,7 +958,7 @@ describe('renderer app', () => {
       })
     )
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /delete new chat/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /delete new thread/i })).not.toBeInTheDocument()
     })
     confirmSpy.mockRestore()
   })

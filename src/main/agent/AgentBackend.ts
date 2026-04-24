@@ -14,6 +14,11 @@ import type {
   RespondToUserInputInput,
   StopSessionInput
 } from '../../shared/agent'
+import {
+  canReplaceThreadTitle,
+  DEFAULT_THREAD_TITLE,
+  sanitizeThreadTitle
+} from '../../shared/threadTitle'
 import type { ModelInfo } from './provider/codex/codex-api-types'
 import type { Database } from './persistence/Sqlite'
 import { OrchestrationEngine } from './orchestration/OrchestrationEngine'
@@ -36,6 +41,7 @@ export class AgentBackend {
   private readonly directory: ProviderSessionDirectory
   private readonly snapshots: SnapshotQuery
   private readonly checkpointStore: CheckpointStore
+  private readonly pendingThreadNaming = new Set<Promise<void>>()
 
   constructor(options: { useFakeProvider?: boolean; db?: Database } = {}) {
     if (options.db) {
@@ -122,10 +128,11 @@ export class AgentBackend {
       }
 
       case 'thread.create': {
+        const title = sanitizeThreadTitle(input.title)
         this.engine.createThread({
           threadId: input.threadId,
           projectId: input.projectId,
-          title: input.title,
+          title,
           cwd: input.cwd,
           branch: input.branch,
           commandId: input.commandId,
@@ -135,9 +142,10 @@ export class AgentBackend {
       }
 
       case 'thread.rename': {
+        const title = sanitizeThreadTitle(input.title)
         this.engine.renameThread({
           threadId: input.threadId,
-          title: input.title,
+          title,
           commandId: input.commandId,
           createdAt: input.createdAt
         })
@@ -171,6 +179,12 @@ export class AgentBackend {
 
       case 'thread.turn.start': {
         this.engine.ensureThread({ threadId: input.threadId, cwd: input.cwd })
+        this.seedThreadTitle({
+          threadId: input.threadId,
+          titleSeed: input.titleSeed,
+          commandId: input.commandId,
+          createdAt: input.createdAt
+        })
         this.engine.appendUserMessage({
           threadId: input.threadId,
           commandId: input.commandId,
@@ -215,6 +229,16 @@ export class AgentBackend {
             resumeCursor: result.resumeCursor
           })
         }
+        this.trackThreadNaming(this.autoRenameThreadFromFirstTurn({
+          threadId: input.threadId,
+          input: input.input,
+          provider: input.provider,
+          cwd: input.cwd,
+          model: sanitizeOptionalString(input.model),
+          titleSeed: input.titleSeed,
+          commandId: input.commandId,
+          createdAt: input.createdAt
+        }))
         return {
           accepted: true,
           commandId: input.commandId,
@@ -299,10 +323,79 @@ export class AgentBackend {
   async drain(): Promise<void> {
     await this.ingestion.drain()
     await this.checkpointReactor.drain()
+    if (this.pendingThreadNaming.size > 0) {
+      await Promise.all([...this.pendingThreadNaming])
+    }
   }
 
   private providerForThread(threadId: string): ProviderId {
     return this.engine.getThread(threadId).session?.providerName ?? 'codex'
+  }
+
+  private seedThreadTitle(input: {
+    threadId: string
+    titleSeed?: string
+    commandId: string
+    createdAt: string
+  }): void {
+    if (typeof input.titleSeed !== 'string' || input.titleSeed.trim().length === 0) return
+    const thread = this.engine.getThread(input.threadId)
+    const seed = sanitizeThreadTitle(input.titleSeed)
+    if (!canReplaceThreadTitle(thread.title, seed)) return
+    if (thread.title === seed) return
+    this.engine.renameThread({
+      threadId: input.threadId,
+      title: seed,
+      commandId: input.commandId,
+      createdAt: input.createdAt
+    })
+  }
+
+  private async autoRenameThreadFromFirstTurn(input: {
+    threadId: string
+    input: string
+    provider: ProviderId
+    cwd?: string
+    model?: string
+    titleSeed?: string
+    commandId: string
+    createdAt: string
+  }): Promise<void> {
+    const thread = this.engine.getThread(input.threadId)
+    const isFirstTurn = thread.messages.filter((message) => message.role === 'user').length === 1
+    if (!isFirstTurn) return
+
+    try {
+      await Promise.resolve()
+      const generatedTitle = await this.providers.generateThreadTitle({
+        provider: input.provider,
+        cwd: input.cwd,
+        input: input.input,
+        model: input.model
+      })
+      if (!generatedTitle || generatedTitle === DEFAULT_THREAD_TITLE) return
+      const latestThread = this.engine.getThread(input.threadId)
+      if (!canReplaceThreadTitle(latestThread.title, input.titleSeed)) return
+      if (latestThread.title === generatedTitle) return
+      this.engine.renameThread({
+        threadId: input.threadId,
+        title: generatedTitle,
+        commandId: `${input.commandId}:auto-title`,
+        createdAt: input.createdAt
+      })
+    } catch (error) {
+      console.warn('[cobel:thread-naming] failed to generate title', {
+        threadId: input.threadId,
+        error
+      })
+    }
+  }
+
+  private trackThreadNaming(task: Promise<void>): void {
+    this.pendingThreadNaming.add(task)
+    void task.finally(() => {
+      this.pendingThreadNaming.delete(task)
+    })
   }
 
   private async revertCheckpoint(
@@ -357,6 +450,9 @@ function assertCommand(input: ClientOrchestrationCommand): void {
     if (input.provider !== 'codex') throw new Error(`Unsupported provider: ${input.provider}`)
     if (typeof input.input !== 'string' || input.input.trim().length === 0) {
       throw new Error('Prompt input is required.')
+    }
+    if (input.titleSeed !== undefined && typeof input.titleSeed !== 'string') {
+      throw new Error('Thread title seed must be a string when provided.')
     }
   }
   if (input.type === 'thread.checkpoint.commit' && input.message.trim().length === 0) {

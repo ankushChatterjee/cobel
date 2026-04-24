@@ -421,6 +421,7 @@ export type ClientOrchestrationCommand =
       threadId: string
       provider: ProviderId
       input: string
+      titleSeed?: string
       attachments?: ChatAttachment[]
       cwd?: string
       model?: string

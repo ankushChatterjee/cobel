@@ -8,6 +8,11 @@ import type {
   ProviderSession,
   RuntimeMode
 } from '../../../../shared/agent'
+import {
+  buildThreadTitlePrompt,
+  parseThreadTitleResponse,
+  THREAD_TITLE_OUTPUT_SCHEMA
+} from '../../../../shared/threadTitle'
 import type { ModelInfo, ModelListResponse, TurnStartResponse } from './codex-api-types'
 import { createEventId, nowIso } from '../types'
 
@@ -65,6 +70,12 @@ interface PendingUserInputRequest {
   threadId: string
   turnId?: string
   itemId?: string
+}
+
+interface TitleGenerationState {
+  text: string
+  resolve: (value: string) => void
+  reject: (error: Error) => void
 }
 
 interface CodexSessionContext {
@@ -256,6 +267,93 @@ export class CodexAppServerManager {
       updatedAt: nowIso()
     }
     return { turnId, resumeCursor: context.session.resumeCursor }
+  }
+
+  async generateThreadTitle(input: {
+    cwd?: string
+    input: string
+    model?: string
+    useStructuredOutput?: boolean
+  }): Promise<string | null> {
+    await this.assertVersion()
+    const child = (this.options.spawnProcess ?? spawn)(this.codexBinaryPath(), ['app-server'], {
+      cwd: input.cwd,
+      env: {
+        ...process.env,
+        ...(this.options.codexHomePath ? { CODEX_HOME: this.options.codexHomePath } : {})
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: process.platform === 'win32'
+    })
+    const context: CodexSessionContext = {
+      session: {
+        provider: 'codex',
+        status: 'connecting',
+        runtimeMode: 'approval-required',
+        cwd: input.cwd,
+        model: input.model,
+        threadId: `title:${createEventId('thread')}`,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      },
+      child,
+      output: createInterface({ input: child.stdout }),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      emittedWarningKeys: new Set(),
+      nextRequestId: 1,
+      stopping: false
+    }
+    const titleState = createTitleGenerationState()
+
+    context.output.on('line', (line) => this.handleTitleStdoutLine(context, titleState, line))
+    context.child.stderr.on('data', () => {
+      // Title generation is best-effort; stderr remains isolated from user-visible threads.
+    })
+    context.child.on('exit', () => {
+      if (context.pending.size > 0) {
+        for (const pending of context.pending.values()) {
+          clearTimeout(pending.timeout)
+          pending.reject(new Error('Codex title generation process exited.'))
+        }
+        context.pending.clear()
+      }
+    })
+
+    try {
+      await this.sendRequest(context, 'initialize', buildCodexInitializeParams())
+      this.writeMessage(context, { method: 'initialized' })
+      const mode = mapCodexRuntimeMode('approval-required')
+      const threadResult = await this.sendRequest<Record<string, unknown>>(context, 'thread/start', {
+        cwd: input.cwd,
+        ...optionalModel(input.model),
+        ...mode
+      })
+      const providerThreadId = readProviderThreadId(threadResult)
+      if (!providerThreadId) throw new Error('Codex did not return a provider thread id.')
+      await this.sendRequest<TurnStartResponse>(
+        context,
+        'turn/start',
+        buildThreadTitleTurnParams({
+          providerThreadId,
+          input: input.input,
+          model: input.model,
+          useStructuredOutput: input.useStructuredOutput
+        })
+      )
+      const response = await titleState.done
+      return parseThreadTitleResponse(response)
+    } finally {
+      context.stopping = true
+      for (const pending of context.pending.values()) {
+        clearTimeout(pending.timeout)
+        pending.reject(new Error('Codex title generation stopped.'))
+      }
+      context.pending.clear()
+      context.output.close()
+      child.kill()
+    }
   }
 
   async interruptTurn(input: { threadId: string; turnId?: string }): Promise<void> {
@@ -567,6 +665,49 @@ export class CodexAppServerManager {
     })
   }
 
+  private handleTitleStdoutLine(
+    context: CodexSessionContext,
+    titleState: TitleGenerationState & { done: Promise<string> },
+    line: string
+  ): void {
+    let message: unknown
+    try {
+      message = JSON.parse(line)
+    } catch {
+      titleState.reject(new Error('Invalid JSON from Codex title generation.'))
+      return
+    }
+
+    if (isResponse(message)) {
+      this.handleResponse(context, message)
+      return
+    }
+
+    if (isServerRequest(message)) {
+      this.writeMessage(context, {
+        id: message.id,
+        error: { code: -32601, message: `Unsupported title-generation request: ${message.method}` }
+      })
+      return
+    }
+
+    if (!isServerNotification(message)) return
+
+    const params = readRecord(message.params)
+    const item = readRecord(params['item'])
+    if (message.method === 'item/agentMessage/delta') {
+      titleState.text += readString(params, 'delta') ?? ''
+      return
+    }
+    if (message.method === 'item/completed' && readString(item, 'type') === 'agentMessage') {
+      titleState.text ||= readString(item, 'text') ?? ''
+      return
+    }
+    if (message.method === 'turn/completed') {
+      titleState.resolve(titleState.text)
+    }
+  }
+
   private async sendRequest<T>(
     context: CodexSessionContext,
     method: string,
@@ -659,6 +800,21 @@ function logEvent(label: string, payload: unknown): void {
   console.log(`[cobel:${label}]`, payload)
 }
 
+function createTitleGenerationState(): TitleGenerationState & { done: Promise<string> } {
+  let resolveDone: (value: string) => void = () => {}
+  let rejectDone: (error: Error) => void = () => {}
+  const done = new Promise<string>((resolve, reject) => {
+    resolveDone = resolve
+    rejectDone = reject
+  })
+  return {
+    text: '',
+    done,
+    resolve: resolveDone,
+    reject: rejectDone
+  }
+}
+
 export function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   approvalPolicy: CodexApprovalPolicy
   sandbox: CodexSandboxMode
@@ -686,6 +842,20 @@ export function buildCodexInitializeParams(): {
     capabilities: {
       experimentalApi: true
     }
+  }
+}
+
+export function buildThreadTitleTurnParams(input: {
+  providerThreadId: string
+  input: string
+  model?: string
+  useStructuredOutput?: boolean
+}): Record<string, unknown> {
+  return {
+    threadId: input.providerThreadId,
+    input: [{ type: 'text', text: buildThreadTitlePrompt(input.input), text_elements: [] }],
+    ...optionalModel(input.model),
+    ...(input.useStructuredOutput ? { outputSchema: THREAD_TITLE_OUTPUT_SCHEMA } : {})
   }
 }
 
@@ -764,8 +934,9 @@ function readTracingErrorMessage(value: string): string | undefined {
 
 function classifyCodexWarning(value: string): { message: string; key: string } | null {
   if (
-    value.includes('rmcp::transport::worker') &&
     value.includes('Transport channel closed') &&
+    value.includes('127.0.0.1') &&
+    value.includes('/mcp') &&
     value.includes('Connection refused')
   ) {
     return {
