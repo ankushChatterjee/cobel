@@ -55,6 +55,7 @@ import type {
   OrchestrationThreadActivity,
   ProjectSummary,
   ProviderSummary,
+  ReasoningEffort,
   RuntimeMode,
   ThreadShellSummary
 } from '../../../shared/agent'
@@ -132,6 +133,7 @@ interface ActiveSelection {
 
 interface ThreadComposerPreference {
   model?: string
+  effort?: ReasoningEffort
   runtimeMode?: RuntimeMode
 }
 
@@ -161,6 +163,17 @@ function isRuntimeMode(value: unknown): value is RuntimeMode {
   return value === 'approval-required' || value === 'auto-accept-edits' || value === 'full-access'
 }
 
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return (
+    value === 'none' ||
+    value === 'minimal' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'xhigh'
+  )
+}
+
 function loadThreadComposerPreferences(): ThreadComposerPreferenceMap {
   try {
     const storedPreferences =
@@ -171,12 +184,13 @@ function loadThreadComposerPreferences(): ThreadComposerPreferenceMap {
     const preferences: ThreadComposerPreferenceMap = {}
     for (const [threadId, value] of Object.entries(parsed)) {
       if (!threadId || typeof value !== 'object' || !value) continue
-      const raw = value as { model?: unknown; runtimeMode?: unknown }
+      const raw = value as { model?: unknown; effort?: unknown; runtimeMode?: unknown }
       const model =
         typeof raw.model === 'string' && raw.model.trim().length > 0 ? raw.model : undefined
+      const effort = isReasoningEffort(raw.effort) ? raw.effort : undefined
       const runtimeMode = isRuntimeMode(raw.runtimeMode) ? raw.runtimeMode : undefined
-      if (!model && !runtimeMode) continue
-      preferences[threadId] = { model, runtimeMode }
+      if (!model && !effort && !runtimeMode) continue
+      preferences[threadId] = { model, effort, runtimeMode }
     }
     return preferences
   } catch {
@@ -258,6 +272,36 @@ function getModelDisplayName(modelInfo: Pick<ModelInfo, 'id' | 'name'>): string 
   return formatModelId(modelInfo.id)
 }
 
+function getModelEfforts(modelInfo: ModelInfo | null): ReasoningEffort[] {
+  const efforts = modelInfo?.supportedReasoningEfforts
+    ?.map((option) => option.reasoningEffort)
+    .filter(isReasoningEffort)
+  return efforts && efforts.length > 0 ? efforts : ['medium']
+}
+
+function pickDefaultEffort(modelInfo: ModelInfo | null): ReasoningEffort {
+  return isReasoningEffort(modelInfo?.defaultReasoningEffort)
+    ? modelInfo.defaultReasoningEffort
+    : getModelEfforts(modelInfo)[0] ?? 'medium'
+}
+
+function formatEffortLabel(effort: ReasoningEffort): string {
+  switch (effort) {
+    case 'none':
+      return 'None'
+    case 'minimal':
+      return 'Minimal'
+    case 'low':
+      return 'Low'
+    case 'medium':
+      return 'Medium'
+    case 'high':
+      return 'High'
+    case 'xhigh':
+      return 'XHigh'
+  }
+}
+
 function runLegacyMigration(loadedShell: OrchestrationShellSnapshot): void {
   const raw = localStorage.getItem(legacyWorkspaceKey)
   if (!raw) return
@@ -332,6 +376,7 @@ export function HomePage(): React.JSX.Element {
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(defaultRuntimeMode)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [model, setModel] = useState<string>('')
+  const [effort, setEffort] = useState<ReasoningEffort>('medium')
   const lastSequenceRef = useRef(0)
   const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const diffPanelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
@@ -511,6 +556,22 @@ export function HomePage(): React.JSX.Element {
     setModel(resolvedModel)
   }, [activeThreadId, models, threadComposerPreferences])
 
+  const activeModelInfo = useMemo(
+    () => models.find((candidate) => candidate.id === model) ?? null,
+    [model, models]
+  )
+
+  useEffect(() => {
+    if (!activeThreadId) return
+    const preferredEffort = threadComposerPreferences[activeThreadId]?.effort
+    const supportedEfforts = getModelEfforts(activeModelInfo)
+    const resolvedEffort =
+      preferredEffort && supportedEfforts.includes(preferredEffort)
+        ? preferredEffort
+        : pickDefaultEffort(activeModelInfo)
+    setEffort(resolvedEffort)
+  }, [activeModelInfo, activeThreadId, threadComposerPreferences])
+
   const handleRuntimeModeChange = useCallback(
     (nextMode: RuntimeMode) => {
       setRuntimeMode(nextMode)
@@ -529,12 +590,38 @@ export function HomePage(): React.JSX.Element {
   const handleModelChange = useCallback(
     (nextModel: string) => {
       setModel(nextModel)
+      const nextModelInfo = models.find((candidate) => candidate.id === nextModel) ?? null
+      const preferredEffort = activeThreadId
+        ? threadComposerPreferences[activeThreadId]?.effort
+        : undefined
+      const supportedEfforts = getModelEfforts(nextModelInfo)
+      const nextEffort =
+        preferredEffort && supportedEfforts.includes(preferredEffort)
+          ? preferredEffort
+          : pickDefaultEffort(nextModelInfo)
+      setEffort(nextEffort)
       if (!activeThreadId) return
       setThreadComposerPreferences((current) => ({
         ...current,
         [activeThreadId]: {
           ...current[activeThreadId],
-          model: nextModel
+          model: nextModel,
+          effort: nextEffort
+        }
+      }))
+    },
+    [activeThreadId, models, threadComposerPreferences]
+  )
+
+  const handleEffortChange = useCallback(
+    (nextEffort: ReasoningEffort) => {
+      setEffort(nextEffort)
+      if (!activeThreadId) return
+      setThreadComposerPreferences((current) => ({
+        ...current,
+        [activeThreadId]: {
+          ...current[activeThreadId],
+          effort: nextEffort
         }
       }))
     },
@@ -549,7 +636,6 @@ export function HomePage(): React.JSX.Element {
     setIsPendingThinking(false)
     pendingUserMessagesRef.current.clear()
     const unsubscribe = window.agentApi.subscribeThread({ threadId: activeThreadId }, (item) => {
-      logUiEvent('ui/thread-stream', item)
       if (item.kind === 'snapshot') {
         if (item.snapshot.snapshotSequence < lastSequenceRef.current) return
         lastSequenceRef.current = item.snapshot.snapshotSequence
@@ -639,6 +725,7 @@ export function HomePage(): React.JSX.Element {
           titleSeed,
           cwd: activeProject.path,
           model,
+          effort,
           runtimeMode,
           createdAt
         })
@@ -649,7 +736,7 @@ export function HomePage(): React.JSX.Element {
       }
       return true
     },
-    [activeProject, activeThreadId, isRunning, model, runtimeMode]
+    [activeProject, activeThreadId, effort, isRunning, model, runtimeMode]
   )
 
   const stopSession = useCallback(async (): Promise<void> => {
@@ -692,23 +779,24 @@ export function HomePage(): React.JSX.Element {
     }
   }
 
-  async function startNewChat(): Promise<void> {
-    if (!activeProject) {
+  async function startNewChat(projectOverride?: ProjectSummary): Promise<void> {
+    const targetProject = projectOverride ?? activeProject
+    if (!targetProject) {
       void openWorkspaceFolder()
       return
     }
-    const chatId = `project:${activeProject.id}:chat:${createId()}`
+    const chatId = `project:${targetProject.id}:chat:${createId()}`
     const createdAt = new Date().toISOString()
     await window.agentApi.dispatchCommand({
       type: 'thread.create',
       commandId: `cmd:${createId()}`,
       threadId: chatId,
-      projectId: activeProject.id,
+      projectId: targetProject.id,
       title: DEFAULT_THREAD_TITLE,
-      cwd: activeProject.path,
+      cwd: targetProject.path,
       createdAt
     })
-    setSelection({ activeProjectId: activeProject.id, activeChatId: chatId })
+    setSelection({ activeProjectId: targetProject.id, activeChatId: chatId })
     setComposerResetToken((token) => token + 1)
     setThread(null)
     setIsPendingThinking(false)
@@ -1061,7 +1149,7 @@ export function HomePage(): React.JSX.Element {
                       <button
                         type="button"
                         className="project-new-thread"
-                        onClick={() => void startNewChat()}
+                        onClick={() => void startNewChat(project)}
                         title="New thread"
                         aria-label="New thread"
                       >
@@ -1201,8 +1289,10 @@ export function HomePage(): React.JSX.Element {
                 runtimeMode={runtimeMode}
                 models={models}
                 model={model}
+                effort={effort}
                 onRuntimeModeChange={handleRuntimeModeChange}
                 onModelChange={handleModelChange}
+                onEffortChange={handleEffortChange}
                 onSubmitPrompt={sendPrompt}
                 onInterrupt={interruptTurn}
                 onStop={stopSession}
@@ -1493,8 +1583,10 @@ const ChatComposer = memo(function ChatComposer({
   runtimeMode,
   models,
   model,
+  effort,
   onRuntimeModeChange,
   onModelChange,
+  onEffortChange,
   onSubmitPrompt,
   onInterrupt,
   onStop
@@ -1504,8 +1596,10 @@ const ChatComposer = memo(function ChatComposer({
   runtimeMode: RuntimeMode
   models: ModelInfo[]
   model: string
+  effort: ReasoningEffort
   onRuntimeModeChange: (mode: RuntimeMode) => void
   onModelChange: (model: string) => void
+  onEffortChange: (effort: ReasoningEffort) => void
   onSubmitPrompt: (input: string) => Promise<boolean>
   onInterrupt: () => void
   onStop: () => void
@@ -1521,6 +1615,18 @@ const ChatComposer = memo(function ChatComposer({
     if (activeModel) return `Model: ${getModelDisplayName(activeModel)}`
     return `Model: ${formatModelId(model)}`
   }, [activeModel, model])
+  const effortOptions = useMemo<ComposerSelectOption[]>(
+    () =>
+      getModelEfforts(activeModel).map((value) => ({
+        value,
+        label: formatEffortLabel(value)
+      })),
+    [activeModel]
+  )
+  const effortTitle = useMemo(
+    () => `Reasoning effort: ${formatEffortLabel(effort)}`,
+    [effort]
+  )
   const modelShortcut = useMemo(() => ({ key: 'm', metaKey: true, shiftKey: true }), [])
   const modelOptions = useMemo<ComposerSelectOption[]>(
     () =>
@@ -1614,6 +1720,15 @@ const ChatComposer = memo(function ChatComposer({
           title={`${modelTitle} (⌘⇧M)`}
           shortcut={modelShortcut}
           shortcutLabel="⌘⇧M"
+        />
+        <ComposerDropdown
+          ariaLabel="Effort"
+          className="effort-select-shell"
+          value={effort}
+          onChange={(nextValue) => onEffortChange(nextValue as ReasoningEffort)}
+          options={effortOptions}
+          disabled={!enabled || effortOptions.length === 0}
+          title={effortTitle}
         />
         <span style={composerSpacerStyle} />
         {isRunning ? (
@@ -2936,10 +3051,6 @@ function statusLabel(status: string): string {
     default:
       return status
   }
-}
-
-function logUiEvent(label: string, payload: unknown): void {
-  console.log(`[cobel:${label}]`, payload)
 }
 
 function readPayloadString(

@@ -197,6 +197,7 @@ export class AgentBackend {
           status: 'starting',
           providerName: input.provider,
           runtimeMode: input.runtimeMode,
+          effort: sanitizeOptionalEffort(input.effort),
           activeTurnId: null,
           lastError: null,
           createdAt: input.createdAt
@@ -219,7 +220,8 @@ export class AgentBackend {
           threadId: input.threadId,
           input: input.input,
           attachments: input.attachments,
-          model: sanitizeOptionalString(input.model)
+          model: sanitizeOptionalString(input.model),
+          effort: sanitizeOptionalEffort(input.effort)
         })
         if (result.resumeCursor) {
           this.directory.upsert(input.threadId, {
@@ -462,6 +464,19 @@ function assertCommand(input: ClientOrchestrationCommand): void {
 
 function sanitizeOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+}
+
+function sanitizeOptionalEffort(
+  value: unknown
+): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
+  return value === 'none' ||
+    value === 'minimal' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'xhigh'
+    ? value
+    : undefined
 }
 
 // Null implementations for in-memory mode (no DB)

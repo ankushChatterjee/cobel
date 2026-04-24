@@ -92,11 +92,12 @@ describe('ProjectionPipeline', () => {
     const ts = eventStore.append({ eventId: 'tc1', aggregateKind: 'thread', streamId: 'thread-s', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-s', projectId: 'proj-1', title: 'Session test' } })
     projections.apply({ sequence: ts, eventId: 'tc1', aggregateKind: 'thread', streamId: 'thread-s', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-s', projectId: 'proj-1', title: 'Session test' } })
 
-    const ss = eventStore.append({ eventId: 'ss1', aggregateKind: 'thread', streamId: 'thread-s', streamVersion: 2, eventType: 'thread.session-set', occurredAt: n, actorKind: 'system', payload: { session: { status: 'ready', providerName: 'codex', runtimeMode: 'auto-accept-edits', activeTurnId: null, lastError: null } } })
-    projections.apply({ sequence: ss, eventId: 'ss1', aggregateKind: 'thread', streamId: 'thread-s', streamVersion: 2, eventType: 'thread.session-set', occurredAt: n, actorKind: 'system', payload: { session: { status: 'ready', providerName: 'codex', runtimeMode: 'auto-accept-edits', activeTurnId: null, lastError: null } } })
+    const ss = eventStore.append({ eventId: 'ss1', aggregateKind: 'thread', streamId: 'thread-s', streamVersion: 2, eventType: 'thread.session-set', occurredAt: n, actorKind: 'system', payload: { session: { status: 'ready', providerName: 'codex', runtimeMode: 'auto-accept-edits', effort: 'high', activeTurnId: null, lastError: null } } })
+    projections.apply({ sequence: ss, eventId: 'ss1', aggregateKind: 'thread', streamId: 'thread-s', streamVersion: 2, eventType: 'thread.session-set', occurredAt: n, actorKind: 'system', payload: { session: { status: 'ready', providerName: 'codex', runtimeMode: 'auto-accept-edits', effort: 'high', activeTurnId: null, lastError: null } } })
 
     const detail = snapshots.getThreadDetail('thread-s')
     expect(detail?.session?.status).toBe('ready')
     expect(detail?.session?.providerName).toBe('codex')
+    expect(detail?.session?.effort).toBe('high')
   })
 })

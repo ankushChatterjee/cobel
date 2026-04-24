@@ -1,6 +1,7 @@
 export type ProviderId = 'codex'
 
 export type RuntimeMode = 'approval-required' | 'auto-accept-edits' | 'full-access'
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 
 export type ProviderSessionStatus = 'connecting' | 'ready' | 'running' | 'error' | 'closed'
 
@@ -278,6 +279,7 @@ export interface OrchestrationSession {
   status: 'idle' | 'starting' | 'running' | 'ready' | 'interrupted' | 'stopped' | 'error'
   providerName: ProviderId | null
   runtimeMode: RuntimeMode
+  effort?: ReasoningEffort
   activeTurnId: string | null
   lastError: string | null
   updatedAt: string
@@ -425,6 +427,7 @@ export type ClientOrchestrationCommand =
       attachments?: ChatAttachment[]
       cwd?: string
       model?: string
+      effort?: ReasoningEffort
       runtimeMode: RuntimeMode
       createdAt: string
     }

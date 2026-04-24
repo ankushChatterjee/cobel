@@ -2311,6 +2311,21 @@
   font-weight: 500;
 }
 
+.effort-select-shell .composer-select-trigger {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #f2f2f2;
+  font-weight: 500;
+  padding: 0 9px;
+}
+
+.effort-select-shell .composer-select-trigger:hover,
+.effort-select-shell .composer-select-trigger:focus-visible,
+.effort-select-shell .composer-select-trigger[aria-expanded='true'] {
+  background: rgba(255, 255, 255, 0.09);
+  color: #ffffff;
+}
+
 .composer-select-trigger svg {
   flex: 0 0 auto;
   opacity: 0.64;

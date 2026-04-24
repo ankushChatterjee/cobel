@@ -4,6 +4,7 @@ import type {
   ProviderApprovalDecision,
   ProviderId,
   ProviderRuntimeEvent,
+  ReasoningEffort,
   ProviderSession,
   ProviderSummary,
   RespondToUserInputInput,
@@ -23,6 +24,7 @@ export interface SendTurnInput {
   input: string
   attachments?: ChatAttachment[]
   model?: string
+  effort?: ReasoningEffort
 }
 
 export interface GenerateThreadTitleInput {

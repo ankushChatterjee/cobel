@@ -243,6 +243,11 @@ export interface ModelInfo {
   description?: string
   hidden?: boolean
   isDefault?: boolean
+  supportedReasoningEfforts?: Array<{
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+    description?: string
+  }>
+  defaultReasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 }
 
 export interface ModelListResponse {

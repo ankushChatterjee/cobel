@@ -188,6 +188,7 @@ export class OrchestrationEngine {
     status: OrchestrationSession['status']
     providerName: OrchestrationSession['providerName']
     runtimeMode: RuntimeMode
+    effort?: OrchestrationSession['effort']
     activeTurnId: string | null
     lastError: string | null
     createdAt?: string
@@ -199,6 +200,7 @@ export class OrchestrationEngine {
       status: input.status,
       providerName: input.providerName,
       runtimeMode: input.runtimeMode,
+      effort: input.effort,
       activeTurnId: input.activeTurnId,
       lastError: input.lastError,
       updatedAt: now

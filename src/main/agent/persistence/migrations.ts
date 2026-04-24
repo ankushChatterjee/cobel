@@ -172,6 +172,12 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
       CREATE INDEX IF NOT EXISTS idx_projection_thread_checkpoints_thread_id
         ON projection_thread_checkpoints(thread_id, checkpoint_turn_count);
     `
+  },
+  {
+    name: '003_session_effort',
+    sql: `
+      ALTER TABLE projection_thread_sessions ADD COLUMN effort TEXT;
+    `
   }
 ]
 

@@ -67,22 +67,34 @@ describe('parseModelList', () => {
         data: [
           {
             id: 'gpt-5.3-codex',
-            model: 'gpt-5.3-codex',
-            displayName: 'gpt-5.3-codex',
-            description: 'Latest frontier agentic coding model.',
-            hidden: false,
-            isDefault: true
-          }
-        ],
-        nextCursor: null
-      })
-    ).toEqual([
+          model: 'gpt-5.3-codex',
+          displayName: 'gpt-5.3-codex',
+          description: 'Latest frontier agentic coding model.',
+          hidden: false,
+          isDefault: true,
+          supportedReasoningEfforts: [
+            { reasoningEffort: 'minimal', description: 'Fastest' },
+            { reasoningEffort: 'medium', description: 'Balanced' },
+            { reasoningEffort: 'high', description: 'Deep' }
+          ],
+          defaultReasoningEffort: 'medium'
+        }
+      ],
+      nextCursor: null
+    })
+  ).toEqual([
       {
         id: 'gpt-5.3-codex',
         name: 'gpt-5.3-codex',
         description: 'Latest frontier agentic coding model.',
         hidden: false,
-        isDefault: true
+        isDefault: true,
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'minimal', description: 'Fastest' },
+          { reasoningEffort: 'medium', description: 'Balanced' },
+          { reasoningEffort: 'high', description: 'Deep' }
+        ],
+        defaultReasoningEffort: 'medium'
       }
     ])
   })

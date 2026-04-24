@@ -239,6 +239,7 @@ export class CodexAppServerManager {
     input: string
     attachments?: Array<{ type: 'image'; url: string }>
     model?: string
+    effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   }): Promise<{
     turnId: string
     resumeCursor?: unknown
@@ -252,7 +253,8 @@ export class CodexAppServerManager {
     const result = await this.sendRequest<TurnStartResponse>(context, 'turn/start', {
       threadId: providerThreadId,
       input: turnInput,
-      ...optionalModel(input.model ?? context.session.model)
+      ...optionalModel(input.model ?? context.session.model),
+      ...optionalEffort(input.effort)
     })
     // Codex returns { turn: { id: "turn_xxx", status: "inProgress", ... } }
     const turnId =
@@ -465,6 +467,7 @@ export class CodexAppServerManager {
         { includeHidden: false },
         5_000
       )
+      logCodexEvent('model/list raw', result)
       const models = parseModelList(result)
       if (models.length > 0) this.cachedModels = models
     } catch (error) {
@@ -515,6 +518,7 @@ export class CodexAppServerManager {
         { includeHidden: false },
         5_000
       )
+      logCodexEvent('model/list raw', result)
       const models = parseModelList(result)
       if (models.length > 0) this.cachedModels = models
       return this.cachedModels ?? []
@@ -1061,7 +1065,9 @@ export function parseModelList(result: unknown): ModelInfo[] {
       name: readString(item, 'displayName') ?? readString(item, 'name'),
       description: readString(item, 'description'),
       hidden: readBoolean(item, 'hidden'),
-      isDefault: readBoolean(item, 'isDefault')
+      isDefault: readBoolean(item, 'isDefault'),
+      supportedReasoningEfforts: readReasoningEffortOptions(item),
+      defaultReasoningEffort: readReasoningEffort(item, 'defaultReasoningEffort')
     })
   }
   return models
@@ -1070,6 +1076,48 @@ export function parseModelList(result: unknown): ModelInfo[] {
 function optionalModel(model: string | undefined): { model?: string } {
   const trimmed = model?.trim()
   return trimmed ? { model: trimmed } : {}
+}
+
+function optionalEffort(
+  effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined
+): { effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' } {
+  return effort ? { effort } : {}
+}
+
+function readReasoningEffort(
+  value: unknown,
+  key: string
+): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
+  const candidate = readString(value, key)
+  return candidate === 'none' ||
+    candidate === 'minimal' ||
+    candidate === 'low' ||
+    candidate === 'medium' ||
+    candidate === 'high' ||
+    candidate === 'xhigh'
+    ? candidate
+    : undefined
+}
+
+function readReasoningEffortOptions(
+  value: unknown
+): Array<{
+  reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+  description?: string
+}> | undefined {
+  const candidate = readRecord(value).supportedReasoningEfforts
+  if (!Array.isArray(candidate)) return undefined
+  const options = candidate
+    .map((item) => {
+      const reasoningEffort = readReasoningEffort(item, 'reasoningEffort')
+      if (!reasoningEffort) return null
+      return {
+        reasoningEffort,
+        description: readString(item, 'description')
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+  return options.length > 0 ? options : undefined
 }
 
 function normalizeCodexAnswers(
@@ -1088,4 +1136,8 @@ function normalizeCodexAnswers(
     } else normalized[key] = { answers: [String(value)] }
   }
   return normalized
+}
+
+function logCodexEvent(label: string, payload: unknown): void {
+  console.log(`[cobel:${label}]`, payload)
 }

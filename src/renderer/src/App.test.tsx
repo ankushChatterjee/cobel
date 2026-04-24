@@ -87,6 +87,7 @@ describe('renderer app', () => {
         input: 'Build the provider layer',
         titleSeed: 'Build the provider layer',
         cwd: '/Users/ankush/codespace/gencode',
+        effort: 'medium',
         runtimeMode: 'auto-accept-edits'
       })
     )
@@ -104,8 +105,17 @@ describe('renderer app', () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     window.agentApi.listModels = vi.fn(async () => [
-      { id: 'gpt-5.4-mini', isDefault: true },
-      { id: 'gpt-5.4' }
+      {
+        id: 'gpt-5.4-mini',
+        isDefault: true,
+        supportedReasoningEfforts: [{ reasoningEffort: 'minimal' }, { reasoningEffort: 'medium' }],
+        defaultReasoningEffort: 'minimal'
+      },
+      {
+        id: 'gpt-5.4',
+        supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }],
+        defaultReasoningEffort: 'low'
+      }
     ])
 
     render(<RouterProvider router={router} />)
@@ -115,16 +125,20 @@ describe('renderer app', () => {
 
     const runtimeSelect = (await screen.findByLabelText(/runtime mode/i)) as HTMLSelectElement
     const modelSelect = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
+    const effortSelect = (await screen.findByLabelText(/effort/i)) as HTMLSelectElement
 
     expect(runtimeSelect.value).toBe('auto-accept-edits')
     expect(modelSelect.value).toBe('gpt-5.4-mini')
+    expect(effortSelect.value).toBe('minimal')
 
     await user.selectOptions(runtimeSelect, 'full-access')
     await user.selectOptions(modelSelect, 'gpt-5.4')
+    await waitFor(() => {
+      expect(effortSelect.value).toBe('low')
+    })
+    await user.selectOptions(effortSelect, 'high')
 
-    const sidebarNewButton = document.querySelector<HTMLButtonElement>(
-      '.thread-list .thread-link.new-thread'
-    )
+    const sidebarNewButton = document.querySelector<HTMLButtonElement>('.project-new-thread')
     expect(sidebarNewButton).not.toBeNull()
     await user.click(sidebarNewButton as HTMLButtonElement)
 
@@ -132,10 +146,12 @@ describe('renderer app', () => {
       /runtime mode/i
     )) as HTMLSelectElement
     const modelSelectAfterNew = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
+    const effortSelectAfterNew = (await screen.findByLabelText(/effort/i)) as HTMLSelectElement
 
     await waitFor(() => {
       expect(runtimeSelectAfterNew.value).toBe('auto-accept-edits')
       expect(modelSelectAfterNew.value).toBe('gpt-5.4-mini')
+      expect(effortSelectAfterNew.value).toBe('minimal')
     })
 
     const threadButtons = Array.from(
@@ -149,10 +165,12 @@ describe('renderer app', () => {
       /runtime mode/i
     )) as HTMLSelectElement
     const modelSelectAfterReturn = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
+    const effortSelectAfterReturn = (await screen.findByLabelText(/effort/i)) as HTMLSelectElement
 
     await waitFor(() => {
       expect(runtimeSelectAfterReturn.value).toBe('full-access')
       expect(modelSelectAfterReturn.value).toBe('gpt-5.4')
+      expect(effortSelectAfterReturn.value).toBe('high')
     })
   })
 
@@ -447,7 +465,7 @@ describe('renderer app', () => {
     await userEvent.click(openFolderButtons[0])
 
     expect(await screen.findByText(/exec_command failed/)).toBeInTheDocument()
-    expect(screen.getAllByText(/codex returned an error/i)).toHaveLength(1)
+    expect(screen.queryByText(/codex returned an error/i)).not.toBeInTheDocument()
     expect(document.body).not.toHaveTextContent('[31m')
     expect(document.body.textContent).not.toContain('\u001b')
   })
@@ -493,7 +511,7 @@ describe('renderer app', () => {
     await userEvent.click(openFolderButtons[0])
 
     expect(await screen.findByText('Codex CLI is not available.')).toBeInTheDocument()
-    expect(screen.getAllByText(/codex returned an error/i)).toHaveLength(1)
+    expect(screen.queryByText(/codex returned an error/i)).not.toBeInTheDocument()
   })
 
   it('does not show Electron IPC boilerplate for command errors', async () => {
@@ -1103,6 +1121,59 @@ describe('renderer app', () => {
       expect(screen.queryByRole('button', { name: /delete new thread/i })).not.toBeInTheDocument()
     })
     confirmSpy.mockRestore()
+  })
+
+  it('creates a new thread in the clicked project, not the previously active one', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    vi.mocked(window.agentApi.openWorkspaceFolder)
+      .mockResolvedValueOnce({
+        path: '/Users/ankush/codespace/gencode',
+        name: 'gencode'
+      })
+      .mockResolvedValueOnce({
+        path: '/Users/ankush/codespace/other-project',
+        name: 'other-project'
+      })
+
+    render(<RouterProvider router={router} />)
+
+    const addProjectButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(addProjectButtons[0])
+    await user.click(screen.getByRole('button', { name: /add project/i }))
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.project-group')).toHaveLength(2)
+    })
+
+    const projectSections = Array.from(document.querySelectorAll<HTMLElement>('.project-group'))
+
+    const secondProject = projectSections.find((section) =>
+      within(section).queryByText('other-project')
+    )
+    expect(secondProject).toBeTruthy()
+
+    const dispatchCommand = vi.mocked(window.agentApi.dispatchCommand)
+    const dispatchCallsBefore = dispatchCommand.mock.calls.length
+
+    const newThreadButton =
+      (secondProject as HTMLElement).querySelector<HTMLButtonElement>('.project-new-thread')
+    expect(newThreadButton).not.toBeNull()
+    await user.click(newThreadButton as HTMLButtonElement)
+
+    const threadCreateCall = dispatchCommand.mock.calls
+      .slice(dispatchCallsBefore)
+      .map(([input]) => input)
+      .find((input) => input.type === 'thread.create')
+
+    expect(threadCreateCall).toEqual(
+      expect.objectContaining({
+        type: 'thread.create',
+        projectId: 'users-ankush-codespace-other-project',
+        cwd: '/Users/ankush/codespace/other-project'
+      })
+    )
   })
 
   it('resizes the sidebar without showing a collapse control', async () => {

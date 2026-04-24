@@ -51,6 +51,7 @@ interface SessionRow {
   status: string
   provider_name: string
   runtime_mode: string
+  effort: string | null
   active_turn_id: string | null
   last_error: string | null
   updated_at: string
@@ -268,6 +269,7 @@ function sessionRowToSession(row: SessionRow): OrchestrationSession {
     status: row.status as OrchestrationSession['status'],
     providerName: (row.provider_name as 'codex') ?? null,
     runtimeMode: row.runtime_mode as OrchestrationSession['runtimeMode'],
+    effort: (row.effort as OrchestrationSession['effort']) ?? undefined,
     activeTurnId: row.active_turn_id ?? null,
     lastError: row.last_error ?? null,
     updatedAt: row.updated_at

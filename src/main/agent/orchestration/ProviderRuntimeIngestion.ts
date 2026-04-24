@@ -71,6 +71,7 @@ export class ProviderRuntimeIngestion {
           providerName: event.provider,
           runtimeMode:
             this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
+          effort: this.engine.getThread(event.threadId).session?.effort,
           activeTurnId:
             event.payload.state === 'running'
               ? (event.turnId ??
@@ -96,6 +97,7 @@ export class ProviderRuntimeIngestion {
           providerName: event.provider,
           runtimeMode:
             this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
+          effort: event.payload.effort ?? this.engine.getThread(event.threadId).session?.effort,
           activeTurnId: event.turnId ?? null,
           lastError: null,
           createdAt: event.createdAt
@@ -141,6 +143,7 @@ export class ProviderRuntimeIngestion {
           providerName: event.provider,
           runtimeMode:
             this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
+          effort: this.engine.getThread(event.threadId).session?.effort,
           activeTurnId: event.turnId ?? null,
           lastError: null,
           createdAt: event.createdAt
