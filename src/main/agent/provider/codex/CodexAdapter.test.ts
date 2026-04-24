@@ -158,6 +158,36 @@ describe('mapProviderEvent', () => {
     ).toBeNull()
   })
 
+  it('does not treat the local approval decision echo as provider resolution', () => {
+    expect(
+      mapProviderEvent({
+        ...baseEvent,
+        id: 'event-approval-decision',
+        method: 'item/requestApproval/decision',
+        requestId: 'approval-1',
+        payload: { decision: 'accept' }
+      })
+    ).toBeNull()
+  })
+
+  it('maps provider approval resolution to an accepted approval result by default', () => {
+    expect(
+      mapProviderEvent({
+        ...baseEvent,
+        id: 'event-approval-resolved',
+        method: 'serverRequest/resolved',
+        requestId: 'approval-1',
+        payload: {}
+      })
+    ).toEqual(
+      expect.objectContaining({
+        type: 'request.resolved',
+        requestId: 'approval-1',
+        payload: expect.objectContaining({ decision: 'accept' })
+      })
+    )
+  })
+
   it('maps Codex agentMessage items to assistant text instead of tool items', () => {
     expect(
       mapProviderEvent({

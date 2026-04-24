@@ -3,10 +3,37 @@ import { StrictMode } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { OrchestrationThreadStreamItem } from '../../shared/agent'
+import type { OrchestrationThreadActivity, OrchestrationThreadStreamItem } from '../../shared/agent'
 import { DEFAULT_THREAD_TITLE } from '../../shared/threadTitle'
 import { createAppRouter } from './router'
 import { resetAgentApiMock } from './test/setup'
+
+function mockThreadSnapshotWithActivities(activities: OrchestrationThreadActivity[]): void {
+  window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+    listener({
+      kind: 'snapshot',
+      snapshot: {
+        snapshotSequence: 1,
+        thread: {
+          id: _input.threadId,
+          title: DEFAULT_THREAD_TITLE,
+          cwd: '/Users/ankush/codespace/gencode',
+          branch: 'main',
+          messages: [],
+          activities,
+          proposedPlans: [],
+          session: null,
+          latestTurn: null,
+          checkpoints: [],
+          createdAt: '2026-04-19T00:00:00.000Z',
+          updatedAt: '2026-04-19T00:00:00.000Z',
+          archivedAt: null
+        }
+      }
+    })
+    return vi.fn()
+  })
+}
 
 describe('renderer app', () => {
   beforeEach(() => {
@@ -240,8 +267,7 @@ describe('renderer app', () => {
               {
                 id: 'assistant:markdown',
                 role: 'assistant',
-                text:
-                  'Here is **bold text**.\n\n- First item\n- Second item\n\n1. Ordered item\n2. Next ordered item\n\n- [x] Finished task\n- [ ] Open task\n\n```ts\nconst answer = 42\n```',
+                text: 'Here is **bold text**.\n\n- First item\n- Second item\n\n1. Ordered item\n2. Next ordered item\n\n- [x] Finished task\n- [ ] Open task\n\n```ts\nconst answer = 42\n```',
                 turnId: 'turn-1',
                 streaming: false,
                 sequence: 1,
@@ -481,12 +507,14 @@ describe('renderer app', () => {
           "Error invoking remote method 'agent:dispatch-command': Error: No active Codex session for thread: project:users-ankush-codespace-gencode:chat:abc"
         )
       }
-      return defaultDispatchCommand?.(input) ?? {
-        accepted: true,
-        commandId: input.commandId,
-        threadId: 'threadId' in input ? input.threadId : '',
-        turnId: 'turn:test'
-      }
+      return (
+        defaultDispatchCommand?.(input) ?? {
+          accepted: true,
+          commandId: input.commandId,
+          threadId: 'threadId' in input ? input.threadId : '',
+          turnId: 'turn:test'
+        }
+      )
     })
 
     render(<RouterProvider router={router} />)
@@ -910,6 +938,120 @@ describe('renderer app', () => {
     expect(await screen.findByLabelText('Thinking')).toBeInTheDocument()
     expect(screen.getAllByText('thinking…')).toHaveLength(1)
     expect(screen.queryByLabelText('Thought')).not.toBeInTheDocument()
+  })
+
+  it('renders file-change approvals as embedded diffs and shows a spinner on the chosen action', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.respondToApproval = vi.fn(() => new Promise<void>(() => {}))
+    mockThreadSnapshotWithActivities([
+      {
+        id: 'approval:approval-1',
+        kind: 'approval.requested',
+        tone: 'approval',
+        summary: 'src/app.ts',
+        payload: {
+          requestType: 'file_change_approval',
+          args: {
+            item: {
+              changes: [
+                {
+                  path: 'src/app.ts',
+                  diff: 'not a parseable patch\n+new line\n'
+                }
+              ]
+            }
+          }
+        },
+        turnId: 'turn-1',
+        sequence: 1,
+        resolved: false,
+        createdAt: '2026-04-19T00:00:00.000Z'
+      }
+    ])
+
+    const { container } = render(<RouterProvider router={router} />)
+    await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
+
+    expect(await screen.findByRole('button', { name: /app\.ts/i })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+    expect(screen.queryByText(/\+new line/i)).not.toBeInTheDocument()
+
+    const approve = screen.getByRole('button', { name: /approve/i })
+    await user.click(approve)
+
+    expect(window.agentApi.respondToApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: 'approval-1', decision: 'accept' })
+    )
+    expect(approve).toBeDisabled()
+    expect(screen.getByRole('button', { name: /decline/i })).toBeDisabled()
+    expect(container.querySelector('.button-spinner')).toBeInTheDocument()
+  })
+
+  it('renders resolved approvals as a quiet approved line', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    mockThreadSnapshotWithActivities([
+      {
+        id: 'approval:approval-1',
+        kind: 'approval.resolved',
+        tone: 'info',
+        summary: 'src/app.ts',
+        payload: {
+          requestType: 'file_change_approval',
+          decision: 'accept',
+          args: {
+            item: {
+              changes: [
+                {
+                  path: 'src/app.ts',
+                  diff: 'not a parseable patch\n+new line\n'
+                }
+              ]
+            }
+          }
+        },
+        turnId: 'turn-1',
+        sequence: 1,
+        resolved: true,
+        createdAt: '2026-04-19T00:00:00.000Z'
+      }
+    ])
+
+    const { container } = render(<RouterProvider router={router} />)
+    await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
+
+    expect(await screen.findByLabelText('approved')).toHaveTextContent('approved')
+    expect(container.querySelector('.approval-resolution-line')).toBeInTheDocument()
+    expect(container.querySelector('.embedded-diff-card')).not.toBeInTheDocument()
+    expect(container.querySelector('.activity-row.approval')).not.toBeInTheDocument()
+  })
+
+  it('renders command approvals as a subtle single prompt', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    mockThreadSnapshotWithActivities([
+      {
+        id: 'approval:approval-1',
+        kind: 'approval.requested',
+        tone: 'approval',
+        summary: 'bun test',
+        payload: { requestType: 'command_execution_approval' },
+        turnId: 'turn-1',
+        sequence: 1,
+        resolved: false,
+        createdAt: '2026-04-19T00:00:00.000Z'
+      }
+    ])
+
+    const { container } = render(<RouterProvider router={router} />)
+    await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
+
+    expect(await screen.findByText('bun test')).toBeInTheDocument()
+    expect(container.querySelector('.approval-prompt')).toBeInTheDocument()
+    expect(container.querySelector('.embedded-diff-card')).not.toBeInTheDocument()
   })
 
   it('opens projects and deletes the active chat from controls', async () => {

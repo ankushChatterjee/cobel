@@ -11,20 +11,18 @@ import {
 } from 'react'
 import { FileDiff, WorkerPoolContextProvider } from '@pierre/diffs/react'
 import { parsePatchFiles, trimPatchContext, type FileDiffMetadata } from '@pierre/diffs'
-import {
-  ChevronDown,
-  GitCommitHorizontal,
-  RefreshCw,
-  TextWrap,
-  Undo2
-} from 'lucide-react'
+import { ChevronDown, GitCommitHorizontal, RefreshCw, TextWrap, Undo2 } from 'lucide-react'
 import type {
   CheckpointDiffResult,
   CheckpointFileChange,
   CheckpointWorktreeDiffResult,
   OrchestrationCheckpointSummary
 } from '../../../../shared/agent'
-import { DiffChangedFilesTree, DiffTreeToggleButton, type DiffChangedFileChoice } from './DiffChangedFilesTree'
+import {
+  DiffChangedFilesTree,
+  DiffTreeToggleButton,
+  type DiffChangedFileChoice
+} from './DiffChangedFilesTree'
 import { DiffTurnPager } from './DiffTurnPager'
 
 export type DiffPanelMode = 'full' | 'turn'
@@ -86,6 +84,15 @@ interface DiffPreviewPopoverProps {
   onOpenSidebar: (turnId: string, filePath: string) => void
 }
 
+interface EmbeddedDiffViewProps {
+  diff: string
+  title: string
+  subtitle?: string
+  actions?: ReactNode
+  status?: ReactNode
+  compactTitle?: boolean
+}
+
 interface DiffToolbarPillProps {
   as?: 'button' | 'span'
   active?: boolean
@@ -144,22 +151,23 @@ export const ChangedFilePills = memo(function ChangedFilePills({
   const totals = summarizeFiles(summary.files)
   return (
     <div className="changed-files-strip" aria-label="Changed files">
-      <button
-        type="button"
-        className="changed-files-total"
-        onClick={() => onOpenDiff(undefined)}
-        title="Open turn diff"
-      >
-        <span>{summary.files.length} files</span>
-        <DiffStats additions={totals.additions} deletions={totals.deletions} />
-      </button>
       <div className="changed-file-pills">
+        <button
+          type="button"
+          className="changed-files-total"
+          style={{ '--pill-index': 0 } as CSSProperties}
+          onClick={() => onOpenDiff(undefined)}
+          title="Open turn diff"
+        >
+          <span>{summary.files.length} files</span>
+          <DiffStats additions={totals.additions} deletions={totals.deletions} />
+        </button>
         {summary.files.slice(0, 8).map((file, index) => (
           <button
             key={`${file.path}:${file.oldPath ?? ''}`}
             type="button"
             className="changed-file-pill"
-            style={{ '--pill-index': index } as CSSProperties}
+            style={{ '--pill-index': index + 1 } as CSSProperties}
             onClick={(event) => onPreview(file, event.currentTarget.getBoundingClientRect())}
             onDoubleClick={() => onOpenDiff(file.path)}
             title={`${file.path} • click to preview, double-click to open`}
@@ -170,22 +178,28 @@ export const ChangedFilePills = memo(function ChangedFilePills({
           </button>
         ))}
         {summary.files.length > 8 ? (
-          <button type="button" className="changed-file-more" onClick={() => onOpenDiff(undefined)}>
+          <button
+            type="button"
+            className="changed-file-more"
+            style={{ '--pill-index': Math.min(summary.files.length, 8) + 1 } as CSSProperties}
+            onClick={() => onOpenDiff(undefined)}
+          >
             +{summary.files.length - 8}
           </button>
         ) : null}
+        {typeof revertTurnCount === 'number' && onRevert ? (
+          <button
+            type="button"
+            className="changed-file-undo"
+            style={{ '--pill-index': Math.min(summary.files.length, 8) + 2 } as CSSProperties}
+            onClick={() => onRevert(revertTurnCount)}
+            title="Undo changes from this turn"
+          >
+            <Undo2 size={11} strokeWidth={2} aria-hidden="true" />
+            Undo
+          </button>
+        ) : null}
       </div>
-      {typeof revertTurnCount === 'number' && onRevert ? (
-        <button
-          type="button"
-          className="changed-file-undo"
-          onClick={() => onRevert(revertTurnCount)}
-          title="Undo changes from this turn"
-        >
-          <Undo2 size={11} strokeWidth={2} aria-hidden="true" />
-          Undo
-        </button>
-      ) : null}
     </div>
   )
 })
@@ -459,7 +473,9 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
               result.diff.trim().length > 0 &&
               selectedFilePath &&
               visibleFiles.length === 0 ? (
-                <DiffEmptyState label={`No changed files match "${formatSelectedPath(selectedFilePath)}".`} />
+                <DiffEmptyState
+                  label={`No changed files match "${formatSelectedPath(selectedFilePath)}".`}
+                />
               ) : null}
               {visibleFiles.length > 0 ? (
                 <WorkerPoolContextProvider {...diffWorkerPool}>
@@ -517,6 +533,115 @@ function CollapsibleFileDiff({
       ) : null}
     </section>
   )
+}
+
+export const EmbeddedDiffView = memo(function EmbeddedDiffView({
+  diff,
+  title,
+  subtitle,
+  actions,
+  status,
+  compactTitle = false
+}: EmbeddedDiffViewProps): React.JSX.Element {
+  const files = useMemo(() => parsePatch(diff, null), [diff])
+  const lineCount = useMemo(() => diff.split('\n').length, [diff])
+  const totals = useMemo(
+    () =>
+      files.reduce(
+        (sum, file) => {
+          const fileTotals = summarizeFileDiff(file)
+          return {
+            additions: sum.additions + fileTotals.additions,
+            deletions: sum.deletions + fileTotals.deletions
+          }
+        },
+        { additions: 0, deletions: 0 }
+      ),
+    [files]
+  )
+  const autoCollapsed = lineCount > 400 || files.length > 5 || diff.length > 80_000
+  const displayFileCount = files.length || 1
+  const displayTitle = compactTitle ? basename(title) : title
+  const [collapsed, setCollapsed] = useState(true)
+
+  useEffect(() => {
+    setCollapsed(true)
+  }, [diff])
+
+  return (
+    <section className={`embedded-diff-card ${collapsed ? 'collapsed' : ''}`}>
+      <div className="embedded-diff-header">
+        <button
+          type="button"
+          className="embedded-diff-toggle"
+          aria-expanded={!collapsed}
+          onClick={() => setCollapsed((value) => !value)}
+          title={title}
+        >
+          <ChevronDown size={13} strokeWidth={1.8} aria-hidden="true" />
+          <span className="embedded-diff-title">{displayTitle}</span>
+          {!compactTitle ? (
+            <>
+              <span className="embedded-diff-meta">
+                {displayFileCount} {displayFileCount === 1 ? 'file' : 'files'}
+              </span>
+              <DiffStats additions={totals.additions} deletions={totals.deletions} />
+              {autoCollapsed ? <span className="embedded-diff-meta">large</span> : null}
+            </>
+          ) : null}
+        </button>
+        {status ? <div className="embedded-diff-status">{status}</div> : null}
+        {actions ? <div className="embedded-diff-actions">{actions}</div> : null}
+      </div>
+      {subtitle ? <p className="embedded-diff-subtitle">{subtitle}</p> : null}
+      {!collapsed ? (
+        <div className="embedded-diff-body">
+          {files.length > 0 ? (
+            <WorkerPoolContextProvider {...diffWorkerPool}>
+              <div className="diff-file-stack">
+                {files.map((file) => (
+                  <CollapsibleFileDiff
+                    key={`${file.prevName ?? ''}:${file.name}`}
+                    fileDiff={file}
+                    options={{
+                      ...diffOptionsBase,
+                      diffStyle: 'unified',
+                      overflow: 'scroll'
+                    }}
+                  />
+                ))}
+              </div>
+            </WorkerPoolContextProvider>
+          ) : (
+            <RawEmbeddedDiff diff={diff} />
+          )}
+        </div>
+      ) : null}
+    </section>
+  )
+})
+
+function RawEmbeddedDiff({ diff }: { diff: string }): React.JSX.Element {
+  return (
+    <pre className="embedded-diff-raw">
+      {diff.split('\n').map((line, index) => (
+        <span
+          key={`${index}:${line}`}
+          className={`embedded-diff-raw-line ${rawDiffLineTone(line)}`}
+        >
+          {line || ' '}
+        </span>
+      ))}
+    </pre>
+  )
+}
+
+function rawDiffLineTone(line: string): string {
+  if (line.startsWith('+++') || line.startsWith('---')) return 'meta'
+  if (line.startsWith('+')) return 'addition'
+  if (line.startsWith('-')) return 'deletion'
+  if (line.startsWith('@@')) return 'hunk'
+  return 'context'
 }
 
 export const DiffPreviewPopover = memo(function DiffPreviewPopover({
@@ -809,11 +934,7 @@ function filterDiffFiles(
   selectedPath: string | null
 ): FileDiffMetadata[] {
   if (!selectedPath) return files
-  return files.filter(
-    (file) =>
-      file.name === selectedPath ||
-      file.prevName === selectedPath
-  )
+  return files.filter((file) => file.name === selectedPath || file.prevName === selectedPath)
 }
 
 function formatSelectedPath(path: string): string {

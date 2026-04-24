@@ -64,6 +64,7 @@ import {
   ChangedFilePills,
   DiffPreviewPopover,
   DiffReviewSidebar,
+  EmbeddedDiffView,
   FloatingDiffPill,
   type DiffPanelMode,
   type DiffPreviewState,
@@ -353,6 +354,9 @@ export function HomePage(): React.JSX.Element {
   const [commitSubmitting, setCommitSubmitting] = useState(false)
   const [commitError, setCommitError] = useState<string | null>(null)
   const [workspaceDiffVersion, setWorkspaceDiffVersion] = useState(0)
+  const [submittingApprovals, setSubmittingApprovals] = useState<
+    Map<string, 'accept' | 'acceptForSession' | 'decline' | 'cancel'>
+  >(() => new Map())
 
   const activeProject = useMemo(
     () => shell.projects.find((p) => p.id === selection.activeProjectId) ?? null,
@@ -383,6 +387,28 @@ export function HomePage(): React.JSX.Element {
     [thread]
   )
   const showPendingThinking = isPendingThinking && !hasActiveThinkingActivity
+
+  useEffect(() => {
+    setSubmittingApprovals((current) => {
+      if (current.size === 0) return current
+      const activeApprovalIds = new Set(
+        (thread?.activities ?? [])
+          .filter(
+            (activity) => activity.kind === 'approval.requested' && activity.resolved !== true
+          )
+          .map((activity) => activity.id)
+      )
+      let changed = false
+      const next = new Map(current)
+      for (const id of current.keys()) {
+        if (!activeApprovalIds.has(id)) {
+          next.delete(id)
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }, [thread?.activities])
 
   useEffect(() => {
     saveActiveSelection(selection)
@@ -807,17 +833,27 @@ export function HomePage(): React.JSX.Element {
   }, [])
 
   const respondToApproval = useCallback(
-    (
+    async (
       activity: OrchestrationThreadActivity,
       decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'
-    ) =>
-      activeThreadId
-        ? window.agentApi.respondToApproval({
-            threadId: activeThreadId,
-            requestId: requestIdFromActivity(activity),
-            decision
-          })
-        : Promise.resolve(),
+    ) => {
+      if (!activeThreadId) return
+      setSubmittingApprovals((current) => new Map(current).set(activity.id, decision))
+      try {
+        await window.agentApi.respondToApproval({
+          threadId: activeThreadId,
+          requestId: requestIdFromActivity(activity),
+          decision
+        })
+      } catch (approvalError) {
+        setSubmittingApprovals((current) => {
+          const next = new Map(current)
+          next.delete(activity.id)
+          return next
+        })
+        throw approvalError
+      }
+    },
     [activeThreadId]
   )
 
@@ -970,15 +1006,12 @@ export function HomePage(): React.JSX.Element {
     document.body.classList.remove('diff-panel-resizing')
   }, [])
 
-  const handleDiffPanelResizeKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>): void => {
-      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-      event.preventDefault()
-      const direction = event.key === 'ArrowLeft' ? 1 : -1
-      setDiffPanelWidth((width) => clampDiffPanelWidth(width + direction * 16))
-    },
-    []
-  )
+  const handleDiffPanelResizeKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const direction = event.key === 'ArrowLeft' ? 1 : -1
+    setDiffPanelWidth((width) => clampDiffPanelWidth(width + direction * 16))
+  }, [])
 
   return (
     <div className="agent-shell" data-theme="linear-dark" style={sidebarStyle}>
@@ -1098,8 +1131,7 @@ export function HomePage(): React.JSX.Element {
               {sessionStatus}
             </span>
           </div>
-          <div className="header-actions">
-          </div>
+          <div className="header-actions"></div>
         </header>
 
         <div className="chat-primary">
@@ -1130,6 +1162,7 @@ export function HomePage(): React.JSX.Element {
                 items={transcriptItems}
                 showPendingThinking={showPendingThinking}
                 expandedToolIds={expandedToolIds}
+                submittingApprovals={submittingApprovals}
                 checkpointByAssistantMessageId={checkpointByAssistantMessageId}
                 onToggleTool={toggleToolExpanded}
                 onApprove={respondToApproval}
@@ -1654,6 +1687,7 @@ const TranscriptList = memo(function TranscriptList({
   items,
   showPendingThinking,
   expandedToolIds,
+  submittingApprovals,
   checkpointByAssistantMessageId,
   onToggleTool,
   onApprove,
@@ -1665,6 +1699,7 @@ const TranscriptList = memo(function TranscriptList({
   items: TranscriptItem[]
   showPendingThinking: boolean
   expandedToolIds: Set<string>
+  submittingApprovals: Map<string, 'accept' | 'acceptForSession' | 'decline' | 'cancel'>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
   onToggleTool: (activityId: string) => void
   onApprove: (
@@ -1692,6 +1727,7 @@ const TranscriptList = memo(function TranscriptList({
             <TranscriptRow
               key={group.item.id}
               item={group.item}
+              submittingApprovals={submittingApprovals}
               checkpointByAssistantMessageId={checkpointByAssistantMessageId}
               onApprove={onApprove}
               onAnswer={onAnswer}
@@ -1734,6 +1770,7 @@ const TranscriptList = memo(function TranscriptList({
 
 const TranscriptRow = memo(function TranscriptRow({
   item,
+  submittingApprovals,
   checkpointByAssistantMessageId,
   onApprove,
   onAnswer,
@@ -1742,6 +1779,7 @@ const TranscriptRow = memo(function TranscriptRow({
   onRevert
 }: {
   item: TranscriptItem
+  submittingApprovals: Map<string, 'accept' | 'acceptForSession' | 'decline' | 'cancel'>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
   onApprove: (
     activity: OrchestrationThreadActivity,
@@ -1774,7 +1812,17 @@ const TranscriptRow = memo(function TranscriptRow({
 
   const { activity } = item
   if (isPendingPrompt(activity)) {
-    return <PendingPrompt activity={activity} onApprove={onApprove} onAnswer={onAnswer} />
+    return (
+      <PendingPrompt
+        activity={activity}
+        submittingDecision={submittingApprovals.get(activity.id) ?? null}
+        onApprove={onApprove}
+        onAnswer={onAnswer}
+      />
+    )
+  }
+  if (activity.kind === 'approval.resolved') {
+    return <ApprovalResolutionLine activity={activity} />
   }
   if (isThinkingActivity(activity)) return <ThinkingRow activity={activity} />
   if (isRuntimeError(activity)) {
@@ -2235,6 +2283,23 @@ const ToolLine = memo(function ToolLine({
   const verb = verbForActivity(activity)
   const hasDetails = Boolean(detail ?? output)
   const isRunning = statusTone === 'is-running'
+  const fileChange = extractFileChangeDiff(payload)
+
+  if (readPayloadString(payload, 'itemType') === 'file_change' && fileChange) {
+    return (
+      <article
+        className={`tool-line embedded-tool-line ${statusTone}`}
+        data-item-type="file_change"
+      >
+        <EmbeddedDiffView
+          diff={fileChange.diff}
+          title={fileChange.title}
+          compactTitle
+          status={<span>{statusLabel(status)}</span>}
+        />
+      </article>
+    )
+  }
 
   return (
     <article
@@ -2434,10 +2499,12 @@ function renderTextWithLinks(text: string): React.ReactNode {
 
 const PendingPrompt = memo(function PendingPrompt({
   activity,
+  submittingDecision,
   onApprove,
   onAnswer
 }: {
   activity: OrchestrationThreadActivity
+  submittingDecision: 'accept' | 'acceptForSession' | 'decline' | 'cancel' | null
   onApprove: (
     activity: OrchestrationThreadActivity,
     decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'
@@ -2448,33 +2515,112 @@ const PendingPrompt = memo(function PendingPrompt({
   ) => Promise<void>
 }): React.JSX.Element {
   const questions = readQuestions(activity)
+  const fileChange = extractFileChangeDiff(activity.payload)
+  const isApproval = activity.kind.includes('approval')
+  const isResolved = activity.kind === 'approval.resolved' || activity.resolved === true
+  const requestLabel = labelForApproval(activity)
+
+  if (isApproval && fileChange) {
+    return (
+      <EmbeddedDiffView
+        diff={fileChange.diff}
+        title={fileChange.title}
+        compactTitle
+        status={<span>{isResolved ? resolvedApprovalLabel(activity) : requestLabel}</span>}
+        actions={
+          !isResolved ? (
+            <ApprovalActions
+              activity={activity}
+              submittingDecision={submittingDecision}
+              onApprove={onApprove}
+            />
+          ) : null
+        }
+      />
+    )
+  }
+
+  if (isApproval) {
+    return (
+      <div className={`pending-prompt approval-prompt ${isResolved ? 'resolved' : ''}`}>
+        <span>{isResolved ? resolvedApprovalLabel(activity) : requestLabel}</span>
+        <p>{activity.summary}</p>
+        {!isResolved ? (
+          <ApprovalActions
+            activity={activity}
+            submittingDecision={submittingDecision}
+            onApprove={onApprove}
+          />
+        ) : null}
+      </div>
+    )
+  }
+
   return (
-    <div className="pending-prompt">
-      <span>{activity.kind === 'approval.requested' ? 'approval' : 'input'}</span>
+    <div className="pending-prompt input-prompt">
+      <span>input</span>
       <p>{activity.summary}</p>
-      {activity.kind === 'approval.requested' ? (
-        <div className="prompt-actions">
-          <button type="button" onClick={() => void onApprove(activity, 'accept')}>
-            accept
+      <div className="prompt-actions">
+        {(questions[0]?.options ?? []).slice(0, 3).map((option) => (
+          <button
+            key={option.label}
+            type="button"
+            onClick={() => void onAnswer(activity, { [questions[0].id]: option.label })}
+          >
+            {option.label}
           </button>
-          <button type="button" onClick={() => void onApprove(activity, 'decline')}>
-            decline
-          </button>
-        </div>
-      ) : (
-        <div className="prompt-actions">
-          {(questions[0]?.options ?? []).slice(0, 3).map((option) => (
-            <button
-              key={option.label}
-              type="button"
-              onClick={() => void onAnswer(activity, { [questions[0].id]: option.label })}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      )}
+        ))}
+      </div>
     </div>
+  )
+})
+
+const ApprovalActions = memo(function ApprovalActions({
+  activity,
+  submittingDecision,
+  onApprove
+}: {
+  activity: OrchestrationThreadActivity
+  submittingDecision: 'accept' | 'acceptForSession' | 'decline' | 'cancel' | null
+  onApprove: (
+    activity: OrchestrationThreadActivity,
+    decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'
+  ) => Promise<void>
+}): React.JSX.Element {
+  const disabled = submittingDecision !== null
+  return (
+    <div className="prompt-actions approval-actions">
+      <button
+        type="button"
+        className="approval-action accept"
+        disabled={disabled}
+        onClick={() => void onApprove(activity, 'accept')}
+      >
+        {submittingDecision === 'accept' ? <span className="button-spinner" /> : null}
+        approve
+      </button>
+      <button
+        type="button"
+        className="approval-action decline"
+        disabled={disabled}
+        onClick={() => void onApprove(activity, 'decline')}
+      >
+        {submittingDecision === 'decline' ? <span className="button-spinner" /> : null}
+        decline
+      </button>
+    </div>
+  )
+})
+
+const ApprovalResolutionLine = memo(function ApprovalResolutionLine({
+  activity
+}: {
+  activity: OrchestrationThreadActivity
+}): React.JSX.Element {
+  return (
+    <article className="approval-resolution-line" aria-label={resolvedApprovalLabel(activity)}>
+      <span>{resolvedApprovalLabel(activity)}</span>
+    </article>
   )
 })
 
@@ -2820,6 +2966,75 @@ function readBestItemData(data: Record<string, unknown>): Record<string, unknown
     }
   }
   return data
+}
+
+function extractFileChangeDiff(
+  payload: Record<string, unknown> | undefined
+): { diff: string; title: string } | null {
+  const changes = findFileUpdateChanges(payload)
+  const diffs = changes
+    .map((change) => (typeof change.diff === 'string' ? change.diff.trimEnd() : ''))
+    .filter(Boolean)
+  if (diffs.length === 0) return null
+  const paths = changes
+    .map((change) => (typeof change.path === 'string' ? change.path : null))
+    .filter((path): path is string => Boolean(path))
+  const firstPath = paths[0] ?? 'file changes'
+  return {
+    diff: diffs.join('\n'),
+    title: paths.length > 1 ? `${firstPath} +${paths.length - 1}` : firstPath
+  }
+}
+
+function findFileUpdateChanges(input: unknown): Array<Record<string, unknown>> {
+  const seen = new WeakSet<object>()
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: input, depth: 0 }]
+
+  while (queue.length > 0) {
+    const { value, depth } = queue.shift() as { value: unknown; depth: number }
+    if (!value || typeof value !== 'object') continue
+    if (seen.has(value)) continue
+    seen.add(value)
+
+    const record = value as Record<string, unknown>
+    const changes = record['changes']
+    if (
+      Array.isArray(changes) &&
+      changes.some(
+        (change) =>
+          Boolean(change) &&
+          typeof change === 'object' &&
+          typeof (change as Record<string, unknown>).diff === 'string'
+      )
+    ) {
+      return changes.filter(
+        (change): change is Record<string, unknown> => Boolean(change) && typeof change === 'object'
+      )
+    }
+
+    if (depth >= 5) continue
+    for (const key of ['args', 'item', 'toolCall', 'tool_call', 'call', 'fileChange', 'data']) {
+      if (key in record) queue.push({ value: record[key], depth: depth + 1 })
+    }
+  }
+
+  return []
+}
+
+function labelForApproval(activity: OrchestrationThreadActivity): string {
+  const requestType = readPayloadString(activity.payload, 'requestType')
+  if (requestType === 'file_change_approval' || extractFileChangeDiff(activity.payload))
+    return 'edit approval'
+  if (requestType === 'command_execution_approval') return 'approval'
+  if (requestType === 'file_read_approval') return 'read approval'
+  return 'approval'
+}
+
+function resolvedApprovalLabel(activity: OrchestrationThreadActivity): string {
+  const decision = readPayloadString(activity.payload, 'decision')
+  if (decision === 'decline' || decision === 'cancel') return 'declined'
+  if (decision === 'accept' || decision === 'acceptForSession') return 'approved'
+  return 'resolved'
 }
 
 function formatDuration(ms: number): string {

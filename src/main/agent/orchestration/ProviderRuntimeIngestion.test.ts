@@ -57,6 +57,103 @@ describe('ProviderRuntimeIngestion', () => {
     expect(thread.session?.status).toBe('ready')
   })
 
+  it('preserves file-change approval args when the approval resolves', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+    const args = {
+      item: {
+        type: 'fileChange',
+        changes: [
+          {
+            path: 'src/app.ts',
+            kind: 'edit',
+            diff: 'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n'
+          }
+        ]
+      }
+    }
+
+    ingestion.enqueue(
+      event({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: {
+          requestType: 'file_change_approval',
+          detail: 'src/app.ts',
+          args
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'request.resolved',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: {
+          requestType: 'unknown',
+          decision: 'accept',
+          resolution: { decision: 'accept' }
+        }
+      })
+    )
+    await ingestion.drain()
+
+    expect(
+      engine
+        .getThread('thread-1')
+        .activities.find((activity) => activity.id === 'approval:approval-1')
+    ).toEqual(
+      expect.objectContaining({
+        kind: 'approval.resolved',
+        summary: 'src/app.ts',
+        payload: expect.objectContaining({
+          requestType: 'file_change_approval',
+          decision: 'accept',
+          args
+        })
+      })
+    )
+  })
+
+  it('attaches provider approval resolution without a request id to the pending approval', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(
+      event({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: { requestType: 'command_execution_approval', detail: 'bun test' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'request.resolved',
+        turnId: 'turn-1',
+        payload: {
+          requestType: 'unknown',
+          decision: 'accept',
+          resolution: {}
+        }
+      })
+    )
+    await ingestion.drain()
+
+    const approvals = engine
+      .getThread('thread-1')
+      .activities.filter((activity) => activity.id.startsWith('approval:'))
+    expect(approvals).toHaveLength(1)
+    expect(approvals[0]).toEqual(
+      expect.objectContaining({
+        id: 'approval:approval-1',
+        kind: 'approval.resolved',
+        payload: expect.objectContaining({ decision: 'accept' })
+      })
+    )
+  })
+
   it('streams assistant deltas into one visible message and closes it at turn completion', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
@@ -318,7 +415,9 @@ describe('ProviderRuntimeIngestion', () => {
         payload: expect.objectContaining({ status: 'completed' })
       })
     )
-    expect(thread.activities.find((activity) => activity.id === 'thinking:reasoning-stale')).toEqual(
+    expect(
+      thread.activities.find((activity) => activity.id === 'thinking:reasoning-stale')
+    ).toEqual(
       expect.objectContaining({
         kind: 'task.completed',
         resolved: true,
@@ -542,7 +641,9 @@ describe('ProviderRuntimeIngestion', () => {
     )
     await ingestion.drain()
 
-    expect(engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:call-1')).toEqual(
+    expect(
+      engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:call-1')
+    ).toEqual(
       expect.objectContaining({
         kind: 'tool.completed',
         payload: expect.objectContaining({ status: 'completed' })
@@ -573,7 +674,9 @@ describe('ProviderRuntimeIngestion', () => {
     )
     await ingestion.drain()
 
-    expect(engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:late-call')).toEqual(
+    expect(
+      engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:late-call')
+    ).toEqual(
       expect.objectContaining({
         kind: 'tool.completed',
         payload: expect.objectContaining({ status: 'completed' })
@@ -599,7 +702,9 @@ describe('ProviderRuntimeIngestion', () => {
     )
     await ingestion.drain()
 
-    expect(engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:late-call')).toEqual(
+    expect(
+      engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:late-call')
+    ).toEqual(
       expect.objectContaining({
         kind: 'tool.completed',
         payload: expect.objectContaining({
@@ -742,7 +847,9 @@ describe('ProviderRuntimeIngestion', () => {
     )
     await ingestion.drain()
 
-    expect(engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:call-1')).toEqual(
+    expect(
+      engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:call-1')
+    ).toEqual(
       expect.objectContaining({
         kind: 'tool.completed',
         payload: expect.objectContaining({ status: 'completed' })
@@ -773,7 +880,9 @@ describe('ProviderRuntimeIngestion', () => {
     )
     await ingestion.drain()
 
-    expect(engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:call-1')).toEqual(
+    expect(
+      engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:call-1')
+    ).toEqual(
       expect.objectContaining({
         kind: 'tool.completed',
         payload: expect.objectContaining({ status: 'failed' })

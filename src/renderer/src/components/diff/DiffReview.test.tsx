@@ -3,11 +3,20 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OrchestrationCheckpointSummary } from '../../../../shared/agent'
-import { DiffReviewSidebar, FloatingDiffPill, type DiffPanelMode, type DiffStyleMode } from './DiffReview'
+import {
+  ChangedFilePills,
+  DiffReviewSidebar,
+  EmbeddedDiffView,
+  FloatingDiffPill,
+  type DiffPanelMode,
+  type DiffStyleMode
+} from './DiffReview'
 
 vi.mock('@pierre/diffs/react', () => ({
   FileDiff: ({ fileDiff }: { fileDiff: { name: string; prevName?: string } }) => (
-    <div data-testid="mock-file-diff">{fileDiff.prevName ? `${fileDiff.prevName} -> ${fileDiff.name}` : fileDiff.name}</div>
+    <div data-testid="mock-file-diff">
+      {fileDiff.prevName ? `${fileDiff.prevName} -> ${fileDiff.name}` : fileDiff.name}
+    </div>
   ),
   WorkerPoolContextProvider: ({ children }: { children: ReactNode }) => <>{children}</>
 }))
@@ -256,7 +265,9 @@ describe('DiffReviewSidebar tree integration', () => {
   it('keeps the diff controls intact with the tree rail open and hides the toggle when no files exist', async () => {
     const user = userEvent.setup()
     const { container } = render(<DiffReviewHarness />)
-    expect(await screen.findByRole('button', { name: /show changed files tree/i })).toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: /show changed files tree/i })
+    ).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /show changed files tree/i }))
     expect(container.querySelector('.diff-review-controls')).toBeInTheDocument()
@@ -306,9 +317,87 @@ describe('DiffReviewSidebar tree integration', () => {
     render(<DiffReviewHarness summariesOverride={[]} />)
 
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /show changed files tree/i })).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: /show changed files tree/i })
+      ).not.toBeInTheDocument()
       expect(screen.getByText('No completed checkpoint diffs yet.')).toBeInTheDocument()
     })
+  })
+})
+
+describe('ChangedFilePills', () => {
+  it('places the total files pill in the same wrapping row as changed file pills', () => {
+    const manyFileSummary: OrchestrationCheckpointSummary = {
+      id: 'checkpoint-many',
+      turnId: 'turn-many',
+      checkpointTurnCount: 3,
+      status: 'ready',
+      files: Array.from({ length: 10 }, (_, index) => ({
+        path: `src/file-${index}.ts`,
+        kind: 'modified',
+        additions: index + 1,
+        deletions: index % 2
+      })),
+      completedAt: '2026-04-23T10:02:00.000Z'
+    }
+
+    const { container } = render(
+      <ChangedFilePills
+        summary={manyFileSummary}
+        onPreview={() => {}}
+        onOpenDiff={() => {}}
+        revertTurnCount={3}
+        onRevert={() => {}}
+      />
+    )
+
+    const pillRow = container.querySelector('.changed-file-pills')
+    expect(pillRow).not.toBeNull()
+    expect(pillRow?.querySelector('.changed-files-total')).toHaveTextContent('10 files')
+    expect(pillRow?.querySelectorAll('.changed-file-pill')).toHaveLength(8)
+    expect(pillRow?.querySelector('.changed-file-more')).toHaveTextContent('+2')
+    expect(pillRow?.querySelector('.changed-file-undo')).toHaveTextContent('Undo')
+  })
+})
+
+describe('EmbeddedDiffView', () => {
+  it('renders a compact embedded diff collapsed by default', async () => {
+    const { container } = render(
+      <EmbeddedDiffView diff={lastTurnDiff} title="src/components/Button.tsx" />
+    )
+    const toggle = container.querySelector<HTMLButtonElement>('.embedded-diff-toggle')
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryAllByTestId('mock-file-diff')).toHaveLength(0)
+  })
+
+  it('expands collapsed diffs on demand', async () => {
+    const user = userEvent.setup()
+    const hugeDiff = Array.from({ length: 410 }, (_, index) => `+line ${index}`).join('\n')
+
+    render(<EmbeddedDiffView diff={hugeDiff} title="large patch" />)
+
+    const toggle = screen.getByRole('button', { name: /large patch/i })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/\+line 1/i)).not.toBeInTheDocument()
+
+    await user.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('+line 1')).toBeInTheDocument()
+  })
+
+  it('colors added and removed lines in raw embedded diffs', async () => {
+    const user = userEvent.setup()
+    const { container } = render(
+      <EmbeddedDiffView diff={'@@ -1 +1 @@\n-old\n+new\n context'} title="raw patch" />
+    )
+
+    await user.click(screen.getByRole('button', { name: /raw patch/i }))
+
+    expect(container.querySelector('.embedded-diff-raw-line.hunk')).toHaveTextContent('@@')
+    expect(container.querySelector('.embedded-diff-raw-line.deletion')).toHaveTextContent('-old')
+    expect(container.querySelector('.embedded-diff-raw-line.addition')).toHaveTextContent('+new')
   })
 })
 

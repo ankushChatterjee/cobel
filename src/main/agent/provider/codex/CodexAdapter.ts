@@ -217,22 +217,14 @@ export function mapProviderEvent(event: ProviderEvent): ProviderRuntimeEvent | n
         }
       }
     case 'item/requestApproval/decision':
-      return {
-        ...base,
-        type: 'request.resolved',
-        payload: {
-          requestType: 'unknown',
-          decision: readString(event.payload, 'decision'),
-          resolution: event.payload
-        }
-      }
+      return null
     case 'serverRequest/resolved':
       return {
         ...base,
         type: 'request.resolved',
         payload: {
           requestType: 'unknown',
-          decision: 'resolved',
+          decision: readString(event.payload, 'decision') ?? 'accept',
           resolution: event.payload
         }
       }

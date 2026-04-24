@@ -148,23 +148,32 @@ export class ProviderRuntimeIngestion {
         return
 
       case 'request.resolved':
-        this.engine.upsertActivity(
-          {
-            id: `approval:${event.requestId ?? event.eventId}`,
-            kind: 'approval.resolved',
-            tone: 'info',
-            summary: `Approval ${event.payload.decision ?? 'resolved'}`,
-            payload: {
-              requestType: event.payload.requestType,
-              decision: event.payload.decision,
-              resolution: event.payload.resolution
+        {
+          const existing = this.findApprovalForResolution(event)
+          const id = existing?.id ?? `approval:${event.requestId ?? event.eventId}`
+          this.engine.upsertActivity(
+            {
+              id,
+              kind: 'approval.resolved',
+              tone: 'info',
+              summary: existing?.summary ?? `Approval ${event.payload.decision ?? 'resolved'}`,
+              payload: {
+                ...existing?.payload,
+                requestType:
+                  event.payload.requestType && event.payload.requestType !== 'unknown'
+                    ? event.payload.requestType
+                    : (readPayloadString(existing?.payload, 'requestType') ??
+                      event.payload.requestType),
+                decision: event.payload.decision,
+                resolution: event.payload.resolution
+              },
+              turnId: event.turnId ?? existing?.turnId ?? null,
+              resolved: true,
+              createdAt: event.createdAt
             },
-            turnId: event.turnId ?? null,
-            resolved: true,
-            createdAt: event.createdAt
-          },
-          event.threadId
-        )
+            event.threadId
+          )
+        }
         return
 
       case 'user-input.requested':
@@ -302,10 +311,7 @@ export class ProviderRuntimeIngestion {
       .activities.find((activity) => activity.id === id)
     const existingStatus = readPayloadString(existing?.payload, 'status')
     const completedTurnStatus = this.completedTurnToolStatus(event)
-    const nextStatus = nextToolStatus(
-      existingStatus,
-      completedTurnStatus ?? event.payload.status
-    )
+    const nextStatus = nextToolStatus(existingStatus, completedTurnStatus ?? event.payload.status)
     const kind =
       existing?.kind === 'tool.completed' || isTerminalToolStatus(nextStatus)
         ? 'tool.completed'
@@ -343,7 +349,13 @@ export class ProviderRuntimeIngestion {
       { type: 'item.started' | 'item.updated' | 'item.completed' }
     >
   ): void {
-    const text = readNestedPayloadString(event.payload.data, 'text', 'content', 'message', 'markdown')
+    const text = readNestedPayloadString(
+      event.payload.data,
+      'text',
+      'content',
+      'message',
+      'markdown'
+    )
     if (!text) return
     const state = this.getAssistantState(event)
     state.buffer += text
@@ -373,7 +385,11 @@ export class ProviderRuntimeIngestion {
     this.engine.upsertActivity(
       {
         id,
-        kind: completed ? 'task.completed' : event.type === 'item.started' ? 'task.started' : 'task.progress',
+        kind: completed
+          ? 'task.completed'
+          : event.type === 'item.started'
+            ? 'task.started'
+            : 'task.progress',
         tone: 'thinking',
         summary: 'Thinking',
         payload: {
@@ -389,9 +405,7 @@ export class ProviderRuntimeIngestion {
     )
   }
 
-  private appendToolOutput(
-    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
-  ): void {
+  private appendToolOutput(event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>): void {
     const id = toolActivityId(event)
     const existing = this.engine
       .getThread(event.threadId)
@@ -414,7 +428,9 @@ export class ProviderRuntimeIngestion {
         payload: {
           ...existing?.payload,
           itemType: readPayloadString(existing?.payload, 'itemType') ?? 'unknown',
-          status: completed ? 'completed' : (completedTurnStatus ?? existing?.payload?.status ?? 'inProgress'),
+          status: completed
+            ? 'completed'
+            : (completedTurnStatus ?? existing?.payload?.status ?? 'inProgress'),
           output,
           streamKind: event.payload.streamKind
         },
@@ -591,7 +607,9 @@ export class ProviderRuntimeIngestion {
     })
   }
 
-  private finalizeActivitiesForTurn(event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>): void {
+  private finalizeActivitiesForTurn(
+    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
+  ): void {
     this.resolvePendingThinkingForTurn(event)
     this.resolvePendingToolsForTurn(event)
     this.resolvePendingPromptsForTurn(event)
@@ -649,16 +667,14 @@ export class ProviderRuntimeIngestion {
     const thread = this.engine.getThread(event.threadId)
     for (const activity of thread.activities) {
       if (activity.resolved) continue
-      if (
-        activity.kind !== 'approval.requested' &&
-        activity.kind !== 'user-input.requested'
-      )
+      if (activity.kind !== 'approval.requested' && activity.kind !== 'user-input.requested')
         continue
       if (!activityBelongsToTurn(activity, event.turnId)) continue
       this.engine.upsertActivity(
         {
           ...activity,
-          kind: activity.kind === 'approval.requested' ? 'approval.resolved' : 'user-input.resolved',
+          kind:
+            activity.kind === 'approval.requested' ? 'approval.resolved' : 'user-input.resolved',
           tone: 'info',
           summary: `${activity.summary} (cleared by turn end)`,
           resolved: true,
@@ -671,6 +687,25 @@ export class ProviderRuntimeIngestion {
 
   private planKey(threadId: string, turnId: string): string {
     return `${threadId}:${turnId}`
+  }
+
+  private findApprovalForResolution(
+    event: Extract<ProviderRuntimeEvent, { type: 'request.resolved' }>
+  ): OrchestrationThreadActivity | undefined {
+    const thread = this.engine.getThread(event.threadId)
+    if (event.requestId) {
+      const id = `approval:${event.requestId}`
+      const exact = thread.activities.find((activity) => activity.id === id)
+      if (exact) return exact
+    }
+    return thread.activities
+      .filter(
+        (activity) =>
+          activity.kind === 'approval.requested' &&
+          activity.resolved !== true &&
+          activityBelongsToTurn(activity, event.turnId)
+      )
+      .at(-1)
   }
 
   private completedTurnToolStatus(
@@ -728,7 +763,8 @@ function readPayloadString(
 }
 
 function readNestedPayloadString(value: unknown, ...keys: string[]): string | undefined {
-  const record = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+  const record =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
   for (const key of keys) {
     const candidate = record[key]
     if (typeof candidate === 'string') return candidate
@@ -753,10 +789,7 @@ function toolStatusForTurnCompletion(
 
 function isTerminalToolStatus(status: string | undefined): boolean {
   return (
-    status === 'completed' ||
-    status === 'success' ||
-    status === 'failed' ||
-    status === 'declined'
+    status === 'completed' || status === 'success' || status === 'failed' || status === 'declined'
   )
 }
 
