@@ -1044,19 +1044,30 @@ export function HomePage(): React.JSX.Element {
                 const isActive = project.id === selection.activeProjectId
                 return (
                   <section key={project.id} className="project-group">
-                    <button
-                      type="button"
-                      className={`project-toggle ${isActive ? 'active' : ''}`}
-                      aria-expanded={isOpen}
-                      onClick={() => selectProject(project)}
-                    >
-                      {isOpen ? (
-                        <FolderOpen size={13} strokeWidth={2} />
-                      ) : (
-                        <Folder size={13} strokeWidth={2} />
-                      )}
-                      <span className="project-name">{project.name}</span>
-                    </button>
+                    <div className="project-row">
+                      <button
+                        type="button"
+                        className={`project-toggle ${isActive ? 'active' : ''}`}
+                        aria-expanded={isOpen}
+                        onClick={() => selectProject(project)}
+                      >
+                        {isOpen ? (
+                          <FolderOpen size={13} strokeWidth={2} />
+                        ) : (
+                          <Folder size={13} strokeWidth={2} />
+                        )}
+                        <span className="project-name">{project.name}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="project-new-thread"
+                        onClick={() => void startNewChat()}
+                        title="New thread"
+                        aria-label="New thread"
+                      >
+                        +
+                      </button>
+                    </div>
                     {isOpen ? (
                       <div className="thread-list">
                         {threads.map((chat) => (
@@ -1089,14 +1100,6 @@ export function HomePage(): React.JSX.Element {
                             </button>
                           </div>
                         ))}
-                        <button
-                          type="button"
-                          className="thread-link new-thread"
-                          onClick={() => void startNewChat()}
-                        >
-                          <Plus size={11} strokeWidth={2} />
-                          <span>{DEFAULT_THREAD_TITLE}</span>
-                        </button>
                       </div>
                     ) : null}
                   </section>

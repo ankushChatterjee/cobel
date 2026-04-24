@@ -162,7 +162,7 @@
   width: 28px;
   height: 28px;
   place-items: center;
-  border: 1px solid var(--border-medium);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-muted);
@@ -174,7 +174,7 @@
 }
 
 .add-project-button:hover {
-  border-color: var(--border-strong);
+  border-color: var(--border-medium);
   color: var(--text-secondary);
   background: var(--surface-hover);
 }
@@ -219,7 +219,7 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 10px 0 16px;
+  padding: 12px 0 20px;
   scrollbar-width: thin;
   scrollbar-color: var(--border-medium) transparent;
 }
@@ -245,9 +245,17 @@
   display: grid;
 }
 
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+}
+
 .project-toggle {
   display: flex;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 8px;
   min-height: 28px;
@@ -255,28 +263,24 @@
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--text-primary);
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 12.5px;
-  font-weight: 650;
+  font-weight: 600;
   text-align: left;
-  opacity: 0.68;
   transition:
     background 0.12s,
-    color 0.12s,
-    opacity 0.12s;
+    color 0.12s;
 }
 
 .project-toggle.active {
-  color: var(--text-primary);
-  opacity: 0.9;
+  color: var(--text-secondary);
 }
 
 .project-toggle:focus-visible,
 .project-toggle:hover {
   background: var(--surface-hover);
-  color: var(--text-primary);
-  opacity: 1;
+  color: var(--text-secondary);
 }
 
 .project-toggle svg {
@@ -297,6 +301,36 @@
   flex: 1;
 }
 
+.project-new-thread {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 300;
+  line-height: 1;
+  opacity: 0;
+  transition:
+    opacity 0.12s,
+    color 0.12s,
+    background 0.12s;
+}
+
+.project-row:hover .project-new-thread {
+  opacity: 1;
+}
+
+.project-new-thread:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
 .thread-list {
   display: grid;
   gap: 2px;
@@ -307,7 +341,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px;
   align-items: center;
-  min-height: 29px;
+  min-height: 32px;
   border-radius: var(--radius-md);
   padding-right: 4px;
   transition:
@@ -330,13 +364,13 @@
   min-width: 0;
   align-items: center;
   gap: 8px;
-  min-height: 29px;
+  min-height: 32px;
   padding: 3px 4px 3px 33px;
   border: 0;
   background: transparent;
-  color: var(--text-label);
+  color: var(--text-muted);
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: 13px;
   text-align: left;
   overflow: hidden;
   transition: color 0.1s;
@@ -347,11 +381,11 @@
 }
 
 .thread-row.active .thread-link {
-  color: var(--text-primary);
+  color: var(--text-secondary);
 }
 
 .thread-row.active .thread-dot {
-  background: var(--text-secondary);
+  background: var(--text-muted);
   box-shadow: none;
 }
 
@@ -359,7 +393,7 @@
   width: 5px;
   height: 5px;
   border-radius: 999px;
-  background: var(--border-medium);
+  background: var(--border-strong);
   flex-shrink: 0;
   transition: background 0.12s;
 }
@@ -377,13 +411,13 @@
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 500;
-  opacity: 0.82;
-  transition: opacity 0.12s ease;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease;
 }
 
 .thread-row.active .thread-used-at {
-  color: var(--text-label);
-  opacity: 1;
+  color: var(--text-muted);
 }
 
 .thread-row:hover .thread-used-at,
@@ -421,19 +455,6 @@
   color: var(--error);
 }
 
-.thread-link.new-thread {
-  color: var(--text-muted);
-  font-size: 12px;
-  gap: 8px;
-  border-radius: var(--radius-md);
-  padding-left: 33px;
-  margin-top: 2px;
-}
-
-.thread-link.new-thread:hover {
-  color: var(--accent-primary);
-  background: var(--surface-hover);
-}
 
 /* ── Chat surface ─────────────────────────────────────────── */
 
@@ -497,7 +518,7 @@
 .chat-title-group h1 {
   margin: 0;
   font-size: 13.5px;
-  font-weight: 750;
+  font-weight: 500;
   letter-spacing: 0;
   color: var(--text-primary);
 }
@@ -509,7 +530,7 @@
 
 .chat-project-name {
   color: var(--text-secondary);
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .header-actions {
@@ -523,7 +544,7 @@
   width: 28px;
   height: 28px;
   place-items: center;
-  border: 1px solid var(--border-medium);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
@@ -535,7 +556,7 @@
 }
 
 .icon-button:hover {
-  border-color: var(--border-strong);
+  border-color: var(--border-medium);
   color: var(--text-secondary);
   background: var(--surface-hover);
 }
@@ -705,10 +726,10 @@
   box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
-  background: var(--surface-panel);
-  border: 1px solid var(--border-subtle);
+  background: var(--surface-active);
+  border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
-  padding: 9px 13px;
+  padding: 10px 14px;
   text-align: left;
 }
 
@@ -2415,7 +2436,7 @@
   place-items: center;
   width: 26px;
   height: 26px;
-  border: 1px solid var(--border-medium);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
@@ -2427,7 +2448,7 @@
 }
 
 .run-controls button:hover {
-  border-color: var(--border-strong);
+  border-color: var(--border-medium);
   color: var(--text-secondary);
   background: var(--surface-hover);
 }
