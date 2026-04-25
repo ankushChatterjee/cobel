@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import type {
   ChatAttachment,
+  InteractionMode,
   ProviderApprovalDecision,
   ProviderId,
   ProviderRuntimeEvent,
@@ -16,6 +17,7 @@ export interface StartSessionInput {
   cwd?: string
   model?: string
   runtimeMode: RuntimeMode
+  interactionMode: InteractionMode
   resumeCursor?: unknown
 }
 
@@ -25,6 +27,7 @@ export interface SendTurnInput {
   attachments?: ChatAttachment[]
   model?: string
   effort?: ReasoningEffort
+  interactionMode: InteractionMode
 }
 
 export interface GenerateThreadTitleInput {

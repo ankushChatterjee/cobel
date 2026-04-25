@@ -23,11 +23,12 @@ import {
   Folder,
   FolderOpen,
   GitCommitHorizontal,
+  Map as MapIcon,
   Plus,
   RotateCcw,
   Square,
   TriangleAlert,
-  FilePen
+  Zap
 } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -47,9 +48,11 @@ import type {
   ModelInfo,
   OpenWorkspaceFolderResult,
   CheckpointFileChange,
+  InteractionMode,
   OrchestrationEvent,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
+  OrchestrationProposedPlan,
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadActivity,
@@ -81,6 +84,7 @@ const sidebarWidthKey = 'cobel.sidebar-width.v1'
 const legacySidebarWidthKeys = ['patronus.sidebar-width.v1']
 const diffPanelWidthKey = 'cobel.diff-panel-width.v1'
 const defaultRuntimeMode: RuntimeMode = 'auto-accept-edits'
+const defaultInteractionMode: InteractionMode = 'default'
 const defaultSidebarWidth = 290
 const minSidebarWidth = 184
 const maxSidebarWidth = 420
@@ -135,9 +139,17 @@ interface ThreadComposerPreference {
   model?: string
   effort?: ReasoningEffort
   runtimeMode?: RuntimeMode
+  interactionMode?: InteractionMode
 }
 
 type ThreadComposerPreferenceMap = Record<string, ThreadComposerPreference>
+
+type SidebarTabId = 'review' | `plan:${string}`
+
+interface ThreadSidebarState {
+  open: boolean
+  activeTabId: SidebarTabId | null
+}
 
 function loadActiveSelection(): ActiveSelection {
   try {
@@ -163,6 +175,10 @@ function isRuntimeMode(value: unknown): value is RuntimeMode {
   return value === 'approval-required' || value === 'auto-accept-edits' || value === 'full-access'
 }
 
+function isInteractionMode(value: unknown): value is InteractionMode {
+  return value === 'default' || value === 'plan'
+}
+
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return (
     value === 'none' ||
@@ -184,13 +200,21 @@ function loadThreadComposerPreferences(): ThreadComposerPreferenceMap {
     const preferences: ThreadComposerPreferenceMap = {}
     for (const [threadId, value] of Object.entries(parsed)) {
       if (!threadId || typeof value !== 'object' || !value) continue
-      const raw = value as { model?: unknown; effort?: unknown; runtimeMode?: unknown }
+      const raw = value as {
+        model?: unknown
+        effort?: unknown
+        runtimeMode?: unknown
+        interactionMode?: unknown
+      }
       const model =
         typeof raw.model === 'string' && raw.model.trim().length > 0 ? raw.model : undefined
       const effort = isReasoningEffort(raw.effort) ? raw.effort : undefined
       const runtimeMode = isRuntimeMode(raw.runtimeMode) ? raw.runtimeMode : undefined
-      if (!model && !effort && !runtimeMode) continue
-      preferences[threadId] = { model, effort, runtimeMode }
+      const interactionMode = isInteractionMode(raw.interactionMode)
+        ? raw.interactionMode
+        : undefined
+      if (!model && !effort && !runtimeMode && !interactionMode) continue
+      preferences[threadId] = { model, effort, runtimeMode, interactionMode }
     }
     return preferences
   } catch {
@@ -374,6 +398,7 @@ export function HomePage(): React.JSX.Element {
   const [providers, setProviders] = useState<ProviderSummary[]>([])
   const [composerResetToken, setComposerResetToken] = useState(0)
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(defaultRuntimeMode)
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>(defaultInteractionMode)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [model, setModel] = useState<string>('')
   const [effort, setEffort] = useState<ReasoningEffort>('medium')
@@ -387,7 +412,9 @@ export function HomePage(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(() => new Set())
   const [isPendingThinking, setIsPendingThinking] = useState(false)
-  const [diffPanelOpen, setDiffPanelOpen] = useState(false)
+  const [threadSidebarState, setThreadSidebarState] = useState<Record<string, ThreadSidebarState>>(
+    {}
+  )
   const [diffPanelMode, setDiffPanelMode] = useState<DiffPanelMode>('full')
   const [diffStyleMode, setDiffStyleMode] = useState<DiffStyleMode>('unified')
   const [diffWrapLines, setDiffWrapLines] = useState(false)
@@ -419,7 +446,12 @@ export function HomePage(): React.JSX.Element {
   const sessionStatus = thread?.session?.status ?? 'idle'
   const activeTurnId = thread?.session?.activeTurnId
   const isRunning = sessionStatus === 'starting' || sessionStatus === 'running'
+  const activeSidebarState = activeThreadId ? threadSidebarState[activeThreadId] : undefined
   const transcriptItems = useMemo(() => buildTranscriptItems(thread), [thread])
+  const latestProposedPlan = useMemo(
+    () => findLatestProposedPlan(thread?.proposedPlans ?? [], thread?.latestTurn?.id ?? null),
+    [thread?.latestTurn?.id, thread?.proposedPlans]
+  )
   const checkpointByAssistantMessageId = useMemo(
     () => buildCheckpointByAssistantMessageId(thread?.checkpoints ?? []),
     [thread?.checkpoints]
@@ -544,6 +576,14 @@ export function HomePage(): React.JSX.Element {
 
   useEffect(() => {
     if (!activeThreadId) return
+    const preferredMode = threadComposerPreferences[activeThreadId]?.interactionMode
+    const sessionInteractionMode =
+      thread?.id === activeThreadId ? (thread.session?.interactionMode ?? undefined) : undefined
+    setInteractionMode(preferredMode ?? sessionInteractionMode ?? defaultInteractionMode)
+  }, [activeThreadId, thread, threadComposerPreferences])
+
+  useEffect(() => {
+    if (!activeThreadId) return
     const preferredModel = threadComposerPreferences[activeThreadId]?.model
     if (models.length === 0) {
       setModel(preferredModel ?? '')
@@ -571,6 +611,21 @@ export function HomePage(): React.JSX.Element {
         : pickDefaultEffort(activeModelInfo)
     setEffort(resolvedEffort)
   }, [activeModelInfo, activeThreadId, threadComposerPreferences])
+
+  const handleInteractionModeChange = useCallback(
+    (nextMode: InteractionMode) => {
+      setInteractionMode(nextMode)
+      if (!activeThreadId) return
+      setThreadComposerPreferences((current) => ({
+        ...current,
+        [activeThreadId]: {
+          ...current[activeThreadId],
+          interactionMode: nextMode
+        }
+      }))
+    },
+    [activeThreadId]
+  )
 
   const handleRuntimeModeChange = useCallback(
     (nextMode: RuntimeMode) => {
@@ -705,6 +760,10 @@ export function HomePage(): React.JSX.Element {
       }
       pendingUserMessagesRef.current.set(optimisticMessage.id, optimisticMessage)
       const titleSeed = deriveTitleSeed(input)
+      const targetPlanId =
+        interactionMode === 'plan' && activeSidebarState?.activeTabId?.startsWith('plan:')
+          ? activeSidebarState.activeTabId.slice('plan:'.length)
+          : undefined
       setThread((current) =>
         upsertOptimisticUserMessage({
           thread: current,
@@ -727,6 +786,8 @@ export function HomePage(): React.JSX.Element {
           model,
           effort,
           runtimeMode,
+          interactionMode,
+          targetPlanId,
           createdAt
         })
       } catch (commandError) {
@@ -736,7 +797,16 @@ export function HomePage(): React.JSX.Element {
       }
       return true
     },
-    [activeProject, activeThreadId, effort, isRunning, model, runtimeMode]
+    [
+      activeProject,
+      activeSidebarState?.activeTabId,
+      activeThreadId,
+      effort,
+      interactionMode,
+      isRunning,
+      model,
+      runtimeMode
+    ]
   )
 
   const stopSession = useCallback(async (): Promise<void> => {
@@ -957,15 +1027,30 @@ export function HomePage(): React.JSX.Element {
     [activeThreadId]
   )
 
+  const updateActiveThreadSidebarState = useCallback(
+    (updater: (current: ThreadSidebarState) => ThreadSidebarState) => {
+      if (!activeThreadId) return
+      setThreadSidebarState((current) => ({
+        ...current,
+        [activeThreadId]: updater(current[activeThreadId] ?? { open: false, activeTabId: null })
+      }))
+    },
+    [activeThreadId]
+  )
+
   const openDiffPanel = useCallback(
     (input: { mode?: DiffPanelMode; turnId?: string | null; filePath?: string | null } = {}) => {
       setDiffPanelMode(input.mode ?? 'full')
       setSelectedDiffTurnId(input.turnId ?? null)
       setSelectedDiffFilePath(input.filePath ?? null)
-      setDiffPanelOpen(true)
+      updateActiveThreadSidebarState((current) => ({
+        ...current,
+        open: true,
+        activeTabId: 'review'
+      }))
       setDiffPreview(null)
     },
-    []
+    [updateActiveThreadSidebarState]
   )
 
   const showDiffPreview = useCallback(
@@ -988,6 +1073,58 @@ export function HomePage(): React.JSX.Element {
   const refreshDiffReview = useCallback((): void => {
     setWorkspaceDiffVersion((version) => version + 1)
   }, [])
+
+  const implementProposedPlan = useCallback(
+    async (plan: OrchestrationProposedPlan): Promise<void> => {
+      if (!activeProject || !activeThreadId || isRunning) return
+      const executionRuntimeMode =
+        threadComposerPreferences[activeThreadId]?.runtimeMode ??
+        thread?.session?.runtimeMode ??
+        runtimeMode
+      const createdAt = new Date().toISOString()
+      const implementationPrompt = buildPlanImplementationPrompt(plan.text)
+      const titleSeed = `Implement ${derivePlanTitle(plan.text)}`
+      setError(null)
+      setInteractionMode('default')
+      setRuntimeMode(executionRuntimeMode)
+      setThreadComposerPreferences((current) => ({
+        ...current,
+        [activeThreadId]: {
+          ...current[activeThreadId],
+          runtimeMode: executionRuntimeMode,
+          interactionMode: 'default'
+        }
+      }))
+      try {
+        await window.agentApi.dispatchCommand({
+          type: 'thread.turn.start',
+          commandId: `cmd:${createId()}`,
+          threadId: activeThreadId,
+          provider: 'codex',
+          input: implementationPrompt,
+          titleSeed,
+          cwd: activeProject.path,
+          model,
+          effort,
+          runtimeMode: executionRuntimeMode,
+          interactionMode: 'default',
+          createdAt
+        })
+      } catch (implementError) {
+        setError(implementError instanceof Error ? implementError.message : String(implementError))
+      }
+    },
+    [
+      activeProject,
+      activeThreadId,
+      effort,
+      isRunning,
+      model,
+      runtimeMode,
+      thread?.session?.runtimeMode,
+      threadComposerPreferences
+    ]
+  )
 
   const commitFullChanges = useCallback(
     async (message: string): Promise<void> => {
@@ -1033,6 +1170,43 @@ export function HomePage(): React.JSX.Element {
     },
     [activeThreadId]
   )
+
+  const sidebarTabs = useMemo(
+    () => [
+      { id: 'review' as const, label: 'Review' },
+      ...(thread?.proposedPlans ?? []).map((plan) => ({
+        id: `plan:${plan.id}` as const,
+        label: derivePlanTitle(plan.text),
+        plan
+      }))
+    ],
+    [thread?.proposedPlans]
+  )
+
+  const resolvedSidebarTabId = useMemo(() => {
+    const preferred = activeSidebarState?.activeTabId
+    if (preferred && sidebarTabs.some((tab) => tab.id === preferred)) return preferred
+    return 'review' as SidebarTabId
+  }, [activeSidebarState?.activeTabId, sidebarTabs])
+
+  useEffect(() => {
+    if (!activeThreadId) return
+    if (!latestProposedPlan) return
+    if (latestProposedPlan.turnId !== thread?.latestTurn?.id) return
+    const expectedTabId = `plan:${latestProposedPlan.id}` as SidebarTabId
+    if (activeSidebarState?.open && activeSidebarState.activeTabId === expectedTabId) return
+    updateActiveThreadSidebarState(() => ({
+      open: true,
+      activeTabId: expectedTabId
+    }))
+  }, [
+    activeSidebarState?.activeTabId,
+    activeSidebarState?.open,
+    activeThreadId,
+    latestProposedPlan,
+    thread?.latestTurn?.id,
+    updateActiveThreadSidebarState
+  ])
 
   const sidebarStyle = useMemo(
     () =>
@@ -1213,7 +1387,7 @@ export function HomePage(): React.JSX.Element {
         />
       </aside>
 
-      <main className={`chat-surface ${diffPanelOpen ? 'diff-open' : ''}`}>
+      <main className={`chat-surface ${activeSidebarState?.open ? 'diff-open' : ''}`}>
         <header className="chat-header">
           <div className="chat-title-group">
             <h1>{activeChat?.title ?? 'Open a project'}</h1>
@@ -1227,9 +1401,11 @@ export function HomePage(): React.JSX.Element {
               threadId={activeThreadId}
               summaries={thread?.checkpoints ?? []}
               workspaceDiffVersion={workspaceDiffVersion}
-              open={diffPanelOpen}
+              open={activeSidebarState?.open === true && resolvedSidebarTabId === 'review'}
               onToggle={() =>
-                diffPanelOpen ? setDiffPanelOpen(false) : openDiffPanel({ mode: 'full' })
+                activeSidebarState?.open === true && resolvedSidebarTabId === 'review'
+                  ? updateActiveThreadSidebarState((current) => ({ ...current, open: false }))
+                  : openDiffPanel({ mode: 'full' })
               }
             />
           </div>
@@ -1286,10 +1462,12 @@ export function HomePage(): React.JSX.Element {
                 key={composerResetToken}
                 enabled={Boolean(activeProject)}
                 isRunning={isRunning}
+                interactionMode={interactionMode}
                 runtimeMode={runtimeMode}
                 models={models}
                 model={model}
                 effort={effort}
+                onInteractionModeChange={handleInteractionModeChange}
                 onRuntimeModeChange={handleRuntimeModeChange}
                 onModelChange={handleModelChange}
                 onEffortChange={handleEffortChange}
@@ -1306,24 +1484,18 @@ export function HomePage(): React.JSX.Element {
             onOpenSidebar={(turnId, filePath) => openDiffPanel({ mode: 'turn', turnId, filePath })}
           />
         </div>
-        <DiffReviewSidebar
-          open={diffPanelOpen}
-          threadId={activeThreadId}
-          summaries={thread?.checkpoints ?? []}
-          mode={diffPanelMode}
-          diffStyle={diffStyleMode}
-          wrapLines={diffWrapLines}
-          selectedTurnId={selectedDiffTurnId}
-          selectedFilePath={selectedDiffFilePath}
-          workspaceDiffVersion={workspaceDiffVersion}
-          onModeChange={setDiffPanelMode}
-          onDiffStyleChange={setDiffStyleMode}
-          onWrapLinesChange={setDiffWrapLines}
-          onSelectTurn={setSelectedDiffTurnId}
-          onSelectFile={setSelectedDiffFilePath}
-          onCommitFull={requestCommitFullChanges}
-          onRefresh={refreshDiffReview}
-          onClose={() => setDiffPanelOpen(false)}
+        <ThreadSidebar
+          open={activeSidebarState?.open === true}
+          tabs={sidebarTabs}
+          activeTabId={resolvedSidebarTabId}
+          onSelectTab={(tabId) =>
+            updateActiveThreadSidebarState((current) => ({
+              ...current,
+              open: true,
+              activeTabId: tabId
+            }))
+          }
+          onClose={() => updateActiveThreadSidebarState((current) => ({ ...current, open: false }))}
           resizeLabel="Resize review panel"
           resizeMin={minDiffPanelWidth}
           resizeMax={maxDiffPanelWidth}
@@ -1332,6 +1504,51 @@ export function HomePage(): React.JSX.Element {
           onResizeMove={resizeDiffPanel}
           onResizeEnd={stopDiffPanelResize}
           onResizeKeyDown={handleDiffPanelResizeKeyDown}
+          renderContent={(tabId) => {
+            if (tabId === 'review') {
+              return (
+                <DiffReviewSidebar
+                  open
+                  embedded
+                  threadId={activeThreadId}
+                  summaries={thread?.checkpoints ?? []}
+                  mode={diffPanelMode}
+                  diffStyle={diffStyleMode}
+                  wrapLines={diffWrapLines}
+                  selectedTurnId={selectedDiffTurnId}
+                  selectedFilePath={selectedDiffFilePath}
+                  workspaceDiffVersion={workspaceDiffVersion}
+                  onModeChange={setDiffPanelMode}
+                  onDiffStyleChange={setDiffStyleMode}
+                  onWrapLinesChange={setDiffWrapLines}
+                  onSelectTurn={setSelectedDiffTurnId}
+                  onSelectFile={setSelectedDiffFilePath}
+                  onCommitFull={requestCommitFullChanges}
+                  onRefresh={refreshDiffReview}
+                  onClose={() => undefined}
+                  resizeLabel="Resize review panel"
+                  resizeMin={minDiffPanelWidth}
+                  resizeMax={maxDiffPanelWidth}
+                  resizeValue={diffPanelWidth}
+                  onResizeStart={startDiffPanelResize}
+                  onResizeMove={resizeDiffPanel}
+                  onResizeEnd={stopDiffPanelResize}
+                  onResizeKeyDown={handleDiffPanelResizeKeyDown}
+                />
+              )
+            }
+            const plan = sidebarTabs.find(
+              (candidate): candidate is { id: SidebarTabId; label: string; plan: OrchestrationProposedPlan } =>
+                candidate.id === tabId && 'plan' in candidate
+            )?.plan
+            return plan ? (
+              <PlanSidebarPanel
+                plan={plan}
+                disabled={isRunning}
+                onImplement={() => void implementProposedPlan(plan)}
+              />
+            ) : null
+          }}
         />
         <RevertWarningDialog
           turnCount={pendingRevertTurnCount}
@@ -1352,6 +1569,154 @@ export function HomePage(): React.JSX.Element {
           onConfirm={(message) => void commitFullChanges(message)}
         />
       </main>
+    </div>
+  )
+}
+
+function ThreadSidebar({
+  open,
+  tabs,
+  activeTabId,
+  onSelectTab,
+  onClose,
+  resizeLabel,
+  resizeMin,
+  resizeMax,
+  resizeValue,
+  onResizeStart,
+  onResizeMove,
+  onResizeEnd,
+  onResizeKeyDown,
+  renderContent
+}: {
+  open: boolean
+  tabs: Array<{ id: SidebarTabId; label: string; plan?: OrchestrationProposedPlan }>
+  activeTabId: SidebarTabId
+  onSelectTab: (tabId: SidebarTabId) => void
+  onClose: () => void
+  resizeLabel: string
+  resizeMin: number
+  resizeMax: number
+  resizeValue: number
+  onResizeStart: (event: PointerEvent<HTMLDivElement>) => void
+  onResizeMove: (event: PointerEvent<HTMLDivElement>) => void
+  onResizeEnd: (event: PointerEvent<HTMLDivElement>) => void
+  onResizeKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
+  renderContent: (tabId: SidebarTabId) => React.JSX.Element | null
+}): React.JSX.Element {
+  return (
+    <aside className={`diff-review-sidebar thread-sidebar ${open ? 'open' : ''}`} aria-hidden={!open}>
+      <div
+        className="diff-review-resize-handle"
+        role="separator"
+        aria-label={resizeLabel}
+        aria-orientation="vertical"
+        aria-valuemin={resizeMin}
+        aria-valuemax={resizeMax}
+        aria-valuenow={resizeValue}
+        tabIndex={open ? 0 : -1}
+        onKeyDown={onResizeKeyDown}
+        onPointerDown={onResizeStart}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeEnd}
+        onPointerCancel={onResizeEnd}
+      />
+      <div className="thread-sidebar-tabs" role="tablist" aria-label="Sidebar tabs">
+        <div className="thread-sidebar-tab-strip">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              className={`thread-sidebar-tab ${tab.id === activeTabId ? 'active' : ''}`}
+              aria-selected={tab.id === activeTabId}
+              onClick={() => onSelectTab(tab.id)}
+              title={tab.label}
+            >
+              <span>{tab.label}</span>
+            </button>
+          ))}
+        </div>
+        <button type="button" className="diff-close-button" onClick={onClose} aria-label="Close sidebar">
+          ×
+        </button>
+      </div>
+      <div className="thread-sidebar-content">{renderContent(activeTabId)}</div>
+    </aside>
+  )
+}
+
+function PlanSidebarPanel({
+  plan,
+  disabled,
+  onImplement
+}: {
+  plan: OrchestrationProposedPlan
+  disabled: boolean
+  onImplement: () => void
+}): React.JSX.Element {
+  return (
+    <section className="plan-sidebar-panel">
+      <div className="plan-sidebar-header">
+        <div>
+          <p>Proposed plan</p>
+          <h2>{derivePlanTitle(plan.text)}</h2>
+        </div>
+        <button type="button" className="plan-implement-button" disabled={disabled} onClick={onImplement}>
+          Implement
+        </button>
+      </div>
+      <div className="plan-sidebar-body">
+        <MarkdownMessage text={plan.text} isStreaming={false} />
+      </div>
+    </section>
+  )
+}
+
+function InteractionModeToggle({
+  value,
+  onChange,
+  disabled
+}: {
+  value: InteractionMode
+  onChange: (mode: InteractionMode) => void
+  disabled: boolean
+}): React.JSX.Element {
+  useEffect(() => {
+    if (disabled) return
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== 'Tab' || !event.shiftKey) return
+      event.preventDefault()
+      onChange(value === 'plan' ? 'default' : 'plan')
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [disabled, onChange, value])
+
+  return (
+    <div className="composer-interaction-toggle" role="group" aria-label="Interaction mode">
+      <button
+        type="button"
+        className={`composer-interaction-btn${value !== 'plan' ? ' active' : ''}`}
+        onClick={() => onChange('default')}
+        disabled={disabled}
+        aria-pressed={value !== 'plan'}
+        title="Do mode — agent executes changes directly"
+      >
+        <Zap size={11} strokeWidth={1.9} aria-hidden="true" />
+        <span>Do</span>
+      </button>
+      <button
+        type="button"
+        className={`composer-interaction-btn plan${value === 'plan' ? ' active' : ''}`}
+        onClick={() => onChange('plan')}
+        disabled={disabled}
+        aria-pressed={value === 'plan'}
+        title="Plan mode — agent proposes a plan first"
+      >
+        <MapIcon size={11} strokeWidth={1.9} aria-hidden="true" />
+        <span>Plan</span>
+      </button>
     </div>
   )
 }
@@ -1580,10 +1945,12 @@ function ComposerDropdown({
 const ChatComposer = memo(function ChatComposer({
   enabled,
   isRunning,
+  interactionMode,
   runtimeMode,
   models,
   model,
   effort,
+  onInteractionModeChange,
   onRuntimeModeChange,
   onModelChange,
   onEffortChange,
@@ -1593,10 +1960,12 @@ const ChatComposer = memo(function ChatComposer({
 }: {
   enabled: boolean
   isRunning: boolean
+  interactionMode: InteractionMode
   runtimeMode: RuntimeMode
   models: ModelInfo[]
   model: string
   effort: ReasoningEffort
+  onInteractionModeChange: (mode: InteractionMode) => void
   onRuntimeModeChange: (mode: RuntimeMode) => void
   onModelChange: (model: string) => void
   onEffortChange: (effort: ReasoningEffort) => void
@@ -1700,12 +2069,16 @@ const ChatComposer = memo(function ChatComposer({
         disabled={!enabled}
       />
       <div className="composer-footer">
-        <FilePen size={12} strokeWidth={1.6} className="composer-icon" />
+        <InteractionModeToggle
+          value={interactionMode}
+          onChange={onInteractionModeChange}
+          disabled={!enabled}
+        />
         <ComposerDropdown
           ariaLabel="Runtime mode"
           className="permissions-select-shell"
           value={runtimeMode}
-          onChange={(nextValue) => onRuntimeModeChange(nextValue as RuntimeMode)}
+          onChange={(v) => onRuntimeModeChange(v as RuntimeMode)}
           options={runtimeModeOptions}
           disabled={!enabled}
         />
@@ -2309,6 +2682,31 @@ const CodeBlock = memo(function CodeBlock({
     </div>
   )
 })
+
+function findLatestProposedPlan(
+  plans: OrchestrationProposedPlan[],
+  latestTurnId: string | null
+): OrchestrationProposedPlan | null {
+  if (plans.length === 0) return null
+  const matchingTurnPlan =
+    (latestTurnId ? [...plans].reverse().find((plan) => plan.turnId === latestTurnId) : undefined) ??
+    null
+  return matchingTurnPlan ?? plans[plans.length - 1] ?? null
+}
+
+function derivePlanTitle(markdown: string): string {
+  const lines = markdown
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const heading = lines.find((line) => /^#{1,6}\s+/u.test(line))
+  const title = heading ? heading.replace(/^#{1,6}\s+/u, '') : lines[0]
+  return title?.trim() || 'Plan'
+}
+
+function buildPlanImplementationPrompt(planMarkdown: string): string {
+  return `PLEASE IMPLEMENT THIS PLAN:\n${planMarkdown.trim()}`
+}
 
 function categorizeToolActivity(activity: OrchestrationThreadActivity): string {
   const label = labelForActivity(activity)

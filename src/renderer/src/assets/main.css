@@ -2256,6 +2256,62 @@
   flex-shrink: 0;
 }
 
+/* Do / Plan segmented toggle */
+.composer-interaction-toggle {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 2px;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.composer-interaction-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 450;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.composer-interaction-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+}
+
+.composer-interaction-btn.active {
+  background: rgba(255, 255, 255, 0.10);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.composer-interaction-btn.plan.active {
+  background: rgba(100, 148, 255, 0.14);
+  color: #9cb8ff;
+}
+
+.composer-interaction-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.composer-interaction-btn svg {
+  flex: 0 0 auto;
+}
+
 .composer-select-shell {
   position: relative;
   display: inline-flex;
@@ -2460,15 +2516,18 @@
   width: 32px;
   height: 32px;
   flex-shrink: 0;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 999px;
   background: var(--text-primary);
   color: var(--surface-root);
   cursor: pointer;
   transition:
-    background 0.15s,
-    opacity 0.15s,
-    transform 0.1s;
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease,
+    transform 0.12s cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 .send-button:hover:not(:disabled) {
@@ -2476,13 +2535,27 @@
   transform: scale(1.05);
 }
 
+.send-button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
 .composer:focus-within .send-button:not(:disabled) {
-  background: var(--accent-primary);
-  color: #1a0e06;
+  background: rgba(232, 98, 26, 0.88);
+  border-color: rgba(255, 168, 90, 0.2);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 215, 155, 0.18),
+    0 2px 10px rgba(232, 98, 26, 0.22);
+  backdrop-filter: blur(8px) saturate(1.4);
+  -webkit-backdrop-filter: blur(8px) saturate(1.4);
+  color: #ffffff;
 }
 
 .composer:focus-within .send-button:hover:not(:disabled) {
-  background: var(--accent-bright);
+  background: rgba(240, 114, 50, 0.94);
+  border-color: rgba(255, 185, 110, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 225, 165, 0.22),
+    0 3px 14px rgba(232, 98, 26, 0.3);
   transform: scale(1.05);
 }
 
@@ -2642,6 +2715,78 @@
   pointer-events: all;
 }
 
+.thread-sidebar {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.thread-sidebar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.thread-sidebar-tab-strip {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.thread-sidebar-tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.thread-sidebar-tab {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.thread-sidebar-tab span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-sidebar-tab:hover,
+.thread-sidebar-tab:focus-visible,
+.thread-sidebar-tab.active {
+  border-color: var(--border-medium);
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.thread-sidebar-content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.diff-review-panel,
+.plan-sidebar-panel {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .diff-review-header {
   justify-content: flex-start;
   gap: 8px;
@@ -2707,6 +2852,65 @@ button.diff-toolbar-pill:focus-visible,
 .diff-toolbar-pill svg {
   flex: 0 0 auto;
   color: currentColor;
+}
+
+.plan-sidebar-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plan-sidebar-header p {
+  margin: 0 0 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.plan-sidebar-header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.plan-implement-button {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border-medium);
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.plan-implement-button:hover,
+.plan-implement-button:focus-visible {
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 14%, var(--surface-hover));
+  color: var(--text-primary);
+}
+
+.plan-implement-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.plan-sidebar-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
 }
 
 .diff-header-empty {

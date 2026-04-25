@@ -1,6 +1,7 @@
 export type ProviderId = 'codex'
 
 export type RuntimeMode = 'approval-required' | 'auto-accept-edits' | 'full-access'
+export type InteractionMode = 'default' | 'plan'
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 
 export type ProviderSessionStatus = 'connecting' | 'ready' | 'running' | 'error' | 'closed'
@@ -60,6 +61,7 @@ export interface ProviderSession {
   provider: ProviderId
   status: ProviderSessionStatus
   runtimeMode: RuntimeMode
+  interactionMode: InteractionMode
   cwd?: string
   model?: string
   threadId: string
@@ -279,8 +281,10 @@ export interface OrchestrationSession {
   status: 'idle' | 'starting' | 'running' | 'ready' | 'interrupted' | 'stopped' | 'error'
   providerName: ProviderId | null
   runtimeMode: RuntimeMode
+  interactionMode: InteractionMode
   effort?: ReasoningEffort
   activeTurnId: string | null
+  activePlanId: string | null
   lastError: string | null
   updatedAt: string
 }
@@ -429,6 +433,8 @@ export type ClientOrchestrationCommand =
       model?: string
       effort?: ReasoningEffort
       runtimeMode: RuntimeMode
+      interactionMode: InteractionMode
+      targetPlanId?: string
       createdAt: string
     }
   | {
@@ -534,6 +540,11 @@ export interface ModelInfo {
   description?: string
   hidden?: boolean
   isDefault?: boolean
+  supportedReasoningEfforts?: Array<{
+    reasoningEffort: ReasoningEffort
+    description?: string
+  }>
+  defaultReasoningEffort?: ReasoningEffort
 }
 
 export interface ProjectSummary {

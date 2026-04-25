@@ -1,9 +1,10 @@
 import type { Database } from 'better-sqlite3'
-import type { ProviderId, RuntimeMode } from '../../../shared/agent'
+import type { InteractionMode, ProviderId, RuntimeMode } from '../../../shared/agent'
 
 export interface ProviderSessionBinding {
   provider: ProviderId
   runtimeMode: RuntimeMode
+  interactionMode: InteractionMode
   status: string
   resumeCursor?: unknown
   runtimePayload?: unknown
@@ -13,6 +14,7 @@ interface ProviderSessionRuntimeRow {
   thread_id: string
   provider_name: string
   runtime_mode: string
+  interaction_mode: string
   status: string
   last_seen_at: string
   resume_cursor_json: string | null
@@ -26,11 +28,12 @@ export class ProviderSessionDirectory {
 
   constructor(db: Database) {
     this.upsertRow = db.prepare(`
-      INSERT INTO provider_session_runtime(thread_id, provider_name, runtime_mode, status, last_seen_at, resume_cursor_json, runtime_payload_json)
-      VALUES(@thread_id, @provider_name, @runtime_mode, @status, @last_seen_at, @resume_cursor_json, @runtime_payload_json)
+      INSERT INTO provider_session_runtime(thread_id, provider_name, runtime_mode, interaction_mode, status, last_seen_at, resume_cursor_json, runtime_payload_json)
+      VALUES(@thread_id, @provider_name, @runtime_mode, @interaction_mode, @status, @last_seen_at, @resume_cursor_json, @runtime_payload_json)
       ON CONFLICT(thread_id) DO UPDATE SET
         provider_name = @provider_name,
         runtime_mode = @runtime_mode,
+        interaction_mode = @interaction_mode,
         status = @status,
         last_seen_at = @last_seen_at,
         resume_cursor_json = @resume_cursor_json,
@@ -50,6 +53,7 @@ export class ProviderSessionDirectory {
     return {
       provider: row.provider_name as ProviderId,
       runtimeMode: row.runtime_mode as RuntimeMode,
+      interactionMode: row.interaction_mode as InteractionMode,
       status: row.status,
       resumeCursor: row.resume_cursor_json ? tryParse(row.resume_cursor_json) : undefined,
       runtimePayload: row.runtime_payload_json ? tryParse(row.runtime_payload_json) : undefined
@@ -68,6 +72,7 @@ export class ProviderSessionDirectory {
       thread_id: threadId,
       provider_name: binding.provider,
       runtime_mode: binding.runtimeMode,
+      interaction_mode: binding.interactionMode,
       status: binding.status,
       last_seen_at: new Date().toISOString(),
       resume_cursor_json: binding.resumeCursor !== undefined ? JSON.stringify(binding.resumeCursor) : null,

@@ -445,8 +445,59 @@ describe('ProviderRuntimeIngestion', () => {
     expect(engine.getThread('thread-1').proposedPlans[0]).toEqual(
       expect.objectContaining({
         id: 'plan:thread-1:turn:turn-1',
-        text: '<proposed_plan>Ship it</proposed_plan>',
+        text: 'Ship it',
         status: 'proposed'
+      })
+    )
+  })
+
+  it('updates the active plan instead of creating a new one for plan feedback', async () => {
+    const engine = new OrchestrationEngine()
+    engine.ensureThread({ threadId: 'thread-1' })
+    engine.upsertProposedPlan(
+      {
+        id: 'plan:thread-1:turn:turn-1',
+        turnId: 'turn-1',
+        text: 'Original plan',
+        status: 'proposed',
+        createdAt,
+        updatedAt: createdAt
+      },
+      'thread-1'
+    )
+    engine.setSession({
+      threadId: 'thread-1',
+      status: 'running',
+      providerName: 'codex',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'plan',
+      activeTurnId: 'turn-2',
+      activePlanId: 'plan:thread-1:turn:turn-1',
+      lastError: null,
+      createdAt
+    })
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-2',
+        payload: { streamKind: 'plan_text', delta: '<proposed_plan>Refined plan</proposed_plan>' }
+      })
+    )
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-2', payload: { state: 'completed' } })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').proposedPlans).toHaveLength(1)
+    expect(engine.getThread('thread-1').proposedPlans[0]).toEqual(
+      expect.objectContaining({
+        id: 'plan:thread-1:turn:turn-1',
+        turnId: 'turn-2',
+        text: 'Refined plan',
+        status: 'proposed',
+        createdAt
       })
     )
   })
