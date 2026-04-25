@@ -1,5 +1,7 @@
-import { memo } from 'react'
+import { ChevronDown } from 'lucide-react'
+import { memo, useEffect, useId, useState } from 'react'
 import type { OrchestrationCheckpointSummary, OrchestrationMessage, CheckpointFileChange, OrchestrationThreadActivity } from '../../../../../shared/agent'
+import { readPayloadString } from '../activityUtils'
 import { ChangedFilePills } from '../../diff/DiffReview'
 import { MarkdownMessage } from '../MarkdownMessage'
 import { formatTime, formatWorkDuration } from '../formatUtils'
@@ -11,13 +13,62 @@ export const ThinkingRow = memo(function ThinkingRow({
   activity: OrchestrationThreadActivity
 }): React.JSX.Element {
   const isComplete = activity.resolved === true
+  const reasoningText = readPayloadString(activity.payload, 'reasoningText')
+  const isReasoningItem = readPayloadString(activity.payload, 'itemType') === 'reasoning'
+  const hasReasoningBody =
+    isReasoningItem && Boolean(reasoningText && reasoningText.trim().length > 0)
+  const statusLabel = isComplete ? 'thought' : 'thinking…'
+  const contentId = useId()
+  const [reasoningExpanded, setReasoningExpanded] = useState(() => !isComplete)
+
+  useEffect(() => {
+    if (isComplete) setReasoningExpanded(false)
+  }, [isComplete])
+
+  if (hasReasoningBody) {
+    return (
+      <article
+        className={`thinking-row ${isComplete ? 'is-complete' : 'is-active'} has-reasoning`}
+        aria-label="Model reasoning"
+        aria-busy={!isComplete ? true : undefined}
+      >
+        <button
+          type="button"
+          className="transcript-reasoning-toggle"
+          aria-expanded={reasoningExpanded}
+          aria-controls={contentId}
+          onClick={() => setReasoningExpanded((open) => !open)}
+        >
+          {!isComplete ? <span className="thinking-spinner" aria-hidden="true" /> : null}
+          <span className="transcript-reasoning-toggle-label">Reasoning</span>
+          <ChevronDown
+            size={13}
+            strokeWidth={1.85}
+            className={`transcript-reasoning-chevron${reasoningExpanded ? ' is-open' : ''}`}
+            aria-hidden
+          />
+        </button>
+        <div
+          id={contentId}
+          className={`transcript-reasoning-shell${reasoningExpanded ? ' is-expanded' : ''}`}
+        >
+          <div className="transcript-reasoning-measure">
+            <div className="transcript-reasoning-body">{reasoningText}</div>
+          </div>
+        </div>
+      </article>
+    )
+  }
+
   return (
     <article
       className={`thinking-row ${isComplete ? 'is-complete' : 'is-active'}`}
       aria-label={isComplete ? 'Thought' : 'Thinking'}
     >
-      {!isComplete && <span className="thinking-spinner" aria-hidden="true" />}
-      <span>{isComplete ? 'thought' : 'thinking…'}</span>
+      <span className="thinking-row-status">
+        {!isComplete && <span className="thinking-spinner" aria-hidden="true" />}
+        <span>{statusLabel}</span>
+      </span>
     </article>
   )
 })

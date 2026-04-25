@@ -57,6 +57,92 @@ describe('ProviderRuntimeIngestion', () => {
     expect(thread.session?.status).toBe('ready')
   })
 
+  it('accumulates reasoning_text on the thinking activity and keeps it when the reasoning item completes', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'reason-1',
+        payload: { streamKind: 'reasoning_text', delta: 'First ' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'reason-1',
+        payload: { streamKind: 'reasoning_text', delta: 'thought.' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.completed',
+        turnId: 'turn-1',
+        itemId: 'reason-1',
+        payload: {
+          itemType: 'reasoning',
+          status: 'completed',
+          data: {}
+        }
+      })
+    )
+    await ingestion.drain()
+
+    const thinking = engine.getThread('thread-1').activities.find((a) => a.id === 'thinking:reason-1')
+    expect(thinking).toEqual(
+      expect.objectContaining({
+        tone: 'thinking',
+        resolved: true,
+        payload: expect.objectContaining({
+          itemType: 'reasoning',
+          status: 'completed',
+          reasoningText: 'First thought.'
+        })
+      })
+    )
+  })
+
+  it('resolves reasoning thinking when assistant_text streaming starts, before reasoning item completes', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'reason-1',
+        payload: { streamKind: 'reasoning_text', delta: 'Working it out…' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'assistant-1',
+        payload: { streamKind: 'assistant_text', delta: 'Hello' }
+      })
+    )
+    await ingestion.drain()
+
+    const thinking = engine.getThread('thread-1').activities.find((a) => a.id === 'thinking:reason-1')
+    expect(thinking).toEqual(
+      expect.objectContaining({
+        resolved: true,
+        kind: 'task.completed',
+        payload: expect.objectContaining({
+          reasoningText: 'Working it out…',
+          itemType: 'reasoning',
+          status: 'completed'
+        })
+      })
+    )
+  })
+
   it('preserves file-change approval args when the approval resolves', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)

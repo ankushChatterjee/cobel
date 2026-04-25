@@ -38,7 +38,6 @@ import {
 } from './modelUtils'
 import type { ComposerSelectOption } from './types'
 
-
 function isHeaderRow(option: ComposerSelectOption): boolean {
   return option.kind === 'header'
 }
