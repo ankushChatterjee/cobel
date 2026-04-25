@@ -1640,6 +1640,150 @@
   color: var(--accent-primary);
 }
 
+.thinking-row.has-reasoning {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 9px;
+  width: 100%;
+  max-width: 850px;
+}
+
+.thinking-row.has-reasoning.is-complete {
+  opacity: 1;
+}
+
+.transcript-reasoning-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: fit-content;
+  margin: 0;
+  padding: 5px 10px 5px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: inherit;
+  cursor: pointer;
+  box-sizing: border-box;
+  min-height: 28px;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.transcript-reasoning-toggle:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.transcript-reasoning-toggle:focus-visible {
+  outline: 2px solid var(--accent-dim);
+  outline-offset: 2px;
+}
+
+.transcript-reasoning-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  user-select: none;
+}
+
+.transcript-reasoning-toggle .thinking-spinner {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.transcript-reasoning-chevron {
+  flex-shrink: 0;
+  align-self: center;
+  display: block;
+  opacity: 0.5;
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.16s ease;
+}
+
+.transcript-reasoning-chevron.is-open {
+  transform: rotate(180deg);
+  opacity: 0.72;
+}
+
+.thinking-row.has-reasoning.is-active .transcript-reasoning-toggle {
+  color: var(--accent-primary);
+}
+
+.thinking-row.has-reasoning.is-complete .transcript-reasoning-toggle {
+  color: var(--text-muted);
+}
+
+.transcript-reasoning-shell {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.transcript-reasoning-shell.is-expanded {
+  grid-template-rows: 1fr;
+}
+
+.transcript-reasoning-measure {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.transcript-reasoning-body {
+  margin: 0;
+  padding: 2px 0 4px 14px;
+  border-left: 2px solid var(--border-medium);
+  max-height: min(42vh, 22rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+  font-size: 12.75px;
+  line-height: 1.58;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-medium) transparent;
+}
+
+.transcript-reasoning-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.transcript-reasoning-body::-webkit-scrollbar-thumb {
+  border-radius: 99px;
+  background: var(--border-medium);
+}
+
+.thinking-row.has-reasoning.is-active .transcript-reasoning-body {
+  color: var(--text-muted);
+}
+
+.thinking-row.has-reasoning.is-complete .transcript-reasoning-body {
+  color: var(--text-secondary);
+  opacity: 0.9;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-row {
+    transition: none;
+  }
+
+  .transcript-reasoning-shell {
+    transition-duration: 0.12s;
+  }
+
+  .transcript-reasoning-chevron {
+    transition-duration: 0.1s;
+  }
+}
+
 .thinking-spinner {
   width: 9px;
   height: 9px;

@@ -19,16 +19,24 @@ export function isThinkingActivity(activity: OrchestrationThreadActivity): boole
   return activity.tone === 'thinking'
 }
 
-export function isHiddenActivity(activity: OrchestrationThreadActivity): boolean {
-  return isThinkingActivity(activity) && activity.resolved === true
-}
-
 export function readPayloadString(
   payload: Record<string, unknown> | undefined,
   key: string
 ): string | undefined {
   const value = payload?.[key]
   return typeof value === 'string' ? value : undefined
+}
+
+function hasReasoningTranscriptText(activity: OrchestrationThreadActivity): boolean {
+  if (readPayloadString(activity.payload, 'itemType') !== 'reasoning') return false
+  const text = readPayloadString(activity.payload, 'reasoningText')
+  return Boolean(text && text.trim().length > 0)
+}
+
+export function isHiddenActivity(activity: OrchestrationThreadActivity): boolean {
+  if (!isThinkingActivity(activity) || activity.resolved !== true) return false
+  if (hasReasoningTranscriptText(activity)) return false
+  return true
 }
 
 export function readPayloadRecord(

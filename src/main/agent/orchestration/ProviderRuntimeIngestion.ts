@@ -11,6 +11,7 @@ import type {
 import { OrchestrationEngine } from './OrchestrationEngine'
 
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000
+const MAX_BUFFERED_REASONING_TEXT_CHARS = 16_000
 
 interface AssistantSegmentState {
   baseKey: string
@@ -150,6 +151,7 @@ export class ProviderRuntimeIngestion {
         return
 
       case 'request.opened':
+        this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
         this.flushAssistant(event, { closeSegment: true })
         this.engine.upsertActivity(
           {
@@ -210,6 +212,7 @@ export class ProviderRuntimeIngestion {
         return
 
       case 'user-input.requested':
+        this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
         this.flushAssistant(event, { closeSegment: true })
         this.engine.upsertActivity(
           {
@@ -288,6 +291,11 @@ export class ProviderRuntimeIngestion {
   private ingestContentDelta(
     event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
   ): void {
+    const streamKind = event.payload.streamKind
+    if (streamKind === 'assistant_text' || streamKind === 'plan_text' || isToolOutput(streamKind)) {
+      this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
+    }
+
     if (event.payload.streamKind === 'assistant_text') {
       const key = this.assistantStateKey(event)
       const isFinalSnapshot = this.isFinalAssistantItemSnapshot(event)
@@ -321,6 +329,11 @@ export class ProviderRuntimeIngestion {
       return
     }
 
+    if (event.payload.streamKind === 'reasoning_text') {
+      this.appendReasoningTextDelta(event)
+      return
+    }
+
     if (isToolOutput(event.payload.streamKind)) {
       this.appendToolOutput(event)
     }
@@ -333,12 +346,13 @@ export class ProviderRuntimeIngestion {
     >
   ): void {
     if (event.payload.itemType === 'user_message') return
-    if (event.payload.itemType === 'assistant_message') {
-      this.ingestAssistantItem(event)
-      return
-    }
     if (event.payload.itemType === 'reasoning') {
       this.ingestThinking(event)
+      return
+    }
+    this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
+    if (event.payload.itemType === 'assistant_message') {
+      this.ingestAssistantItem(event)
       return
     }
     if (event.payload.itemType === 'plan') {
@@ -432,6 +446,7 @@ export class ProviderRuntimeIngestion {
       .getThread(event.threadId)
       .activities.find((activity) => activity.id === id)
     const existingStatus = readPayloadString(existing?.payload, 'status')
+    const preservedReasoningText = readPayloadString(existing?.payload, 'reasoningText')
     const completed =
       existing?.resolved === true ||
       isTerminalToolStatus(existingStatus) ||
@@ -451,10 +466,101 @@ export class ProviderRuntimeIngestion {
         payload: {
           itemType: event.payload.itemType,
           status: completed ? 'completed' : (event.payload.status ?? 'inProgress'),
-          data: event.payload.data
+          data: event.payload.data,
+          ...(preservedReasoningText !== undefined ? { reasoningText: preservedReasoningText } : {})
         },
         turnId: event.turnId ?? null,
         resolved: completed,
+        createdAt: event.createdAt
+      },
+      event.threadId
+    )
+  }
+
+  /**
+   * Stops the reasoning "spinner" in the UI once another stream (assistant, plan, tool output)
+   * or non-reasoning item begins for the same turn, even if the reasoning item has not completed yet.
+   */
+  private resolveReasoningThinkingForTurn(
+    threadId: string,
+    turnId: string | null | undefined,
+    createdAt: string
+  ): void {
+    const thread = this.engine.getThread(threadId)
+    const effectiveTurnId = turnId ?? thread.session?.activeTurnId ?? null
+    if (!effectiveTurnId) return
+
+    for (const activity of thread.activities) {
+      if (activity.turnId !== effectiveTurnId) continue
+      if (!activity.id.startsWith('thinking:')) continue
+      if (activity.resolved === true) continue
+      if (readPayloadString(activity.payload, 'itemType') !== 'reasoning') continue
+
+      const basePayload =
+        typeof activity.payload === 'object' && activity.payload !== null
+          ? { ...(activity.payload as Record<string, unknown>) }
+          : {}
+
+      this.engine.upsertActivity(
+        {
+          ...activity,
+          kind: 'task.completed',
+          resolved: true,
+          payload: {
+            ...basePayload,
+            itemType: 'reasoning',
+            status: 'completed'
+          },
+          createdAt
+        },
+        threadId
+      )
+    }
+  }
+
+  private appendReasoningTextDelta(
+    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
+  ): void {
+    const id = `thinking:${event.itemId ?? event.turnId ?? event.eventId}`
+    const existing = this.engine
+      .getThread(event.threadId)
+      .activities.find((activity) => activity.id === id)
+    if (existing?.resolved === true) return
+
+    const prevText = readPayloadString(existing?.payload, 'reasoningText') ?? ''
+    const merged = `${prevText}${event.payload.delta}`
+    const nextText =
+      merged.length > MAX_BUFFERED_REASONING_TEXT_CHARS
+        ? merged.slice(merged.length - MAX_BUFFERED_REASONING_TEXT_CHARS)
+        : merged
+
+    const existingKind = existing?.kind
+    const nextKind: OrchestrationThreadActivity['kind'] =
+      existingKind === 'task.started' || existingKind === 'task.progress'
+        ? 'task.progress'
+        : 'task.started'
+
+    const itemType = readPayloadString(existing?.payload, 'itemType') ?? 'reasoning'
+    const status = readPayloadString(existing?.payload, 'status') ?? 'inProgress'
+    const basePayload =
+      typeof existing?.payload === 'object' && existing.payload !== null
+        ? (existing.payload as Record<string, unknown>)
+        : {}
+
+    this.engine.upsertActivity(
+      {
+        id,
+        kind: nextKind,
+        tone: 'thinking',
+        summary: 'Thinking',
+        payload: {
+          ...basePayload,
+          itemType,
+          status,
+          reasoningText: nextText
+        },
+        turnId: event.turnId ?? existing?.turnId ?? null,
+        resolved: false,
         createdAt: event.createdAt
       },
       event.threadId
