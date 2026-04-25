@@ -1,0 +1,71 @@
+import type { InteractionMode, OrchestrationThreadActivity, ReasoningEffort, RuntimeMode } from '../../../../shared/agent'
+import type { OrchestrationCheckpointSummary } from '../../../../shared/agent'
+
+export type ComposerSelectOption = {
+  value: string
+  label: string
+}
+
+export interface ActiveSelection {
+  activeProjectId: string | null
+  activeChatId: string | null
+}
+
+export interface ThreadComposerPreference {
+  model?: string
+  effort?: ReasoningEffort
+  runtimeMode?: RuntimeMode
+  interactionMode?: InteractionMode
+}
+
+export type ThreadComposerPreferenceMap = Record<string, ThreadComposerPreference>
+
+export type SidebarTabId = 'review' | `plan:${string}`
+
+export interface ThreadSidebarState {
+  open: boolean
+  activeTabId: SidebarTabId | null
+}
+
+export type MessageTranscriptItem = {
+  id: string
+  kind: 'message'
+  sequence: number
+  createdAt: string
+  workDurationMs: number | null
+  message: import('../../../../shared/agent').OrchestrationMessage
+}
+
+export type ActivityTranscriptItem = {
+  id: string
+  kind: 'activity'
+  sequence: number
+  createdAt: string
+  activity: OrchestrationThreadActivity
+}
+
+export type TranscriptItem = MessageTranscriptItem | ActivityTranscriptItem
+
+export type TranscriptRenderGroup =
+  | { kind: 'non-tool'; item: TranscriptItem }
+  | { kind: 'tool-run'; id: string; activities: ActivityTranscriptItem[] }
+
+export type ApprovalDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel'
+
+export type OnApprove = (
+  activity: OrchestrationThreadActivity,
+  decision: ApprovalDecision
+) => Promise<void>
+
+export type OnAnswer = (
+  activity: OrchestrationThreadActivity,
+  answer: Record<string, unknown>
+) => Promise<void>
+
+export type OnPreviewDiff = (
+  summary: OrchestrationCheckpointSummary,
+  file: import('../../../../shared/agent').CheckpointFileChange,
+  rect: DOMRect
+) => void
+
+export type OnOpenDiff = (turnId: string | null, filePath?: string) => void
