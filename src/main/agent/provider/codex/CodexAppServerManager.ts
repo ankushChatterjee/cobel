@@ -242,7 +242,7 @@ export class CodexAppServerManager {
     input: string
     attachments?: Array<{ type: 'image'; url: string }>
     model?: string
-    effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+    effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
     interactionMode: InteractionMode
   }): Promise<{
     turnId: string
@@ -1091,21 +1091,21 @@ function optionalModel(model: string | undefined): { model?: string } {
 }
 
 function optionalEffort(
-  effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined
-): { effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' } {
+  effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh' | undefined
+): { effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh' } {
   return effort ? { effort } : {}
 }
 
 function optionalCollaborationMode(
   interactionMode: InteractionMode,
   model: string | undefined,
-  effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined
+  effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh' | undefined
 ): {
   collaborationMode?: {
     mode: InteractionMode
     settings: {
       model: string
-      reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null
+      reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh' | null
       developer_instructions: null
     }
   }
@@ -1127,13 +1127,14 @@ function optionalCollaborationMode(
 function readReasoningEffort(
   value: unknown,
   key: string
-): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
+): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh' | undefined {
   const candidate = readString(value, key)
   return candidate === 'none' ||
     candidate === 'minimal' ||
     candidate === 'low' ||
     candidate === 'medium' ||
     candidate === 'high' ||
+    candidate === 'max' ||
     candidate === 'xhigh'
     ? candidate
     : undefined
@@ -1142,7 +1143,7 @@ function readReasoningEffort(
 function readReasoningEffortOptions(
   value: unknown
 ): Array<{
-  reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+  reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
   description?: string
 }> | undefined {
   const candidate = readRecord(value).supportedReasoningEfforts

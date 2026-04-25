@@ -32,6 +32,7 @@ function isReasoningEffort(value: string | undefined): value is ReasoningEffort 
     value === 'low' ||
     value === 'medium' ||
     value === 'high' ||
+    value === 'max' ||
     value === 'xhigh'
   )
 }

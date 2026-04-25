@@ -1,8 +1,8 @@
-export type ProviderId = 'codex'
+export type ProviderId = 'codex' | 'opencode'
 
 export type RuntimeMode = 'approval-required' | 'auto-accept-edits' | 'full-access'
 export type InteractionMode = 'default' | 'plan'
-export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 
 export type ProviderSessionStatus = 'connecting' | 'ready' | 'running' | 'error' | 'closed'
 
@@ -98,7 +98,11 @@ export interface RuntimeEventBase {
     providerRequestId?: string
   }
   raw?: {
-    source: 'codex.app-server.notification' | 'codex.app-server.request' | 'fake.provider'
+    source:
+      | 'codex.app-server.notification'
+      | 'codex.app-server.request'
+      | 'fake.provider'
+      | 'opencode.sdk'
     method?: string
     payload: unknown
   }
@@ -540,11 +544,25 @@ export interface ModelInfo {
   description?: string
   hidden?: boolean
   isDefault?: boolean
+  /** App-level provider (codex vs opencode). */
+  providerId?: ProviderId
+  /** For OpenCode: upstream id from the model slug (e.g. anthropic in anthropic/claude-3). */
+  upstreamVendor?: string
   supportedReasoningEfforts?: Array<{
     reasoningEffort: ReasoningEffort
     description?: string
   }>
   defaultReasoningEffort?: ReasoningEffort
+  /**
+   * OpenCode: maps composer `reasoningEffort` (derived from each `Model.variants` **key**) to the
+   * exact `variant` string passed to the SDK (same key string OpenCode expects).
+   */
+  openCodeVariantByEffort?: Partial<Record<ReasoningEffort, string>>
+}
+
+export interface ModelCatalog {
+  providers: ProviderSummary[]
+  modelsByProvider: Partial<Record<ProviderId, ModelInfo[]>>
 }
 
 export interface ProjectSummary {
@@ -597,7 +615,7 @@ export interface AgentApi {
   respondToUserInput(input: RespondToUserInputInput): Promise<void>
   stopSession(input: StopSessionInput): Promise<void>
   listProviders(): Promise<ProviderSummary[]>
-  listModels(): Promise<ModelInfo[]>
+  listModelCatalog(): Promise<ModelCatalog>
   clearThread(input: { threadId: string }): Promise<void>
   getCheckpointDiff(input: CheckpointDiffRequest): Promise<CheckpointDiffResult>
   getCheckpointWorktreeDiff(

@@ -10,7 +10,7 @@ export const AGENT_CHANNELS = {
   respondToUserInput: 'agent:respond-to-user-input',
   stopSession: 'agent:stop-session',
   listProviders: 'agent:list-providers',
-  listModels: 'agent:list-models',
+  listModelCatalog: 'agent:list-model-catalog',
   clearThread: 'agent:clear-thread',
   getCheckpointDiff: 'agent:get-checkpoint-diff',
   getCheckpointWorktreeDiff: 'agent:get-checkpoint-worktree-diff',

@@ -1,5 +1,6 @@
-import type { ModelInfo, ReasoningEffort, RuntimeMode } from '../../../../shared/agent'
+import type { ModelInfo, ProviderId, ReasoningEffort, RuntimeMode } from '../../../../shared/agent'
 import { isReasoningEffort } from './storage'
+import type { ComposerSelectOption } from './types'
 
 export const runtimeModes: Array<{ value: RuntimeMode; label: string }> = [
   { value: 'approval-required', label: 'Guarded' },
@@ -47,6 +48,64 @@ export function getModelDisplayName(modelInfo: Pick<ModelInfo, 'id' | 'name'>): 
   return formatModelId(modelInfo.id)
 }
 
+function modelsForProvider(models: ModelInfo[], provider: ProviderId): ModelInfo[] {
+  return models.filter((m) => (m.providerId ?? 'codex') === provider)
+}
+
+/** Flat list for one app-level provider (used when thread is locked). */
+export function filterModelsForProvider(models: ModelInfo[], provider: ProviderId): ModelInfo[] {
+  return modelsForProvider(models, provider)
+}
+
+/**
+ * Dropdown rows: provider sections; under OpenCode, subgroup by upstream vendor (slug prefix).
+ */
+export function buildGroupedModelOptions(models: ModelInfo[]): ComposerSelectOption[] {
+  if (models.length === 0) {
+    return [{ value: '', label: 'Model list pending', kind: 'option' }]
+  }
+  const order: ProviderId[] = ['codex', 'opencode']
+  const out: ComposerSelectOption[] = []
+  for (const pid of order) {
+    const list = modelsForProvider(models, pid)
+    if (list.length === 0) continue
+    out.push({
+      kind: 'header',
+      value: `__group:${pid}`,
+      label: pid === 'codex' ? 'Codex' : 'OpenCode'
+    })
+    if (pid === 'opencode') {
+      const vendors = [...new Set(list.map((m) => m.upstreamVendor ?? 'models'))].sort()
+      for (const vendor of vendors) {
+        const vendorModels = list.filter((m) => (m.upstreamVendor ?? 'models') === vendor)
+        if (vendors.length > 1 || vendor !== 'models') {
+          out.push({
+            kind: 'header',
+            value: `__sub:${pid}:${vendor}`,
+            label: vendor
+          })
+        }
+        for (const m of vendorModels) {
+          out.push({
+            kind: 'option',
+            value: m.id,
+            label: getModelDisplayName(m)
+          })
+        }
+      }
+    } else {
+      for (const m of list) {
+        out.push({
+          kind: 'option',
+          value: m.id,
+          label: getModelDisplayName(m)
+        })
+      }
+    }
+  }
+  return out
+}
+
 export function getModelEfforts(modelInfo: ModelInfo | null): ReasoningEffort[] {
   const efforts = modelInfo?.supportedReasoningEfforts
     ?.map((option) => option.reasoningEffort)
@@ -72,7 +131,9 @@ export function formatEffortLabel(effort: ReasoningEffort): string {
       return 'Medium'
     case 'high':
       return 'High'
+    case 'max':
+      return 'Max'
     case 'xhigh':
-      return 'XHigh'
+      return 'Extra High'
   }
 }

@@ -6,7 +6,8 @@ import type {
   OrchestrationProposedPlan,
   OrchestrationSession,
   OrchestrationLatestTurn,
-  OrchestrationCheckpointSummary
+  OrchestrationCheckpointSummary,
+  ProviderId
 } from '../../../shared/agent'
 import type { ProjectSummary, ThreadShellSummary } from '../../../shared/agent'
 
@@ -269,7 +270,7 @@ function sessionRowToSession(row: SessionRow): OrchestrationSession {
   return {
     threadId: row.thread_id,
     status: row.status as OrchestrationSession['status'],
-    providerName: (row.provider_name as 'codex') ?? null,
+    providerName: (row.provider_name as ProviderId) ?? null,
     runtimeMode: row.runtime_mode as OrchestrationSession['runtimeMode'],
     interactionMode: row.interaction_mode as OrchestrationSession['interactionMode'],
     effort: (row.effort as OrchestrationSession['effort']) ?? undefined,

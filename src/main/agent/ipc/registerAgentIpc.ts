@@ -28,9 +28,9 @@ export function registerAgentIpc(backend: AgentBackend): void {
     return backend.listProviders()
   })
 
-  ipcMain.handle(AGENT_CHANNELS.listModels, async (event) => {
+  ipcMain.handle(AGENT_CHANNELS.listModelCatalog, async (event) => {
     validateSender(event)
-    return backend.listModels()
+    return backend.listModelCatalog()
   })
 
   ipcMain.handle(AGENT_CHANNELS.clearThread, async (event, input) => {
@@ -214,7 +214,7 @@ export function disposeAllAgentIpcSubscriptions(): void {
 export function removeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_CHANNELS.dispatchCommand)
   ipcMain.removeHandler(AGENT_CHANNELS.listProviders)
-  ipcMain.removeHandler(AGENT_CHANNELS.listModels)
+  ipcMain.removeHandler(AGENT_CHANNELS.listModelCatalog)
   ipcMain.removeHandler(AGENT_CHANNELS.clearThread)
   ipcMain.removeHandler(AGENT_CHANNELS.getCheckpointDiff)
   ipcMain.removeHandler(AGENT_CHANNELS.getCheckpointWorktreeDiff)

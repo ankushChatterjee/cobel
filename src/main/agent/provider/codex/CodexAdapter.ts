@@ -72,7 +72,8 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    return this.manager.listModels()
+    const models = await this.manager.listModels()
+    return models.map((m) => ({ ...m, providerId: 'codex' as const }))
   }
 
   async stopSession(input: { threadId: string }): Promise<void> {

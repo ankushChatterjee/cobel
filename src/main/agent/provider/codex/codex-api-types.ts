@@ -244,10 +244,10 @@ export interface ModelInfo {
   hidden?: boolean
   isDefault?: boolean
   supportedReasoningEfforts?: Array<{
-    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
     description?: string
   }>
-  defaultReasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+  defaultReasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 }
 
 export interface ModelListResponse {

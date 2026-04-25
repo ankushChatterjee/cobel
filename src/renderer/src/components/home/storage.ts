@@ -1,4 +1,4 @@
-import type { InteractionMode, RuntimeMode, ReasoningEffort } from '../../../../shared/agent'
+import type { InteractionMode, ProviderId, RuntimeMode, ReasoningEffort } from '../../../../shared/agent'
 import type { ActiveSelection, ThreadComposerPreferenceMap } from './types'
 
 export const activeSelectionKey = 'cobel.active.v1'
@@ -27,6 +27,10 @@ export function isInteractionMode(value: unknown): value is InteractionMode {
   return value === 'default' || value === 'plan'
 }
 
+export function isProviderId(value: unknown): value is ProviderId {
+  return value === 'codex' || value === 'opencode'
+}
+
 export function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return (
     value === 'none' ||
@@ -34,6 +38,7 @@ export function isReasoningEffort(value: unknown): value is ReasoningEffort {
     value === 'low' ||
     value === 'medium' ||
     value === 'high' ||
+    value === 'max' ||
     value === 'xhigh'
   )
 }
@@ -69,11 +74,13 @@ export function loadThreadComposerPreferences(): ThreadComposerPreferenceMap {
     for (const [threadId, value] of Object.entries(parsed)) {
       if (!threadId || typeof value !== 'object' || !value) continue
       const raw = value as {
+        provider?: unknown
         model?: unknown
         effort?: unknown
         runtimeMode?: unknown
         interactionMode?: unknown
       }
+      const provider = isProviderId(raw.provider) ? raw.provider : undefined
       const model =
         typeof raw.model === 'string' && raw.model.trim().length > 0 ? raw.model : undefined
       const effort = isReasoningEffort(raw.effort) ? raw.effort : undefined
@@ -81,8 +88,8 @@ export function loadThreadComposerPreferences(): ThreadComposerPreferenceMap {
       const interactionMode = isInteractionMode(raw.interactionMode)
         ? raw.interactionMode
         : undefined
-      if (!model && !effort && !runtimeMode && !interactionMode) continue
-      preferences[threadId] = { model, effort, runtimeMode, interactionMode }
+      if (!provider && !model && !effort && !runtimeMode && !interactionMode) continue
+      preferences[threadId] = { provider, model, effort, runtimeMode, interactionMode }
     }
     return preferences
   } catch {

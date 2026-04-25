@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
+  ModelCatalog,
   ModelInfo,
   OrchestrationThreadActivity,
   OrchestrationThreadStreamItem
@@ -209,17 +210,25 @@ describe('renderer app', () => {
     const models: ModelInfo[] = [
       {
         id: 'gpt-5.4-mini',
+        providerId: 'codex',
         isDefault: true,
         supportedReasoningEfforts: [{ reasoningEffort: 'minimal' }, { reasoningEffort: 'medium' }],
         defaultReasoningEffort: 'minimal'
       },
       {
         id: 'gpt-5.4',
+        providerId: 'codex',
         supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }],
         defaultReasoningEffort: 'low'
       }
     ]
-    window.agentApi.listModels = vi.fn(async () => models)
+    window.agentApi.listModelCatalog = vi.fn(async (): Promise<ModelCatalog> => ({
+      providers: [
+        { id: 'codex', name: 'Codex', status: 'available', detail: 'ok' },
+        { id: 'opencode', name: 'OpenCode', status: 'missing', detail: '' }
+      ],
+      modelsByProvider: { codex: models, opencode: [] }
+    }))
 
     render(<RouterProvider router={router} />)
 
@@ -276,11 +285,20 @@ describe('renderer app', () => {
   it('opens the model selector with Cmd+Shift+M and supports keyboard selection', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
-    window.agentApi.listModels = vi.fn(async () => [
-      { id: 'gpt-5.4-mini', isDefault: true },
-      { id: 'gpt-5.4' },
-      { id: 'gpt-5.3-codex' }
-    ])
+    window.agentApi.listModelCatalog = vi.fn(async (): Promise<ModelCatalog> => ({
+      providers: [
+        { id: 'codex', name: 'Codex', status: 'available', detail: 'ok' },
+        { id: 'opencode', name: 'OpenCode', status: 'missing', detail: '' }
+      ],
+      modelsByProvider: {
+        codex: [
+          { id: 'gpt-5.4-mini', providerId: 'codex', isDefault: true },
+          { id: 'gpt-5.4', providerId: 'codex' },
+          { id: 'gpt-5.3-codex', providerId: 'codex' }
+        ],
+        opencode: []
+      }
+    }))
 
     render(<RouterProvider router={router} />)
 

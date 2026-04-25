@@ -48,6 +48,37 @@ describe('AgentBackend', () => {
     )
   })
 
+  it('rejects thread.turn.start when provider does not match the locked thread provider', async () => {
+    const backend = new AgentBackend({ useFakeProvider: true })
+    const threadId = 'thread:provider-lock'
+    const createdAt = '2026-04-19T00:00:00.000Z'
+    await backend.dispatchCommand({
+      type: 'thread.turn.start',
+      commandId: 'cmd-lock-1',
+      threadId,
+      provider: 'codex',
+      input: 'first',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      createdAt
+    })
+    await backend.drain()
+    await expect(
+      backend.dispatchCommand({
+        type: 'thread.turn.start',
+        commandId: 'cmd-lock-2',
+        threadId,
+        provider: 'opencode',
+        input: 'second',
+        cwd: '/tmp/project',
+        runtimeMode: 'auto-accept-edits',
+        interactionMode: 'default',
+        createdAt
+      })
+    ).rejects.toThrow(/This thread is locked to provider/)
+  })
+
   it('persists the first-turn title seed and then applies an automatic rename', async () => {
     const backend = new AgentBackend({ useFakeProvider: true })
     const threadId = 'thread:first-turn-title'

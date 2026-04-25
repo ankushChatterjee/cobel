@@ -5,17 +5,43 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
 } from 'react'
-import { ArrowUp, Check, ChevronDown, Map as MapIcon, RotateCcw, Square, Zap } from 'lucide-react'
-import type { InteractionMode, ModelInfo, ReasoningEffort, RuntimeMode } from '../../../../shared/agent'
-import { formatEffortLabel, getModelDisplayName, getModelEfforts, runtimeModes } from './modelUtils'
-import { formatModelId } from './modelUtils'
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  Map as MapIcon,
+  RotateCcw,
+  Search,
+  Square,
+  Zap
+} from 'lucide-react'
+import type {
+  InteractionMode,
+  ModelInfo,
+  ProviderId,
+  ProviderSummary,
+  ReasoningEffort,
+  RuntimeMode
+} from '../../../../shared/agent'
+import {
+  filterModelsForProvider,
+  formatEffortLabel,
+  formatModelId,
+  getModelDisplayName,
+  getModelEfforts,
+  runtimeModes
+} from './modelUtils'
 import type { ComposerSelectOption } from './types'
 
-const composerSpacerStyle = { flex: 1 }
+
+function isHeaderRow(option: ComposerSelectOption): boolean {
+  return option.kind === 'header'
+}
 
 export function InteractionModeToggle({
   value,
@@ -92,19 +118,38 @@ export function ComposerDropdown({
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
   const listboxId = useId()
-  const activeOption = options.find((option) => option.value === value) ?? options[0]
+  const selectableOptions = useMemo(
+    () => options.filter((option) => !isHeaderRow(option)),
+    [options]
+  )
+  const activeOption =
+    selectableOptions.find((option) => option.value === value) ?? selectableOptions[0] ?? options[0]
   const displayLabel = activeOption?.label ?? ''
   const activeIndex = Math.max(
     0,
-    options.findIndex((option) => option.value === activeOption?.value)
+    options.findIndex((option) => option.value === activeOption?.value && !isHeaderRow(option))
+  )
+
+  const nextSelectableIndex = useCallback(
+    (from: number, direction: 1 | -1): number => {
+      if (options.length === 0) return 0
+      let i = from
+      for (let step = 0; step < options.length; step += 1) {
+        i = (i + direction + options.length) % options.length
+        if (!isHeaderRow(options[i])) return i
+      }
+      return from
+    },
+    [options]
   )
 
   useEffect(() => {
     if (!isOpen) return
-    setHighlightedIndex(activeIndex)
-    const frame = window.requestAnimationFrame(() => optionRefs.current[activeIndex]?.focus())
+    const start = activeIndex >= 0 ? activeIndex : nextSelectableIndex(0, 1)
+    setHighlightedIndex(start)
+    const frame = window.requestAnimationFrame(() => optionRefs.current[start]?.focus())
     return () => window.cancelAnimationFrame(frame)
-  }, [activeIndex, isOpen])
+  }, [activeIndex, isOpen, nextSelectableIndex])
 
   useEffect(() => {
     if (!shortcut || disabled) return
@@ -148,12 +193,12 @@ export function ComposerDropdown({
   const moveHighlight = useCallback(
     (direction: 1 | -1): void => {
       setHighlightedIndex((currentIndex) => {
-        const nextIndex = (currentIndex + direction + options.length) % options.length
+        const nextIndex = nextSelectableIndex(currentIndex, direction)
         window.requestAnimationFrame(() => optionRefs.current[nextIndex]?.focus())
         return nextIndex
       })
     },
-    [options.length]
+    [nextSelectableIndex]
   )
 
   const openMenu = useCallback((): void => {
@@ -163,11 +208,13 @@ export function ComposerDropdown({
 
   const chooseOption = useCallback(
     (nextValue: string): void => {
+      const picked = options.find((o) => o.value === nextValue)
+      if (picked && isHeaderRow(picked)) return
       onChange(nextValue)
       setIsOpen(false)
       triggerRef.current?.focus()
     },
-    [onChange]
+    [onChange, options]
   )
 
   const handleTriggerKeyDown = useCallback(
@@ -196,14 +243,15 @@ export function ComposerDropdown({
 
       if (event.key === 'Home') {
         event.preventDefault()
-        setHighlightedIndex(0)
-        optionRefs.current[0]?.focus()
+        const firstIndex = nextSelectableIndex(0, 1)
+        setHighlightedIndex(firstIndex)
+        optionRefs.current[firstIndex]?.focus()
         return
       }
 
       if (event.key === 'End') {
         event.preventDefault()
-        const lastIndex = options.length - 1
+        const lastIndex = nextSelectableIndex(0, -1)
         setHighlightedIndex(lastIndex)
         optionRefs.current[lastIndex]?.focus()
         return
@@ -214,7 +262,7 @@ export function ComposerDropdown({
         chooseOption(optionValue)
       }
     },
-    [chooseOption, moveHighlight, options.length]
+    [chooseOption, moveHighlight, nextSelectableIndex]
   )
 
   return (
@@ -227,11 +275,13 @@ export function ComposerDropdown({
         disabled={disabled}
         tabIndex={-1}
       >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
+        {options
+          .filter((option) => !isHeaderRow(option))
+          .map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
       </select>
       <button
         ref={triggerRef}
@@ -252,6 +302,17 @@ export function ComposerDropdown({
         <div className="composer-select-popover" role="listbox" id={listboxId}>
           <div className="composer-select-options">
             {options.map((option, index) => {
+              if (isHeaderRow(option)) {
+                return (
+                  <div
+                    key={option.value}
+                    className="composer-select-group-label"
+                    role="presentation"
+                  >
+                    {option.label}
+                  </div>
+                )
+              }
               const isSelected = option.value === value
               return (
                 <button
@@ -286,14 +347,374 @@ export function ComposerDropdown({
   )
 }
 
+function searchFilterModels(list: ModelInfo[], query: string): ModelInfo[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return list
+  return list.filter((m) => {
+    const label = getModelDisplayName(m).toLowerCase()
+    const id = m.id.toLowerCase()
+    const name = (m.name ?? '').toLowerCase()
+    const vendor = (m.upstreamVendor ?? '').toLowerCase()
+    return label.includes(q) || id.includes(q) || name.includes(q) || vendor.includes(q)
+  })
+}
+
+function providerSummaryName(summaries: ProviderSummary[], id: ProviderId): string {
+  return summaries.find((s) => s.id === id)?.name ?? (id === 'opencode' ? 'OpenCode' : 'Codex')
+}
+
+export function ProviderModelPicker({
+  disabled,
+  catalogModels,
+  providerSummaries,
+  selectedProviderId,
+  model,
+  providerLocked,
+  onModelChange,
+  shortcut,
+  shortcutLabel
+}: {
+  disabled: boolean
+  catalogModels: ModelInfo[]
+  providerSummaries: ProviderSummary[]
+  selectedProviderId: ProviderId
+  model: string
+  providerLocked: boolean
+  onModelChange: (modelId: string) => void
+  shortcut?: { key: string; metaKey?: boolean; shiftKey?: boolean }
+  shortcutLabel?: string
+}): React.JSX.Element {
+  const [isOpen, setIsOpen] = useState(false)
+  const [browseProviderId, setBrowseProviderId] = useState<ProviderId>(selectedProviderId)
+  const [search, setSearch] = useState('')
+  const [highlightedIndex, setHighlightedIndex] = useState(0)
+  const rootRef = useRef<HTMLSpanElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const dialogId = useId()
+  const listboxId = useId()
+  const searchId = useId()
+  const wasOpenRef = useRef(false)
+
+  const activeModel = useMemo(
+    () => catalogModels.find((candidate) => candidate.id === model) ?? null,
+    [catalogModels, model]
+  )
+  const triggerProviderLabel = providerSummaryName(providerSummaries, selectedProviderId)
+  const triggerModelLabel = activeModel
+    ? getModelDisplayName(activeModel)
+    : model
+      ? formatModelId(model)
+      : 'Model list pending'
+  const triggerTitle = `${triggerProviderLabel} · ${triggerModelLabel} (${shortcutLabel ?? '⌘⇧M'})`
+
+  const tabProviders = useMemo((): ProviderId[] => {
+    const ordered: ProviderId[] = ['codex', 'opencode']
+    if (providerSummaries.length > 0) {
+      const ids = new Set(providerSummaries.map((p) => p.id))
+      return ordered.filter((id) => ids.has(id))
+    }
+    const has = (pid: ProviderId): boolean =>
+      catalogModels.some((m) => (m.providerId ?? 'codex') === pid)
+    return ordered.filter(has)
+  }, [providerSummaries, catalogModels])
+
+  const effectiveBrowseId = providerLocked ? selectedProviderId : browseProviderId
+
+  const baseList = useMemo(
+    () => searchFilterModels(filterModelsForProvider(catalogModels, effectiveBrowseId), search),
+    [catalogModels, effectiveBrowseId, search]
+  )
+
+  useEffect(() => {
+    if (!isOpen) {
+      setBrowseProviderId(selectedProviderId)
+    }
+  }, [isOpen, selectedProviderId])
+
+  useLayoutEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      setBrowseProviderId(selectedProviderId)
+      setSearch('')
+      const list = searchFilterModels(
+        filterModelsForProvider(catalogModels, selectedProviderId),
+        ''
+      )
+      queueMicrotask(() => {
+        if (list.length === 0) {
+          searchInputRef.current?.focus()
+          return
+        }
+        const idx = list.findIndex((m) => m.id === model)
+        const start = idx >= 0 ? idx : 0
+        setHighlightedIndex(start)
+        window.requestAnimationFrame(() => optionRefs.current[start]?.focus())
+      })
+    }
+    wasOpenRef.current = isOpen
+  }, [isOpen, selectedProviderId, catalogModels, model])
+
+  useEffect(() => {
+    setHighlightedIndex((idx) => Math.min(idx, Math.max(0, baseList.length - 1)))
+  }, [baseList.length, search])
+
+  useEffect(() => {
+    if (!shortcut || disabled) return
+    const handleShortcut = (event: globalThis.KeyboardEvent): void => {
+      if (event.key.toLowerCase() !== shortcut.key.toLowerCase()) return
+      if (Boolean(shortcut.metaKey) !== event.metaKey) return
+      if (Boolean(shortcut.shiftKey) !== event.shiftKey) return
+      event.preventDefault()
+      setIsOpen(true)
+      triggerRef.current?.focus()
+    }
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [disabled, shortcut])
+
+  useEffect(() => {
+    if (!isOpen) return
+    const handlePointerDown = (event: globalThis.PointerEvent): void => {
+      if (rootRef.current?.contains(event.target as Node)) return
+      setIsOpen(false)
+    }
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setIsOpen(false)
+        triggerRef.current?.focus()
+      }
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isOpen])
+
+  const moveHighlight = useCallback(
+    (direction: 1 | -1): void => {
+      if (baseList.length === 0) return
+      setHighlightedIndex((current) => {
+        const next = (current + direction + baseList.length) % baseList.length
+        window.requestAnimationFrame(() => optionRefs.current[next]?.focus())
+        return next
+      })
+    },
+    [baseList.length]
+  )
+
+  const chooseModel = useCallback(
+    (modelId: string): void => {
+      onModelChange(modelId)
+      setIsOpen(false)
+      triggerRef.current?.focus()
+    },
+    [onModelChange]
+  )
+
+  const showTabs = !providerLocked && tabProviders.length > 1
+
+  const nativeOptions = useMemo(
+    () => filterModelsForProvider(catalogModels, selectedProviderId),
+    [catalogModels, selectedProviderId]
+  )
+
+  return (
+    <span ref={rootRef} className="composer-select-shell model-provider-select-shell">
+      <select
+        aria-label="Model"
+        className="sr-only composer-native-select"
+        value={nativeOptions.some((o) => o.id === model) ? model : nativeOptions[0]?.id ?? ''}
+        onChange={(event) => onModelChange(event.target.value)}
+        disabled={disabled}
+        tabIndex={-1}
+      >
+        {nativeOptions.map((option) => (
+          <option key={option.id} value={option.id}>
+            {getModelDisplayName(option)}
+          </option>
+        ))}
+      </select>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="composer-select-trigger composer-mpc-trigger"
+        disabled={disabled || catalogModels.length === 0}
+        title={triggerTitle}
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? dialogId : undefined}
+        onClick={() => setIsOpen((open) => !open)}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault()
+            setIsOpen(true)
+          }
+        }}
+      >
+        <span className="composer-mpc-trigger-stack">
+          <span className="composer-mpc-trigger-provider">{triggerProviderLabel}</span>
+          <span className="composer-mpc-trigger-model-row">
+            <span className="composer-select-value composer-mpc-trigger-model">
+              {triggerModelLabel}
+            </span>
+            <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" />
+          </span>
+        </span>
+      </button>
+      {isOpen ? (
+        <div
+          className="composer-select-popover composer-mpc-popover"
+          role="dialog"
+          aria-label="Model and provider"
+          id={dialogId}
+        >
+          {showTabs ? (
+            <div className="composer-mpc-tabs" role="tablist" aria-label="Provider">
+              {tabProviders.map((pid) => {
+                const summary = providerSummaries.find((s) => s.id === pid)
+                const selected = effectiveBrowseId === pid
+                return (
+                  <button
+                    key={pid}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    tabIndex={selected ? 0 : -1}
+                    className={`composer-mpc-tab${selected ? ' active' : ''}`}
+                    onClick={() => {
+                      setBrowseProviderId(pid)
+                      setSearch('')
+                      setHighlightedIndex(0)
+                      const nextList = searchFilterModels(
+                        filterModelsForProvider(catalogModels, pid),
+                        ''
+                      )
+                      window.requestAnimationFrame(() => {
+                        if (nextList.length > 0) {
+                          optionRefs.current[0]?.focus()
+                        } else {
+                          searchInputRef.current?.focus()
+                        }
+                      })
+                    }}
+                  >
+                    {summary?.name ?? pid}
+                  </button>
+                )
+              })}
+            </div>
+          ) : null}
+          <div className="composer-mpc-search-wrap">
+            <Search size={12} strokeWidth={1.8} aria-hidden="true" className="composer-mpc-search-icon" />
+            <input
+              ref={searchInputRef}
+              id={searchId}
+              type="search"
+              className="composer-mpc-search"
+              placeholder="Search models…"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                setHighlightedIndex(0)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowDown') {
+                  event.preventDefault()
+                  if (baseList.length > 0) {
+                    setHighlightedIndex(0)
+                    optionRefs.current[0]?.focus()
+                  }
+                }
+                if (event.key === 'Escape') {
+                  event.stopPropagation()
+                  setIsOpen(false)
+                  triggerRef.current?.focus()
+                }
+              }}
+              aria-label="Search models"
+            />
+          </div>
+          <div className="composer-mpc-list" role="listbox" id={listboxId} aria-labelledby={searchId}>
+            {baseList.length === 0 ? (
+              <div className="composer-mpc-empty">No models match your search.</div>
+            ) : (
+              baseList.map((m, index) => {
+                const isSelected = m.id === model
+                const highlighted = index === highlightedIndex
+                return (
+                  <button
+                    ref={(node) => {
+                      optionRefs.current[index] = node
+                    }}
+                    key={m.id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    className="composer-select-option composer-mpc-option"
+                    data-highlighted={highlighted}
+                    onClick={() => chooseModel(m.id)}
+                    onFocus={() => setHighlightedIndex(index)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'ArrowDown') {
+                        event.preventDefault()
+                        moveHighlight(1)
+                        return
+                      }
+                      if (event.key === 'ArrowUp') {
+                        event.preventDefault()
+                        if (index === 0) {
+                          searchInputRef.current?.focus()
+                          return
+                        }
+                        moveHighlight(-1)
+                        return
+                      }
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        chooseModel(m.id)
+                      }
+                    }}
+                  >
+                    <span className="composer-mpc-option-main">
+                      <span className="composer-mpc-option-title">{getModelDisplayName(m)}</span>
+                      {m.providerId === 'opencode' && m.upstreamVendor ? (
+                        <span className="composer-mpc-option-provider-line">{m.upstreamVendor}</span>
+                      ) : null}
+                    </span>
+                    {isSelected ? (
+                      <Check size={12} strokeWidth={1.8} aria-hidden="true" className="composer-mpc-option-check" />
+                    ) : null}
+                  </button>
+                )
+              })
+            )}
+          </div>
+          {shortcutLabel ? (
+            <div className="composer-select-hint" aria-hidden="true">
+              <span>Open model picker</span>
+              <kbd>{shortcutLabel}</kbd>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </span>
+  )
+}
+
 export const ChatComposer = memo(function ChatComposer({
   enabled,
   isRunning,
   interactionMode,
   runtimeMode,
-  models,
+  catalogModels,
   model,
   effort,
+  providerSummaries,
+  selectedProviderId,
+  providerLocked,
   onInteractionModeChange,
   onRuntimeModeChange,
   onModelChange,
@@ -306,9 +727,12 @@ export const ChatComposer = memo(function ChatComposer({
   isRunning: boolean
   interactionMode: InteractionMode
   runtimeMode: RuntimeMode
-  models: ModelInfo[]
+  catalogModels: ModelInfo[]
   model: string
   effort: ReasoningEffort
+  providerSummaries: ProviderSummary[]
+  selectedProviderId: ProviderId
+  providerLocked: boolean
   onInteractionModeChange: (mode: InteractionMode) => void
   onRuntimeModeChange: (mode: RuntimeMode) => void
   onModelChange: (model: string) => void
@@ -320,14 +744,9 @@ export const ChatComposer = memo(function ChatComposer({
   const [prompt, setPrompt] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const activeModel = useMemo(
-    () => models.find((candidate) => candidate.id === model) ?? null,
-    [model, models]
+    () => catalogModels.find((candidate) => candidate.id === model) ?? null,
+    [model, catalogModels]
   )
-  const modelTitle = useMemo(() => {
-    if (!model) return 'Model list pending'
-    if (activeModel) return `Model: ${getModelDisplayName(activeModel)}`
-    return `Model: ${formatModelId(model)}`
-  }, [activeModel, model])
   const effortOptions = useMemo<ComposerSelectOption[]>(
     () =>
       getModelEfforts(activeModel).map((value) => ({
@@ -341,13 +760,6 @@ export const ChatComposer = memo(function ChatComposer({
     [effort]
   )
   const modelShortcut = useMemo(() => ({ key: 'm', metaKey: true, shiftKey: true }), [])
-  const modelOptions = useMemo<ComposerSelectOption[]>(
-    () =>
-      models.length === 0
-        ? [{ value: '', label: 'Model list pending' }]
-        : models.map((m) => ({ value: m.id, label: getModelDisplayName(m) })),
-    [models]
-  )
   const runtimeModeOptions = useMemo<ComposerSelectOption[]>(
     () => runtimeModes.map((mode) => ({ value: mode.value, label: mode.label })),
     []
@@ -427,14 +839,14 @@ export const ChatComposer = memo(function ChatComposer({
           disabled={!enabled}
         />
         <span className="composer-divider" />
-        <ComposerDropdown
-          ariaLabel="Model"
-          className="model-select-shell"
-          value={model}
-          onChange={onModelChange}
-          options={modelOptions}
-          disabled={!enabled || models.length === 0}
-          title={`${modelTitle} (⌘⇧M)`}
+        <ProviderModelPicker
+          disabled={!enabled}
+          catalogModels={catalogModels}
+          providerSummaries={providerSummaries}
+          selectedProviderId={selectedProviderId}
+          model={model}
+          providerLocked={providerLocked}
+          onModelChange={onModelChange}
           shortcut={modelShortcut}
           shortcutLabel="⌘⇧M"
         />
@@ -447,25 +859,26 @@ export const ChatComposer = memo(function ChatComposer({
           disabled={!enabled || effortOptions.length === 0}
           title={effortTitle}
         />
-        <span style={composerSpacerStyle} />
-        {isRunning ? (
-          <div className="run-controls">
-            <button type="button" onClick={onInterrupt} title="Interrupt">
-              <RotateCcw size={10} strokeWidth={2} />
-            </button>
-            <button type="button" onClick={onStop} title="Stop">
-              <Square size={10} strokeWidth={2} />
-            </button>
-          </div>
-        ) : null}
-        <button
-          type="submit"
-          className="send-button"
-          disabled={!enabled || !prompt.trim() || isRunning}
-          title="Send (↵)"
-        >
-          <ArrowUp size={14} strokeWidth={3} />
-        </button>
+        <div className="composer-footer-trail">
+          {isRunning ? (
+            <div className="run-controls">
+              <button type="button" onClick={onInterrupt} title="Interrupt">
+                <RotateCcw size={10} strokeWidth={2} />
+              </button>
+              <button type="button" onClick={onStop} title="Stop">
+                <Square size={10} strokeWidth={2} />
+              </button>
+            </div>
+          ) : null}
+          <button
+            type="submit"
+            className="send-button"
+            disabled={!enabled || !prompt.trim() || isRunning}
+            title="Send (↵)"
+          >
+            <ArrowUp size={14} strokeWidth={3} />
+          </button>
+        </div>
       </div>
     </form>
   )
