@@ -819,7 +819,7 @@ export const ChatComposer = memo(function ChatComposer({
         value={prompt}
         onChange={(event) => setPrompt(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={enabled ? 'Ask Codex...' : 'Open a project to start chatting...'}
+        placeholder={enabled ? 'Ask for changes' : 'Open a project to start chatting...'}
         rows={1}
         disabled={!enabled}
       />

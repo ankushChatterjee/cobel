@@ -14,6 +14,12 @@ import { DEFAULT_THREAD_TITLE } from '../../../shared/threadTitle'
 window.scrollTo = vi.fn()
 Element.prototype.scrollIntoView = vi.fn()
 
+globalThis.ResizeObserver = class {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+
 const now = new Date('2026-04-19T00:00:00.000Z').toISOString()
 let sequence = 0
 const testThreads = new Map<string, OrchestrationThread>()

@@ -333,6 +333,13 @@ export class OpenCodeAdapter implements ProviderAdapter {
         resumeCursor,
         updatedAt: nowIso()
       }
+      await alive.client.session
+        .update({
+          sessionID: alive.openCodeSessionId,
+          directory: alive.directory,
+          permission: buildOpenCodePermissionRules(input.runtimeMode)
+        })
+        .catch(() => undefined)
       this.emit({
         ...buildEventBase({ threadId: input.threadId }),
         type: 'session.state.changed',
@@ -365,6 +372,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       }
     }
 
+    let createdSessionViaApi = false
     if (!openCodeSessionId) {
       const created = await client.session.create({
         title: `Thread ${input.threadId}`,
@@ -372,11 +380,22 @@ export class OpenCodeAdapter implements ProviderAdapter {
       })
       const sessionData = created.data as { id?: string } | undefined
       openCodeSessionId = sessionData?.id
+      createdSessionViaApi = true
     }
 
     if (!openCodeSessionId) {
       server.close()
       throw new Error('OpenCode could not create or resume a session (missing session id).')
+    }
+
+    if (!createdSessionViaApi) {
+      await client.session
+        .update({
+          sessionID: openCodeSessionId,
+          directory,
+          permission: buildOpenCodePermissionRules(input.runtimeMode)
+        })
+        .catch(() => undefined)
     }
 
     const { models: catalogModels } = await this.probe()

@@ -611,6 +611,11 @@
   scrollbar-color: var(--border-medium) transparent;
 }
 
+/* Scrollport content: observed for ResizeObserver stick-to-bottom (transcript, tools, reasoning). */
+.conversation-transcript-stack {
+  min-width: 0;
+}
+
 .status-line {
   display: flex;
   gap: 14px;

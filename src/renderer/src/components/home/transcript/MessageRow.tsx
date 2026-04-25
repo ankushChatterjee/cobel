@@ -1,5 +1,5 @@
 import { ChevronDown } from 'lucide-react'
-import { memo, useEffect, useId, useState } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { OrchestrationCheckpointSummary, OrchestrationMessage, CheckpointFileChange, OrchestrationThreadActivity } from '../../../../../shared/agent'
 import { readPayloadString } from '../activityUtils'
 import { ChangedFilePills } from '../../diff/DiffReview'
@@ -20,10 +20,18 @@ export const ThinkingRow = memo(function ThinkingRow({
   const statusLabel = isComplete ? 'thought' : 'thinking…'
   const contentId = useId()
   const [reasoningExpanded, setReasoningExpanded] = useState(() => !isComplete)
+  const reasoningBodyRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (isComplete) setReasoningExpanded(false)
   }, [isComplete])
+
+  useLayoutEffect(() => {
+    if (isComplete || !reasoningExpanded || !reasoningText) return
+    const el = reasoningBodyRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [isComplete, reasoningExpanded, reasoningText])
 
   if (hasReasoningBody) {
     return (
@@ -53,7 +61,9 @@ export const ThinkingRow = memo(function ThinkingRow({
           className={`transcript-reasoning-shell${reasoningExpanded ? ' is-expanded' : ''}`}
         >
           <div className="transcript-reasoning-measure">
-            <div className="transcript-reasoning-body">{reasoningText}</div>
+            <div ref={reasoningBodyRef} className="transcript-reasoning-body">
+              {reasoningText}
+            </div>
           </div>
         </div>
       </article>
