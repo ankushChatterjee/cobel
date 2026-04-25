@@ -9,6 +9,8 @@ import type {
   FilePartInput,
   Model,
   OpencodeClient,
+  PermissionAction,
+  PermissionRule,
   PermissionRuleset,
   Provider,
   ProviderListResponse,
@@ -129,21 +131,72 @@ export function toOpenCodeFileParts(input: {
   return parts
 }
 
+/**
+ * `PermissionRule.permission` values — must match `PermissionConfig` in `@opencode-ai/sdk/v2`
+ * (see opencode.ai/docs/permissions). All lowercase; multi-word guards use `snake_case`.
+ * OpenCode applies the **last** matching rule, so the `*` default comes first, then overrides.
+ */
+const OPENCODE_PERM = {
+  wildcard: '*',
+  bash: 'bash',
+  read: 'read',
+  edit: 'edit',
+  glob: 'glob',
+  grep: 'grep',
+  list: 'list',
+  lsp: 'lsp',
+  question: 'question',
+  webfetch: 'webfetch',
+  websearch: 'websearch',
+  codesearch: 'codesearch',
+  task: 'task',
+  skill: 'skill',
+  external_directory: 'external_directory',
+  doom_loop: 'doom_loop',
+  todowrite: 'todowrite'
+} as const
+
+type OpenCodePermissionKey = (typeof OPENCODE_PERM)[keyof typeof OPENCODE_PERM]
+
+function openCodePermissionRule(permission: OpenCodePermissionKey, action: PermissionAction): PermissionRule {
+  return { permission, pattern: '*', action }
+}
+
 export function buildOpenCodePermissionRules(runtimeMode: RuntimeMode): PermissionRuleset {
-  if (runtimeMode === 'full-access') {
-    return [{ permission: '*', pattern: '*', action: 'allow' }]
+  switch (runtimeMode) {
+    case 'full-access':
+      return [openCodePermissionRule(OPENCODE_PERM.wildcard, 'allow')]
+    case 'auto-accept-edits':
+      return [
+        openCodePermissionRule(OPENCODE_PERM.wildcard, 'ask'),
+        openCodePermissionRule(OPENCODE_PERM.question, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.todowrite, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.read, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.glob, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.grep, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.list, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.lsp, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.edit, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.websearch, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.webfetch, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.codesearch, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.task, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.skill, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.bash, 'ask'),
+        openCodePermissionRule(OPENCODE_PERM.external_directory, 'ask'),
+        openCodePermissionRule(OPENCODE_PERM.doom_loop, 'ask')
+      ]
+    case 'approval-required':
+      return [
+        openCodePermissionRule(OPENCODE_PERM.wildcard, 'ask'),
+        openCodePermissionRule(OPENCODE_PERM.question, 'allow'),
+        openCodePermissionRule(OPENCODE_PERM.todowrite, 'allow')
+      ]
+    default: {
+      const _exhaustive: never = runtimeMode
+      return _exhaustive
+    }
   }
-  return [
-    { permission: '*', pattern: '*', action: 'ask' },
-    { permission: 'bash', pattern: '*', action: 'ask' },
-    { permission: 'edit', pattern: '*', action: 'ask' },
-    { permission: 'webfetch', pattern: '*', action: 'ask' },
-    { permission: 'websearch', pattern: '*', action: 'ask' },
-    { permission: 'codesearch', pattern: '*', action: 'ask' },
-    { permission: 'external_directory', pattern: '*', action: 'ask' },
-    { permission: 'doom_loop', pattern: '*', action: 'ask' },
-    { permission: 'question', pattern: '*', action: 'allow' }
-  ]
 }
 
 export function toOpenCodePermissionReply(

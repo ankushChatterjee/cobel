@@ -111,7 +111,11 @@ export function HomePage(): React.JSX.Element {
   const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const diffPanelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const conversationRef = useRef<HTMLElement | null>(null)
+  const transcriptStackRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const stickToBottomRafRef = useRef(0)
+  /** Ignore `onScroll` while we adjust scroll position so smooth/CSS scroll does not clear stick-to-bottom. */
+  const suppressConversationScrollRef = useRef(false)
   const shouldStickToBottomRef = useRef(true)
   const pendingUserMessagesRef = useRef(new Map<string, OrchestrationMessage>())
   const [error, setError] = useState<string | null>(null)
@@ -451,20 +455,55 @@ export function HomePage(): React.JSX.Element {
     return unsubscribe
   }, [activeThreadId])
 
-  useEffect(() => {
-    shouldStickToBottomRef.current = true
-    const frame = window.requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({ block: 'end', behavior: 'instant' })
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [activeThreadId])
-
-  useLayoutEffect(() => {
+  const scrollConversationToBottomIfStuck = useCallback((): void => {
     if (!shouldStickToBottomRef.current) return
     const el = conversationRef.current
     if (!el) return
+    suppressConversationScrollRef.current = true
     el.scrollTop = el.scrollHeight
-  }, [thread])
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        suppressConversationScrollRef.current = false
+      })
+    })
+  }, [])
+
+  const scheduleStickConversationToBottom = useCallback((): void => {
+    if (!shouldStickToBottomRef.current) return
+    if (stickToBottomRafRef.current !== 0) return
+    stickToBottomRafRef.current = window.requestAnimationFrame(() => {
+      stickToBottomRafRef.current = 0
+      scrollConversationToBottomIfStuck()
+    })
+  }, [scrollConversationToBottomIfStuck])
+
+  useLayoutEffect(() => {
+    scrollConversationToBottomIfStuck()
+  }, [thread, scrollConversationToBottomIfStuck])
+
+  useEffect(() => {
+    const stack = transcriptStackRef.current
+    if (!stack || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      scheduleStickConversationToBottom()
+    })
+    ro.observe(stack)
+    return () => {
+      ro.disconnect()
+      if (stickToBottomRafRef.current !== 0) {
+        window.cancelAnimationFrame(stickToBottomRafRef.current)
+        stickToBottomRafRef.current = 0
+      }
+    }
+  }, [scheduleStickConversationToBottom])
+
+  useEffect(() => {
+    shouldStickToBottomRef.current = true
+    const frame = window.requestAnimationFrame(() => {
+      scrollConversationToBottomIfStuck()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeThreadId, scrollConversationToBottomIfStuck])
 
   const sendPrompt = useCallback(
     async (input: string): Promise<boolean> => {
@@ -707,6 +746,7 @@ export function HomePage(): React.JSX.Element {
   }
 
   function handleConversationScroll(): void {
+    if (suppressConversationScrollRef.current) return
     const element = conversationRef.current
     if (!element) return
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
@@ -1063,34 +1103,36 @@ export function HomePage(): React.JSX.Element {
               <span>{providerStatusLine}</span>
             </div>
 
-            {!activeProject ? (
-              <div className="empty-state">
-                <p>What would you build?</p>
-              </div>
-            ) : transcriptItems.length === 0 ? (
-              <div className="empty-state">
-                <p>What would you build?</p>
-              </div>
-            ) : (
-              <TranscriptList
-                items={transcriptItems}
-                showPendingThinking={showPendingThinking}
-                expandedToolIds={expandedToolIds}
-                submittingApprovals={submittingApprovals}
-                checkpointByAssistantMessageId={checkpointByAssistantMessageId}
-                onToggleTool={toggleToolExpanded}
-                onApprove={respondToApproval}
-                onAnswer={respondToUserInput}
-                onPreviewDiff={showDiffPreview}
-                onOpenDiff={(turnId, filePath) =>
-                  openDiffPanel({ mode: turnId ? 'turn' : 'full', turnId, filePath })
-                }
-                onRevert={requestRevertToCheckpoint}
-              />
-            )}
-            {sessionError ? <SessionErrorBanner message={sessionError} /> : null}
-            {error ? <p className="error-line">{errorMessageForDisplay(error)}</p> : null}
-            <div ref={bottomRef} />
+            <div ref={transcriptStackRef} className="conversation-transcript-stack">
+              {!activeProject ? (
+                <div className="empty-state">
+                  <p>What would you build?</p>
+                </div>
+              ) : transcriptItems.length === 0 ? (
+                <div className="empty-state">
+                  <p>What would you build?</p>
+                </div>
+              ) : (
+                <TranscriptList
+                  items={transcriptItems}
+                  showPendingThinking={showPendingThinking}
+                  expandedToolIds={expandedToolIds}
+                  submittingApprovals={submittingApprovals}
+                  checkpointByAssistantMessageId={checkpointByAssistantMessageId}
+                  onToggleTool={toggleToolExpanded}
+                  onApprove={respondToApproval}
+                  onAnswer={respondToUserInput}
+                  onPreviewDiff={showDiffPreview}
+                  onOpenDiff={(turnId, filePath) =>
+                    openDiffPanel({ mode: turnId ? 'turn' : 'full', turnId, filePath })
+                  }
+                  onRevert={requestRevertToCheckpoint}
+                />
+              )}
+              {sessionError ? <SessionErrorBanner message={sessionError} /> : null}
+              {error ? <p className="error-line">{errorMessageForDisplay(error)}</p> : null}
+              <div ref={bottomRef} />
+            </div>
           </section>
 
           <div className="composer-wrap">
