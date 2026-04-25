@@ -178,6 +178,19 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     sql: `
       ALTER TABLE projection_thread_sessions ADD COLUMN effort TEXT;
     `
+  },
+  {
+    name: '004_interaction_mode',
+    sql: `
+      ALTER TABLE projection_thread_sessions ADD COLUMN interaction_mode TEXT NOT NULL DEFAULT 'default';
+      ALTER TABLE provider_session_runtime ADD COLUMN interaction_mode TEXT NOT NULL DEFAULT 'default';
+    `
+  },
+  {
+    name: '005_active_plan_id',
+    sql: `
+      ALTER TABLE projection_thread_sessions ADD COLUMN active_plan_id TEXT;
+    `
   }
 ]
 

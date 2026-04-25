@@ -2,6 +2,7 @@ import type {
   CanonicalItemType,
   OrchestrationMessage,
   OrchestrationProposedPlan,
+  ReasoningEffort,
   OrchestrationThreadActivity,
   ProviderRuntimeEvent,
   RuntimeContentStreamKind,
@@ -21,6 +22,18 @@ interface AssistantSegmentState {
 interface PlanBufferState {
   text: string
   createdAt: string
+}
+
+function isReasoningEffort(value: string | undefined): value is ReasoningEffort {
+  return (
+    value === undefined ||
+    value === 'none' ||
+    value === 'minimal' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'xhigh'
+  )
 }
 
 export class ProviderRuntimeIngestion {
@@ -71,12 +84,18 @@ export class ProviderRuntimeIngestion {
           providerName: event.provider,
           runtimeMode:
             this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
+          interactionMode:
+            this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
           effort: this.engine.getThread(event.threadId).session?.effort,
           activeTurnId:
             event.payload.state === 'running'
               ? (event.turnId ??
                 this.engine.getThread(event.threadId).session?.activeTurnId ??
                 null)
+              : null,
+          activePlanId:
+            event.payload.state === 'running'
+              ? (this.engine.getThread(event.threadId).session?.activePlanId ?? null)
               : null,
           lastError:
             event.payload.state === 'error' ? (event.payload.reason ?? 'Provider error') : null,
@@ -85,6 +104,10 @@ export class ProviderRuntimeIngestion {
         return
 
       case 'turn.started':
+        const currentEffort = this.engine.getThread(event.threadId).session?.effort
+        const nextEffort = isReasoningEffort(event.payload.effort)
+          ? event.payload.effort
+          : currentEffort
         this.engine.setLatestTurn(event.threadId, {
           id: event.turnId ?? event.eventId,
           status: 'running',
@@ -97,8 +120,11 @@ export class ProviderRuntimeIngestion {
           providerName: event.provider,
           runtimeMode:
             this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
-          effort: event.payload.effort ?? this.engine.getThread(event.threadId).session?.effort,
+          interactionMode:
+            this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
+          effort: nextEffort,
           activeTurnId: event.turnId ?? null,
+          activePlanId: this.engine.getThread(event.threadId).session?.activePlanId ?? null,
           lastError: null,
           createdAt: event.createdAt
         })
@@ -143,8 +169,11 @@ export class ProviderRuntimeIngestion {
           providerName: event.provider,
           runtimeMode:
             this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
+          interactionMode:
+            this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
           effort: this.engine.getThread(event.threadId).session?.effort,
           activeTurnId: event.turnId ?? null,
+          activePlanId: this.engine.getThread(event.threadId).session?.activePlanId ?? null,
           lastError: null,
           createdAt: event.createdAt
         })
@@ -233,7 +262,11 @@ export class ProviderRuntimeIngestion {
             providerName: event.provider,
             runtimeMode:
               this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
+            interactionMode:
+              this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
+            effort: this.engine.getThread(event.threadId).session?.effort,
             activeTurnId: null,
+            activePlanId: null,
             lastError: event.payload.message,
             createdAt: event.createdAt
           })
@@ -307,6 +340,10 @@ export class ProviderRuntimeIngestion {
       this.ingestThinking(event)
       return
     }
+    if (event.payload.itemType === 'plan') {
+      this.ingestPlanItem(event)
+      return
+    }
 
     const id = toolActivityId(event)
     const existing = this.engine
@@ -344,6 +381,21 @@ export class ProviderRuntimeIngestion {
       },
       event.threadId
     )
+  }
+
+  private ingestPlanItem(
+    event: Extract<
+      ProviderRuntimeEvent,
+      { type: 'item.started' | 'item.updated' | 'item.completed' }
+    >
+  ): void {
+    if (event.type !== 'item.completed') return
+    const text = normalizeProposedPlanText(
+      readNestedPayloadString(event.payload.data, 'item', 'text') ??
+        readNestedPayloadString(event.payload.data, 'text')
+    )
+    if (!text) return
+    this.finalizePlan(event, text)
   }
 
   private ingestAssistantItem(
@@ -527,17 +579,23 @@ export class ProviderRuntimeIngestion {
     )
   }
 
-  private finalizePlan(event: ProviderRuntimeEvent): void {
+  private finalizePlan(event: ProviderRuntimeEvent, fallbackText?: string): void {
     const turnId = event.turnId ?? event.eventId
     const key = this.planKey(event.threadId, turnId)
     const buffer = this.planBuffers.get(key)
-    if (!buffer || buffer.text.trim().length === 0) return
+    const text = normalizeProposedPlanText(buffer?.text) ?? normalizeProposedPlanText(fallbackText)
+    if (!text) return
+    const thread = this.engine.getThread(event.threadId)
+    const existingPlanId = thread.session?.activePlanId
+    const existingPlan = existingPlanId
+      ? thread.proposedPlans.find((plan) => plan.id === existingPlanId) ?? null
+      : null
     const proposedPlan: OrchestrationProposedPlan = {
-      id: `plan:${event.threadId}:turn:${turnId}`,
+      id: existingPlan?.id ?? `plan:${event.threadId}:turn:${turnId}`,
       turnId,
-      text: buffer.text,
+      text,
       status: 'proposed',
-      createdAt: buffer.createdAt,
+      createdAt: existingPlan?.createdAt ?? buffer?.createdAt ?? event.createdAt,
       updatedAt: event.createdAt
     }
     this.engine.upsertProposedPlan(proposedPlan, event.threadId)
@@ -571,7 +629,10 @@ export class ProviderRuntimeIngestion {
             : 'error',
       providerName: event.provider,
       runtimeMode: thread.session?.runtimeMode ?? 'auto-accept-edits',
+      interactionMode: thread.session?.interactionMode ?? 'default',
+      effort: thread.session?.effort,
       activeTurnId: null,
+      activePlanId: null,
       lastError: event.payload.errorMessage ?? null,
       createdAt: event.createdAt
     })
@@ -775,6 +836,16 @@ function readNestedPayloadString(value: unknown, ...keys: string[]): string | un
   const item = record.item
   if (typeof item === 'object' && item !== null) return readNestedPayloadString(item, ...keys)
   return undefined
+}
+
+function normalizeProposedPlanText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  if (!trimmed) return undefined
+  const unwrapped = trimmed.replace(
+    /^<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>$/i,
+    '$1'
+  )
+  return unwrapped.trim() || undefined
 }
 
 function activityBelongsToTurn(

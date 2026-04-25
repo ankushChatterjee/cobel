@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import type {
   ChatAttachment,
+  InteractionMode,
   OrchestrationEvent,
   OrchestrationLatestTurn,
   OrchestrationMessage,
@@ -188,8 +189,10 @@ export class OrchestrationEngine {
     status: OrchestrationSession['status']
     providerName: OrchestrationSession['providerName']
     runtimeMode: RuntimeMode
+    interactionMode: InteractionMode
     effort?: OrchestrationSession['effort']
     activeTurnId: string | null
+    activePlanId: string | null
     lastError: string | null
     createdAt?: string
   }): OrchestrationSession {
@@ -200,8 +203,10 @@ export class OrchestrationEngine {
       status: input.status,
       providerName: input.providerName,
       runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
       effort: input.effort,
       activeTurnId: input.activeTurnId,
+      activePlanId: input.activePlanId,
       lastError: input.lastError,
       updatedAt: now
     }

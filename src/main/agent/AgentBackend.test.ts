@@ -28,6 +28,7 @@ describe('AgentBackend', () => {
       input: 'Implement the test path',
       cwd: '/tmp/project',
       runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
       createdAt: '2026-04-19T00:00:00.000Z'
     })
     await backend.drain()
@@ -80,6 +81,7 @@ describe('AgentBackend', () => {
       titleSeed: 'Please build the provider layer',
       cwd: '/tmp/naming',
       runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
       createdAt
     })
     await backend.drain()
@@ -120,6 +122,7 @@ describe('AgentBackend', () => {
       titleSeed: 'Please build the provider layer',
       cwd: '/tmp/naming',
       runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
       createdAt
     })
     await backend.dispatchCommand({
@@ -167,6 +170,7 @@ describe('AgentBackend', () => {
       titleSeed: 'Please build the provider layer',
       cwd: '/tmp/naming',
       runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
       createdAt
     })
     await backend.drain()
@@ -180,6 +184,7 @@ describe('AgentBackend', () => {
       titleSeed: 'Please refactor the sidebar layout',
       cwd: '/tmp/naming',
       runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
       createdAt: '2026-04-24T00:00:02.000Z'
     })
     await backend.drain()
@@ -223,6 +228,7 @@ describe('AgentBackend', () => {
       input: 'Hello world',
       cwd: '/tmp/test',
       runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
       createdAt: new Date().toISOString()
     })
     await backendA.drain()
@@ -259,6 +265,7 @@ describe('AgentBackend', () => {
       input: 'test',
       cwd: '/tmp',
       runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
       createdAt: new Date().toISOString()
     })
     await backendA.drain()

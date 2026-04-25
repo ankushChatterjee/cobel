@@ -197,8 +197,10 @@ export class AgentBackend {
           status: 'starting',
           providerName: input.provider,
           runtimeMode: input.runtimeMode,
+          interactionMode: input.interactionMode,
           effort: sanitizeOptionalEffort(input.effort),
           activeTurnId: null,
+          activePlanId: sanitizeOptionalString(input.targetPlanId) ?? null,
           lastError: null,
           createdAt: input.createdAt
         })
@@ -209,6 +211,7 @@ export class AgentBackend {
           cwd: input.cwd,
           model: sanitizeOptionalString(input.model),
           runtimeMode: input.runtimeMode,
+          interactionMode: input.interactionMode,
           resumeCursor
         })
         await this.checkpointReactor.ensureBaseline({
@@ -221,12 +224,14 @@ export class AgentBackend {
           input: input.input,
           attachments: input.attachments,
           model: sanitizeOptionalString(input.model),
-          effort: sanitizeOptionalEffort(input.effort)
+          effort: sanitizeOptionalEffort(input.effort),
+          interactionMode: input.interactionMode
         })
         if (result.resumeCursor) {
           this.directory.upsert(input.threadId, {
             provider: input.provider,
             runtimeMode: input.runtimeMode,
+            interactionMode: input.interactionMode,
             status: 'running',
             resumeCursor: result.resumeCursor
           })
@@ -455,6 +460,9 @@ function assertCommand(input: ClientOrchestrationCommand): void {
     }
     if (input.titleSeed !== undefined && typeof input.titleSeed !== 'string') {
       throw new Error('Thread title seed must be a string when provided.')
+    }
+    if (input.targetPlanId !== undefined && typeof input.targetPlanId !== 'string') {
+      throw new Error('Target plan id must be a string when provided.')
     }
   }
   if (input.type === 'thread.checkpoint.commit' && input.message.trim().length === 0) {

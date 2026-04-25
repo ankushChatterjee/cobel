@@ -21,6 +21,7 @@ describe('ProviderSessionDirectory', () => {
     directory.upsert('thread-1', {
       provider: 'codex',
       runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
       status: 'running',
       resumeCursor: { threadId: 'codex-thread-abc' }
     })
@@ -36,6 +37,7 @@ describe('ProviderSessionDirectory', () => {
     directory.upsert('thread-2', {
       provider: 'codex',
       runtimeMode: 'full-access',
+      interactionMode: 'default',
       status: 'ready',
       resumeCursor: { threadId: 'codex-xyz' }
     })
@@ -46,12 +48,14 @@ describe('ProviderSessionDirectory', () => {
     directory.upsert('thread-3', {
       provider: 'codex',
       runtimeMode: 'approval-required',
+      interactionMode: 'default',
       status: 'ready',
       resumeCursor: { threadId: 'old-id' }
     })
     directory.upsert('thread-3', {
       provider: 'codex',
       runtimeMode: 'auto-accept-edits',
+      interactionMode: 'plan',
       status: 'running',
       resumeCursor: { threadId: 'new-id' }
     })
@@ -63,6 +67,7 @@ describe('ProviderSessionDirectory', () => {
     directory.upsert('thread-4', {
       provider: 'codex',
       runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
       status: 'running',
       resumeCursor: { threadId: 'some-id' }
     })
@@ -74,6 +79,7 @@ describe('ProviderSessionDirectory', () => {
     directory.upsert('thread-5', {
       provider: 'codex',
       runtimeMode: 'full-access',
+      interactionMode: 'default',
       status: 'closed'
     })
     expect(directory.get('thread-5')?.resumeCursor).toBeUndefined()

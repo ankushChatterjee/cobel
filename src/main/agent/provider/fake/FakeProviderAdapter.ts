@@ -24,6 +24,7 @@ export class FakeProviderAdapter implements ProviderAdapter {
       provider: 'codex',
       status: 'ready',
       runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
       cwd: input.cwd,
       model: input.model,
       threadId: input.threadId,

@@ -3,10 +3,14 @@ import { StrictMode } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { OrchestrationThreadActivity, OrchestrationThreadStreamItem } from '../../shared/agent'
+import type {
+  ModelInfo,
+  OrchestrationThreadActivity,
+  OrchestrationThreadStreamItem
+} from '../../shared/agent'
 import { DEFAULT_THREAD_TITLE } from '../../shared/threadTitle'
 import { createAppRouter } from './router'
-import { resetAgentApiMock } from './test/setup'
+import { createTestThread, resetAgentApiMock } from './test/setup'
 
 function mockThreadSnapshotWithActivities(activities: OrchestrationThreadActivity[]): void {
   window.agentApi.subscribeThread = vi.fn((_input, listener) => {
@@ -60,11 +64,38 @@ describe('renderer app', () => {
 
     render(<RouterProvider router={router} />)
 
-    const runtimeSelect = (await screen.findByLabelText(/runtime mode/i)) as HTMLSelectElement
+    const runtimeSelect = (await screen.findByLabelText(/^runtime mode$/i)) as HTMLSelectElement
     const optionValues = Array.from(runtimeSelect.options).map((option) => option.value)
 
     expect(runtimeSelect).toHaveValue('auto-accept-edits')
     expect(optionValues).toContain('full-access')
+  })
+
+  it('can switch to Plan mode and dispatch a turn with interactionMode plan', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    const planButton = await screen.findByRole('button', { name: /^plan$/i })
+    await user.click(planButton)
+    expect(planButton).toHaveAttribute('aria-pressed', 'true')
+
+    const composer = await screen.findByRole('textbox', { name: /ask codex/i })
+    await user.type(composer, 'Plan the implementation')
+    await user.click(screen.getByRole('button', { name: /send/i }))
+
+    expect(window.agentApi.dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'thread.turn.start',
+        input: 'Plan the implementation',
+        runtimeMode: 'auto-accept-edits',
+        interactionMode: 'plan'
+      })
+    )
   })
 
   it('dispatches a turn command from the composer', async () => {
@@ -88,7 +119,8 @@ describe('renderer app', () => {
         titleSeed: 'Build the provider layer',
         cwd: '/Users/ankush/codespace/gencode',
         effort: 'medium',
-        runtimeMode: 'auto-accept-edits'
+        runtimeMode: 'auto-accept-edits',
+        interactionMode: 'default'
       })
     )
     expect(window.agentApi.dispatchCommand).not.toHaveBeenCalledWith(
@@ -101,10 +133,80 @@ describe('renderer app', () => {
     expect(screen.getByRole('heading', { name: 'Build the provider layer' })).toBeInTheDocument()
   })
 
+  it('reuses the active plan tab when sending plan feedback', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            proposedPlans: [
+              {
+                id: `plan:${_input.threadId}:turn:turn-plan-1`,
+                turnId: 'turn-plan-1',
+                text: '# Alpha plan\n\nShip the first version.',
+                status: 'proposed',
+                createdAt: '2026-04-19T00:00:00.000Z',
+                updatedAt: '2026-04-19T00:00:00.000Z'
+              }
+            ],
+            latestTurn: {
+              id: 'turn-plan-1',
+              status: 'completed',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: '2026-04-19T00:00:01.000Z'
+            },
+            session: {
+              threadId: _input.threadId,
+              status: 'ready',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              effort: 'medium',
+              activeTurnId: null,
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:01.000Z'
+            }
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    await screen.findByRole('tab', { name: 'Alpha plan' })
+    await user.click(screen.getByRole('tab', { name: 'Alpha plan' }))
+
+    const planModeButton = within(
+      screen.getByRole('group', { name: /interaction mode/i })
+    ).getByRole('button', { name: /^plan$/i })
+    await user.click(planModeButton)
+
+    const composer = await screen.findByRole('textbox', { name: /ask codex/i })
+    await user.type(composer, 'Tighten the rollout and add migration notes.')
+    await user.click(screen.getByRole('button', { name: /send/i }))
+
+    expect(window.agentApi.dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'thread.turn.start',
+        interactionMode: 'plan',
+        targetPlanId: expect.stringMatching(/^plan:.*:turn:turn-plan-1$/)
+      })
+    )
+  })
+
   it('persists model and runtime mode per thread', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
-    window.agentApi.listModels = vi.fn(async () => [
+    const models: ModelInfo[] = [
       {
         id: 'gpt-5.4-mini',
         isDefault: true,
@@ -116,14 +218,15 @@ describe('renderer app', () => {
         supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }],
         defaultReasoningEffort: 'low'
       }
-    ])
+    ]
+    window.agentApi.listModels = vi.fn(async () => models)
 
     render(<RouterProvider router={router} />)
 
     const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
     await user.click(openFolderButtons[0])
 
-    const runtimeSelect = (await screen.findByLabelText(/runtime mode/i)) as HTMLSelectElement
+    const runtimeSelect = (await screen.findByLabelText(/^runtime mode$/i)) as HTMLSelectElement
     const modelSelect = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
     const effortSelect = (await screen.findByLabelText(/effort/i)) as HTMLSelectElement
 
@@ -142,9 +245,7 @@ describe('renderer app', () => {
     expect(sidebarNewButton).not.toBeNull()
     await user.click(sidebarNewButton as HTMLButtonElement)
 
-    const runtimeSelectAfterNew = (await screen.findByLabelText(
-      /runtime mode/i
-    )) as HTMLSelectElement
+    const runtimeSelectAfterNew = (await screen.findByLabelText(/^runtime mode$/i)) as HTMLSelectElement
     const modelSelectAfterNew = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
     const effortSelectAfterNew = (await screen.findByLabelText(/effort/i)) as HTMLSelectElement
 
@@ -161,9 +262,7 @@ describe('renderer app', () => {
 
     await user.click(threadButtons[0])
 
-    const runtimeSelectAfterReturn = (await screen.findByLabelText(
-      /runtime mode/i
-    )) as HTMLSelectElement
+    const runtimeSelectAfterReturn = (await screen.findByLabelText(/^runtime mode$/i)) as HTMLSelectElement
     const modelSelectAfterReturn = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
     const effortSelectAfterReturn = (await screen.findByLabelText(/effort/i)) as HTMLSelectElement
 
@@ -443,6 +542,7 @@ describe('renderer app', () => {
               status: 'error',
               providerName: 'codex',
               runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
               activeTurnId: null,
               lastError:
                 'exec_command failed for `/bin/zsh -lc "nl -ba src/ai/agent.ts | sed -n \'1,260p\'"`: CreateProcess { message: "Rejected(\\"Failed to create unified exec process: No such file or directory (os error 2)\\")" }',
@@ -490,6 +590,7 @@ describe('renderer app', () => {
               status: 'error',
               providerName: 'codex',
               runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
               activeTurnId: null,
               lastError: 'Codex CLI is not available.',
               updatedAt: '2026-04-19T00:00:02.000Z'

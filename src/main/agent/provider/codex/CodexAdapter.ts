@@ -189,6 +189,8 @@ export function mapProviderEvent(event: ProviderEvent): ProviderRuntimeEvent | n
     case 'item/reasoning/summaryTextDelta':
       return contentDelta(base, 'reasoning_summary_text', event)
     case 'turn/plan/updated':
+      return null
+    case 'item/plan/delta':
       return contentDelta(base, 'plan_text', event)
     case 'item/commandExecution/outputDelta':
       return contentDelta(base, 'command_output', event)

@@ -189,14 +189,16 @@ export class ProjectionPipeline {
     this.db
       .prepare(
         `
-        INSERT INTO projection_thread_sessions(thread_id, status, provider_name, runtime_mode, effort, active_turn_id, last_error, updated_at)
-        VALUES(@thread_id, @status, @provider_name, @runtime_mode, @effort, @active_turn_id, @last_error, @updated_at)
+        INSERT INTO projection_thread_sessions(thread_id, status, provider_name, runtime_mode, interaction_mode, effort, active_turn_id, active_plan_id, last_error, updated_at)
+        VALUES(@thread_id, @status, @provider_name, @runtime_mode, @interaction_mode, @effort, @active_turn_id, @active_plan_id, @last_error, @updated_at)
         ON CONFLICT(thread_id) DO UPDATE SET
           status = @status,
           provider_name = @provider_name,
           runtime_mode = @runtime_mode,
+          interaction_mode = @interaction_mode,
           effort = @effort,
           active_turn_id = @active_turn_id,
+          active_plan_id = @active_plan_id,
           last_error = @last_error,
           updated_at = @updated_at
       `
@@ -207,8 +209,11 @@ export class ProjectionPipeline {
         provider_name: str(session['providerName']) ?? str(e.payload['providerName']) ?? 'codex',
         runtime_mode:
           str(session['runtimeMode']) ?? str(e.payload['runtimeMode']) ?? 'auto-accept-edits',
+        interaction_mode:
+          str(session['interactionMode']) ?? str(e.payload['interactionMode']) ?? 'default',
         effort: str(session['effort']) ?? str(e.payload['effort']) ?? null,
         active_turn_id: str(session['activeTurnId']) ?? str(e.payload['activeTurnId']) ?? null,
+        active_plan_id: str(session['activePlanId']) ?? str(e.payload['activePlanId']) ?? null,
         last_error: str(session['lastError']) ?? str(e.payload['lastError']) ?? null,
         updated_at: e.occurredAt
       })

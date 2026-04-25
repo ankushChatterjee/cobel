@@ -4,6 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type {
+  InteractionMode,
   ProviderApprovalDecision,
   ProviderSession,
   RuntimeMode
@@ -152,6 +153,7 @@ export class CodexAppServerManager {
     cwd?: string
     model?: string
     runtimeMode: RuntimeMode
+    interactionMode: InteractionMode
     resumeCursor?: unknown
   }): Promise<ProviderSession> {
     const existing = this.contexts.get(input.threadId)
@@ -173,6 +175,7 @@ export class CodexAppServerManager {
       provider: 'codex',
       status: 'connecting',
       runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
       cwd: input.cwd,
       model: input.model,
       threadId: input.threadId,
@@ -240,6 +243,7 @@ export class CodexAppServerManager {
     attachments?: Array<{ type: 'image'; url: string }>
     model?: string
     effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+    interactionMode: InteractionMode
   }): Promise<{
     turnId: string
     resumeCursor?: unknown
@@ -254,7 +258,12 @@ export class CodexAppServerManager {
       threadId: providerThreadId,
       input: turnInput,
       ...optionalModel(input.model ?? context.session.model),
-      ...optionalEffort(input.effort)
+      ...optionalEffort(input.effort),
+      ...optionalCollaborationMode(
+        input.interactionMode,
+        input.model ?? context.session.model,
+        input.effort
+      )
     })
     // Codex returns { turn: { id: "turn_xxx", status: "inProgress", ... } }
     const turnId =
@@ -265,6 +274,7 @@ export class CodexAppServerManager {
       ...context.session,
       status: 'running',
       activeTurnId: turnId,
+      interactionMode: input.interactionMode,
       model: input.model?.trim() || context.session.model,
       updatedAt: nowIso()
     }
@@ -292,6 +302,7 @@ export class CodexAppServerManager {
         provider: 'codex',
         status: 'connecting',
         runtimeMode: 'approval-required',
+        interactionMode: 'default',
         cwd: input.cwd,
         model: input.model,
         threadId: `title:${createEventId('thread')}`,
@@ -492,6 +503,7 @@ export class CodexAppServerManager {
         provider: 'codex',
         status: 'connecting',
         runtimeMode: 'approval-required',
+        interactionMode: 'default',
         threadId: sentinel,
         createdAt: nowIso(),
         updatedAt: nowIso()
@@ -1082,6 +1094,34 @@ function optionalEffort(
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined
 ): { effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' } {
   return effort ? { effort } : {}
+}
+
+function optionalCollaborationMode(
+  interactionMode: InteractionMode,
+  model: string | undefined,
+  effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined
+): {
+  collaborationMode?: {
+    mode: InteractionMode
+    settings: {
+      model: string
+      reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null
+      developer_instructions: null
+    }
+  }
+} {
+  const trimmedModel = model?.trim()
+  if (!trimmedModel) return {}
+  return {
+    collaborationMode: {
+      mode: interactionMode,
+      settings: {
+        model: trimmedModel,
+        reasoning_effort: effort ?? null,
+        developer_instructions: null
+      }
+    }
+  }
 }
 
 function readReasoningEffort(

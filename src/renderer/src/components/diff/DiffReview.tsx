@@ -52,6 +52,7 @@ interface FloatingDiffPillProps {
 
 interface DiffReviewSidebarProps {
   open: boolean
+  embedded?: boolean
   threadId: string | null
   summaries: OrchestrationCheckpointSummary[]
   mode: DiffPanelMode
@@ -224,6 +225,7 @@ export const FloatingDiffPill = memo(function FloatingDiffPill({
       type="button"
       className={`header-diff-pill ${open ? 'active' : ''}`}
       onClick={onToggle}
+      aria-label={open ? 'Close review diff' : 'Open review diff'}
       title={open ? 'Close review diff' : 'Open review diff'}
     >
       <DiffStats additions={totals.additions} deletions={totals.deletions} />
@@ -233,6 +235,7 @@ export const FloatingDiffPill = memo(function FloatingDiffPill({
 
 export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   open,
+  embedded = false,
   threadId,
   summaries,
   mode,
@@ -354,23 +357,25 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
     setTreeOpen(false)
   }, [hasTreeFiles])
 
-  return (
-    <aside className={`diff-review-sidebar ${open ? 'open' : ''}`} aria-hidden={!open}>
-      <div
-        className="diff-review-resize-handle"
-        role="separator"
-        aria-label={resizeLabel}
-        aria-orientation="vertical"
-        aria-valuemin={resizeMin}
-        aria-valuemax={resizeMax}
-        aria-valuenow={resizeValue}
-        tabIndex={open ? 0 : -1}
-        onKeyDown={onResizeKeyDown}
-        onPointerDown={onResizeStart}
-        onPointerMove={onResizeMove}
-        onPointerUp={onResizeEnd}
-        onPointerCancel={onResizeEnd}
-      />
+  const content = (
+    <>
+      {embedded ? null : (
+        <div
+          className="diff-review-resize-handle"
+          role="separator"
+          aria-label={resizeLabel}
+          aria-orientation="vertical"
+          aria-valuemin={resizeMin}
+          aria-valuemax={resizeMax}
+          aria-valuenow={resizeValue}
+          tabIndex={open ? 0 : -1}
+          onKeyDown={onResizeKeyDown}
+          onPointerDown={onResizeStart}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeEnd}
+          onPointerCancel={onResizeEnd}
+        />
+      )}
       <div className="diff-review-header">
         {range ? (
           <DiffStats
@@ -442,14 +447,16 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
         >
           <RefreshCw size={13} strokeWidth={1.8} aria-hidden="true" />
         </DiffToolbarPill>
-        <button
-          type="button"
-          className="diff-close-button"
-          onClick={onClose}
-          aria-label="Close diff"
-        >
-          ×
-        </button>
+        {embedded ? null : (
+          <button
+            type="button"
+            className="diff-close-button"
+            onClick={onClose}
+            aria-label="Close diff"
+          >
+            ×
+          </button>
+        )}
       </div>
 
       <div className="diff-review-main">
@@ -499,6 +506,16 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
           </div>
         </div>
       </div>
+    </>
+  )
+
+  if (embedded) {
+    return <div className="diff-review-panel">{content}</div>
+  }
+
+  return (
+    <aside className={`diff-review-sidebar ${open ? 'open' : ''}`} aria-hidden={!open}>
+      {content}
     </aside>
   )
 })
@@ -964,7 +981,14 @@ function filterDiffFiles(
   selectedPath: string | null
 ): FileDiffMetadata[] {
   if (!selectedPath) return files
-  return files.filter((file) => file.name === selectedPath || file.prevName === selectedPath)
+  const normalizedPrefix = selectedPath.endsWith('/') ? selectedPath : `${selectedPath}/`
+  return files.filter(
+    (file) =>
+      file.name === selectedPath ||
+      file.prevName === selectedPath ||
+      file.name.startsWith(normalizedPrefix) ||
+      file.prevName?.startsWith(normalizedPrefix) === true
+  )
 }
 
 function formatSelectedPath(path: string): string {
