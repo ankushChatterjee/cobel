@@ -19,11 +19,11 @@ import {
   DEFAULT_THREAD_TITLE,
   sanitizeThreadTitle
 } from '../../shared/threadTitle'
-import type { ModelInfo } from './provider/codex/codex-api-types'
 import type { Database } from './persistence/Sqlite'
 import { OrchestrationEngine } from './orchestration/OrchestrationEngine'
 import { ProviderRuntimeIngestion } from './orchestration/ProviderRuntimeIngestion'
 import { CodexAdapter } from './provider/codex/CodexAdapter'
+import { OpenCodeAdapter } from './provider/opencode/OpenCodeAdapter'
 import { ProviderService } from './provider/ProviderService'
 import { FakeProviderAdapter } from './provider/fake/FakeProviderAdapter'
 import { OrchestrationEventStore } from './persistence/OrchestrationEventStore'
@@ -70,6 +70,9 @@ export class AgentBackend {
     this.providers.register(
       options.useFakeProvider ? new FakeProviderAdapter() : new CodexAdapter()
     )
+    if (!options.useFakeProvider) {
+      this.providers.register(new OpenCodeAdapter())
+    }
     this.providers.subscribe((event) => {
       this.ingestion.enqueue(event)
       this.checkpointReactor.enqueue(event)
@@ -80,8 +83,8 @@ export class AgentBackend {
     return this.providers.listProviders()
   }
 
-  async listModels(): Promise<ModelInfo[]> {
-    return this.providers.listModels('codex')
+  async listModelCatalog() {
+    return this.providers.listModelCatalog()
   }
 
   getShellSnapshot(): OrchestrationShellSnapshot {
@@ -179,6 +182,15 @@ export class AgentBackend {
 
       case 'thread.turn.start': {
         this.engine.ensureThread({ threadId: input.threadId, cwd: input.cwd })
+        const threadBeforeTurn = this.engine.getThread(input.threadId)
+        const lockedProvider =
+          threadBeforeTurn.session?.providerName ??
+          this.directory.get(input.threadId)?.provider
+        if (lockedProvider && input.provider !== lockedProvider) {
+          throw new Error(
+            `This thread is locked to provider "${lockedProvider}". Cannot use "${input.provider}".`
+          )
+        }
         this.seedThreadTitle({
           threadId: input.threadId,
           titleSeed: input.titleSeed,
@@ -454,7 +466,9 @@ function assertCommand(input: ClientOrchestrationCommand): void {
   if (!input || typeof input !== 'object') throw new Error('Command must be an object.')
   if (!input.commandId) throw new Error('Command is missing commandId.')
   if (input.type === 'thread.turn.start') {
-    if (input.provider !== 'codex') throw new Error(`Unsupported provider: ${input.provider}`)
+    if (input.provider !== 'codex' && input.provider !== 'opencode') {
+      throw new Error(`Unsupported provider: ${input.provider}`)
+    }
     if (typeof input.input !== 'string' || input.input.trim().length === 0) {
       throw new Error('Prompt input is required.')
     }
@@ -476,12 +490,13 @@ function sanitizeOptionalString(value: unknown): string | undefined {
 
 function sanitizeOptionalEffort(
   value: unknown
-): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
+): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh' | undefined {
   return value === 'none' ||
     value === 'minimal' ||
     value === 'low' ||
     value === 'medium' ||
     value === 'high' ||
+    value === 'max' ||
     value === 'xhigh'
     ? value
     : undefined

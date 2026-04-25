@@ -190,7 +190,23 @@ const agentApiMock: AgentApi = {
       detail: 'codex-cli 0.121.0'
     }
   ]),
-  listModels: vi.fn(async () => []),
+  listModelCatalog: vi.fn(async () => ({
+    providers: [
+      {
+        id: 'codex' as const,
+        name: 'Codex',
+        status: 'available' as const,
+        detail: 'codex-cli 0.121.0'
+      },
+      {
+        id: 'opencode' as const,
+        name: 'OpenCode',
+        status: 'missing' as const,
+        detail: 'not installed'
+      }
+    ],
+    modelsByProvider: { codex: [], opencode: [] }
+  })),
   clearThread: vi.fn(async () => {}),
   getCheckpointDiff: vi.fn(async (input) => ({ ...input, diff: '', truncated: false })),
   getCheckpointWorktreeDiff: vi.fn(async (input) => ({

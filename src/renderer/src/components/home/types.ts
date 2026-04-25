@@ -1,9 +1,17 @@
-import type { InteractionMode, OrchestrationThreadActivity, ReasoningEffort, RuntimeMode } from '../../../../shared/agent'
+import type {
+  InteractionMode,
+  OrchestrationThreadActivity,
+  ProviderId,
+  ReasoningEffort,
+  RuntimeMode
+} from '../../../../shared/agent'
 import type { OrchestrationCheckpointSummary } from '../../../../shared/agent'
 
 export type ComposerSelectOption = {
   value: string
   label: string
+  /** Section title rows in the custom popover (not selectable). */
+  kind?: 'header' | 'option'
 }
 
 export interface ActiveSelection {
@@ -12,6 +20,7 @@ export interface ActiveSelection {
 }
 
 export interface ThreadComposerPreference {
+  provider?: ProviderId
   model?: string
   effort?: ReasoningEffort
   runtimeMode?: RuntimeMode

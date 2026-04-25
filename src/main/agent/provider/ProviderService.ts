@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events'
 import type {
+  ModelCatalog,
+  ModelInfo,
   ProviderId,
   ProviderRuntimeEvent,
   ProviderSummary,
@@ -13,7 +15,6 @@ import type {
   SendTurnInput,
   StartSessionInput
 } from './types'
-import type { ModelInfo } from './codex/codex-api-types'
 
 export class ProviderService {
   private readonly adapters = new Map<ProviderId, ProviderAdapter>()
@@ -39,6 +40,21 @@ export class ProviderService {
       .listModels
     if (typeof maybeListModels !== 'function') return []
     return maybeListModels.call(adapter)
+  }
+
+  async listModelCatalog(): Promise<ModelCatalog> {
+    const providers = await this.listProviders()
+    const entries = await Promise.all(
+      [...this.adapters.keys()].map(async (id) => {
+        const models = await this.listModels(id)
+        return [id, models] as const
+      })
+    )
+    const modelsByProvider: Partial<Record<ProviderId, ModelInfo[]>> = {}
+    for (const [id, models] of entries) {
+      modelsByProvider[id] = models
+    }
+    return { providers, modelsByProvider }
   }
 
   async startSession(input: StartSessionInput & { provider: ProviderId }): Promise<unknown> {

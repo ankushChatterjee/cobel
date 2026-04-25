@@ -11,6 +11,7 @@ import {
 } from 'react'
 import type {
   InteractionMode,
+  ModelCatalog,
   ModelInfo,
   OpenWorkspaceFolderResult,
   OrchestrationCheckpointSummary,
@@ -20,7 +21,7 @@ import type {
   OrchestrationThread,
   OrchestrationThreadActivity,
   ProjectSummary,
-  ProviderSummary,
+  ProviderId,
   ReasoningEffort,
   RuntimeMode,
   ThreadShellSummary
@@ -42,7 +43,12 @@ import { ThreadSidebar, PlanSidebarPanel } from '../components/home/ThreadSideba
 import { TranscriptList } from '../components/home/transcript'
 import { SessionErrorBanner } from '../components/home/transcript'
 import { errorMessageForDisplay } from '../components/home/formatUtils'
-import { getModelEfforts, pickDefaultEffort, pickDefaultModel } from '../components/home/modelUtils'
+import {
+  filterModelsForProvider,
+  getModelEfforts,
+  pickDefaultEffort,
+  pickDefaultModel
+} from '../components/home/modelUtils'
 import {
   clampDiffPanelWidth,
   clampSidebarWidth,
@@ -94,11 +100,11 @@ export function HomePage(): React.JSX.Element {
   const [diffPanelWidth, setDiffPanelWidth] = useState(loadDiffPanelWidth)
   const [openProjectIds, setOpenProjectIds] = useState<Set<string>>(() => new Set())
   const [thread, setThread] = useState<OrchestrationThread | null>(null)
-  const [providers, setProviders] = useState<ProviderSummary[]>([])
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null)
+  const [selectedProvider, setSelectedProvider] = useState<ProviderId>('codex')
   const [composerResetToken, setComposerResetToken] = useState(0)
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(defaultRuntimeMode)
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(defaultInteractionMode)
-  const [models, setModels] = useState<ModelInfo[]>([])
   const [model, setModel] = useState<string>('')
   const [effort, setEffort] = useState<ReasoningEffort>('medium')
   const lastSequenceRef = useRef(0)
@@ -141,7 +147,29 @@ export function HomePage(): React.JSX.Element {
     [shell.threads, selection.activeProjectId, selection.activeChatId]
   )
   const activeThreadId = activeChat?.id ?? null
-  const activeProvider = providers[0]
+  const providerSummaries = modelCatalog?.providers ?? []
+  const allCatalogModels = useMemo((): ModelInfo[] => {
+    if (!modelCatalog) return []
+    const codex = modelCatalog.modelsByProvider.codex ?? []
+    const opencode = modelCatalog.modelsByProvider.opencode ?? []
+    return [...codex, ...opencode]
+  }, [modelCatalog])
+  const lockedProviderId = thread?.session?.providerName ?? null
+  const providerLocked = useMemo(
+    () =>
+      Boolean(thread?.messages.some((m) => m.role === 'user') || lockedProviderId),
+    [thread?.messages, lockedProviderId]
+  )
+  const models = useMemo(() => {
+    if (providerLocked && lockedProviderId) {
+      return filterModelsForProvider(allCatalogModels, lockedProviderId)
+    }
+    return filterModelsForProvider(allCatalogModels, selectedProvider)
+  }, [allCatalogModels, providerLocked, lockedProviderId, selectedProvider])
+  const providerStatusLine = useMemo(() => {
+    const summary = providerSummaries.find((p) => p.id === selectedProvider)
+    return summary?.detail ?? summary?.status ?? 'provider probe pending'
+  }, [providerSummaries, selectedProvider])
   const sessionStatus = thread?.session?.status ?? 'idle'
   const activeTurnId = thread?.session?.activeTurnId
   const isRunning = sessionStatus === 'starting' || sessionStatus === 'running'
@@ -246,24 +274,24 @@ export function HomePage(): React.JSX.Element {
     return unsubscribe
   }, [])
 
-  // Provider and model list
   useEffect(() => {
     void window.agentApi
-      .listProviders()
-      .then(setProviders)
-      .catch((providerError) => {
-        setError(providerError instanceof Error ? providerError.message : String(providerError))
-      })
-
-    void window.agentApi
-      .listModels()
-      .then((fetched) => {
-        setModels(fetched)
-      })
-      .catch((modelError) => {
-        console.error('[cobel:listModels]', modelError)
+      .listModelCatalog()
+      .then(setModelCatalog)
+      .catch((catalogError) => {
+        setError(catalogError instanceof Error ? catalogError.message : String(catalogError))
       })
   }, [])
+
+  useEffect(() => {
+    if (!activeThreadId) return
+    if (providerLocked && lockedProviderId) {
+      setSelectedProvider(lockedProviderId)
+      return
+    }
+    const pref = threadComposerPreferences[activeThreadId]?.provider
+    setSelectedProvider(pref === 'opencode' ? 'opencode' : 'codex')
+  }, [activeThreadId, providerLocked, lockedProviderId, threadComposerPreferences])
 
   useEffect(() => {
     if (!activeThreadId) return
@@ -344,7 +372,10 @@ export function HomePage(): React.JSX.Element {
   const handleModelChange = useCallback(
     (nextModel: string) => {
       setModel(nextModel)
-      const nextModelInfo = models.find((candidate) => candidate.id === nextModel) ?? null
+      const nextModelInfo = allCatalogModels.find((candidate) => candidate.id === nextModel) ?? null
+      const providerForModel: ProviderId =
+        nextModelInfo?.providerId === 'opencode' ? 'opencode' : 'codex'
+      setSelectedProvider(providerForModel)
       const preferredEffort = activeThreadId
         ? threadComposerPreferences[activeThreadId]?.effort
         : undefined
@@ -359,12 +390,13 @@ export function HomePage(): React.JSX.Element {
         ...current,
         [activeThreadId]: {
           ...current[activeThreadId],
+          provider: providerForModel,
           model: nextModel,
           effort: nextEffort
         }
       }))
     },
-    [activeThreadId, models, threadComposerPreferences]
+    [activeThreadId, allCatalogModels, threadComposerPreferences]
   )
 
   const handleEffortChange = useCallback(
@@ -478,7 +510,7 @@ export function HomePage(): React.JSX.Element {
           type: 'thread.turn.start',
           commandId,
           threadId: activeThreadId,
-          provider: 'codex',
+          provider: selectedProvider,
           input,
           titleSeed,
           cwd: activeProject.path,
@@ -504,7 +536,8 @@ export function HomePage(): React.JSX.Element {
       interactionMode,
       isRunning,
       model,
-      runtimeMode
+      runtimeMode,
+      selectedProvider
     ]
   )
 
@@ -799,7 +832,7 @@ export function HomePage(): React.JSX.Element {
           type: 'thread.turn.start',
           commandId: `cmd:${createId()}`,
           threadId: activeThreadId,
-          provider: 'codex',
+          provider: selectedProvider,
           input: implementationPrompt,
           titleSeed,
           cwd: activeProject.path,
@@ -820,6 +853,7 @@ export function HomePage(): React.JSX.Element {
       isRunning,
       model,
       runtimeMode,
+      selectedProvider,
       thread?.session?.runtimeMode,
       threadComposerPreferences
     ]
@@ -1026,9 +1060,7 @@ export function HomePage(): React.JSX.Element {
             <div className="status-line">
               <span>{sessionStatus}</span>
               <span>{activeProject?.path ?? 'no workspace'}</span>
-              <span>
-                {activeProvider?.detail ?? activeProvider?.status ?? 'provider probe pending'}
-              </span>
+              <span>{providerStatusLine}</span>
             </div>
 
             {!activeProject ? (
@@ -1069,9 +1101,12 @@ export function HomePage(): React.JSX.Element {
                 isRunning={isRunning}
                 interactionMode={interactionMode}
                 runtimeMode={runtimeMode}
-                models={models}
+                catalogModels={allCatalogModels}
                 model={model}
                 effort={effort}
+                providerSummaries={providerSummaries}
+                selectedProviderId={selectedProvider}
+                providerLocked={providerLocked}
                 onInteractionModeChange={handleInteractionModeChange}
                 onRuntimeModeChange={handleRuntimeModeChange}
                 onModelChange={handleModelChange}
