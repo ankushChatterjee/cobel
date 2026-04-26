@@ -15,6 +15,7 @@ import xml from 'react-syntax-highlighter/dist/esm/languages/hljs/xml'
 import yaml from 'react-syntax-highlighter/dist/esm/languages/hljs/yaml'
 import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import { languageFromClassName, normalizeHighlightLanguage, inferCodeLanguage } from './formatUtils'
+import { normalizeGfmTableDelimiters } from './markdownNormalize'
 
 SyntaxHighlighter.registerLanguage('bash', bash)
 SyntaxHighlighter.registerLanguage('css', css)
@@ -40,7 +41,8 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   text: string
   isStreaming: boolean
 }): React.JSX.Element {
-  const deferredText = useDeferredValue(text)
+  const normalizedText = useMemo(() => normalizeGfmTableDelimiters(text), [text])
+  const deferredText = useDeferredValue(normalizedText)
   const components = useMemo<Components>(
     () => ({
       a({ children, href }) {
@@ -48,6 +50,13 @@ export const MarkdownMessage = memo(function MarkdownMessage({
           <a href={href} target="_blank" rel="noreferrer">
             {children}
           </a>
+        )
+      },
+      table({ children }) {
+        return (
+          <div className="markdown-table-wrap">
+            <table>{children}</table>
+          </div>
         )
       },
       code({ children, className }) {

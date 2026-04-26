@@ -1282,7 +1282,7 @@
 .markdown-body ol,
 .markdown-body blockquote,
 .markdown-body pre,
-.markdown-body table {
+.markdown-body .markdown-table-wrap {
   margin: 0 0 12px;
 }
 
@@ -1395,12 +1395,18 @@
   border-radius: 2px;
 }
 
-.markdown-body table {
-  display: block;
+/* Horizontal scroll: wrapper div; keep <table display:table> for layout. */
+.markdown-table-wrap {
   width: 100%;
+  max-width: 100%;
   overflow-x: auto;
-  border-collapse: collapse;
   scrollbar-width: thin;
+}
+
+.markdown-body table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
 }
 
 .markdown-body th,
@@ -2176,6 +2182,10 @@
   padding: 0 7px 7px;
   scrollbar-width: thin;
   scrollbar-color: var(--border-medium) transparent;
+}
+
+.embedded-diff-body .embedded-diff-single-file {
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 
 .embedded-diff-body .diff-file-stack {

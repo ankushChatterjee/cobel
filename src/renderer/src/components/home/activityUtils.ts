@@ -1,4 +1,9 @@
 import type { OrchestrationThreadActivity } from '../../../../shared/agent'
+import {
+  discoverLegacyCodexFileEditChanges,
+  fileEditChangesToPreview,
+  readCanonicalFileEditChanges
+} from '../../../../shared/fileEditChanges'
 
 export function isPendingPrompt(activity: OrchestrationThreadActivity): boolean {
   return (
@@ -57,57 +62,15 @@ export function readBestItemData(data: Record<string, unknown>): Record<string, 
   return data
 }
 
-export function findFileUpdateChanges(input: unknown): Array<Record<string, unknown>> {
-  const seen = new WeakSet<object>()
-  const queue: Array<{ value: unknown; depth: number }> = [{ value: input, depth: 0 }]
-
-  while (queue.length > 0) {
-    const { value, depth } = queue.shift() as { value: unknown; depth: number }
-    if (!value || typeof value !== 'object') continue
-    if (seen.has(value)) continue
-    seen.add(value)
-
-    const record = value as Record<string, unknown>
-    const changes = record['changes']
-    if (
-      Array.isArray(changes) &&
-      changes.some(
-        (change) =>
-          Boolean(change) &&
-          typeof change === 'object' &&
-          typeof (change as Record<string, unknown>).diff === 'string'
-      )
-    ) {
-      return changes.filter(
-        (change): change is Record<string, unknown> => Boolean(change) && typeof change === 'object'
-      )
-    }
-
-    if (depth >= 5) continue
-    for (const key of ['args', 'item', 'toolCall', 'tool_call', 'call', 'fileChange', 'data']) {
-      if (key in record) queue.push({ value: record[key], depth: depth + 1 })
-    }
-  }
-
-  return []
-}
-
 export function extractFileChangeDiff(
   payload: Record<string, unknown> | undefined
 ): { diff: string; title: string } | null {
-  const changes = findFileUpdateChanges(payload)
-  const diffs = changes
-    .map((change) => (typeof change.diff === 'string' ? change.diff.trimEnd() : ''))
-    .filter(Boolean)
-  if (diffs.length === 0) return null
-  const paths = changes
-    .map((change) => (typeof change.path === 'string' ? change.path : null))
-    .filter((path): path is string => Boolean(path))
-  const firstPath = paths[0] ?? 'file changes'
-  return {
-    diff: diffs.join('\n'),
-    title: paths.length > 1 ? `${firstPath} +${paths.length - 1}` : firstPath
-  }
+  if (!payload) return null
+  const canonical = readCanonicalFileEditChanges(payload)
+  if (canonical.length > 0) return fileEditChangesToPreview(canonical)
+  const legacy = discoverLegacyCodexFileEditChanges(payload)
+  if (legacy.length > 0) return fileEditChangesToPreview(legacy)
+  return null
 }
 
 export function readQuestions(activity: OrchestrationThreadActivity): Array<{

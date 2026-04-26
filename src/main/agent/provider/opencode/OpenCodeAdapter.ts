@@ -18,6 +18,8 @@ import type {
   ReasoningEffort,
   UserInputQuestion
 } from '../../../../shared/agent'
+import type { FileEditChange } from '../../../../shared/fileEditChanges'
+import { fileEditChangesFromOpenCodeMetadata } from '../../../../shared/fileEditChanges'
 import { parseThreadTitleResponse } from '../../../../shared/threadTitle'
 import {
   createEventId,
@@ -46,6 +48,7 @@ import {
   toOpenCodeQuestionAnswers,
   type OpenCodeServerConnection
 } from './opencodeRuntime'
+import { dumpOpenCodeSubscribeRawMessage } from './openCodeRawMessageDump'
 
 const PROVIDER = 'opencode' as const
 
@@ -196,6 +199,33 @@ function toolStateCreatedAt(part: Extract<Part, { type: 'tool' }>): string | und
     default:
       return undefined
   }
+}
+
+function fileEditChangesFromOpenCodeToolPart(part: Part): FileEditChange[] | undefined {
+  if (part.type !== 'tool') return undefined
+  const toolName = part.tool.toLowerCase()
+  if (
+    !toolName.includes('edit') &&
+    !toolName.includes('write') &&
+    !toolName.includes('patch') &&
+    !toolName.includes('multiedit')
+  ) {
+    return undefined
+  }
+  const fallbacks: string[] = []
+  const { state } = part
+  if (state.status !== 'pending' && 'input' in state && state.input && typeof state.input === 'object') {
+    const fp = (state.input as Record<string, unknown>).filePath
+    if (typeof fp === 'string' && fp.trim()) fallbacks.push(fp)
+  }
+  const meta =
+    (state.status === 'running' || state.status === 'completed' || state.status === 'error') &&
+    'metadata' in state &&
+    state.metadata &&
+    typeof state.metadata === 'object'
+      ? state.metadata
+      : undefined
+  return fileEditChangesFromOpenCodeMetadata(meta, fallbacks)
 }
 
 function sessionErrorMessage(error: unknown): string {
@@ -651,6 +681,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
           signal: context.eventsAbortController.signal
         })
         for await (const rawEvent of subscription.stream) {
+          dumpOpenCodeSubscribeRawMessage(rawEvent, { threadId: context.session.threadId })
           const event = rawEvent as SdkEvent
           const payloadSessionId = event.properties?.sessionID as string | undefined
           if (payloadSessionId !== context.openCodeSessionId) continue
@@ -755,6 +786,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
           const title =
             part.state.status === 'running' ? (part.state.title ?? part.tool) : part.tool
           const detail = detailFromToolPart(part)
+          const fileEditChanges = fileEditChangesFromOpenCodeToolPart(part)
           const payload = {
             itemType,
             ...(part.state.status === 'error'
@@ -764,6 +796,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
                 : { status: 'inProgress' as const }),
             ...(title ? { title } : {}),
             ...(detail ? { detail } : {}),
+            ...(fileEditChanges ? { fileEditChanges } : {}),
             data: { tool: part.tool, state: part.state }
           }
           const evType =
@@ -789,6 +822,14 @@ export class OpenCodeAdapter implements ProviderAdapter {
       case 'permission.asked': {
         const id = event.properties.id as string
         context.pendingPermissions.set(id, event.properties as unknown as PermissionRequest)
+        const patterns = Array.isArray(event.properties.patterns)
+          ? (event.properties.patterns as string[])
+          : []
+        const requestType = mapPermissionToRequestType(event.properties.permission as string)
+        const permissionFileEdit =
+          requestType === 'file_change_approval'
+            ? fileEditChangesFromOpenCodeMetadata(event.properties.metadata, patterns)
+            : undefined
         this.emit({
           ...buildEventBase({
             threadId: context.session.threadId,
@@ -798,12 +839,13 @@ export class OpenCodeAdapter implements ProviderAdapter {
           }),
           type: 'request.opened',
           payload: {
-            requestType: mapPermissionToRequestType(event.properties.permission as string),
+            requestType,
             detail:
               Array.isArray(event.properties.patterns) && event.properties.patterns.length > 0
                 ? (event.properties.patterns as string[]).join('\n')
                 : String(event.properties.permission ?? ''),
-            args: event.properties.metadata
+            args: event.properties.metadata,
+            ...(permissionFileEdit ? { fileEditChanges: permissionFileEdit } : {})
           }
         })
         break
