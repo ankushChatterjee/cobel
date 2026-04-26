@@ -7,16 +7,28 @@ import { MarkdownMessage } from '../MarkdownMessage'
 import { formatTime, formatWorkDuration } from '../formatUtils'
 import type { OnOpenDiff, OnPreviewDiff } from '../types'
 
+function combinedReasoningText(activities: OrchestrationThreadActivity[]): string {
+  const parts: string[] = []
+  for (const a of activities) {
+    const t = readPayloadString(a.payload, 'reasoningText')
+    if (t && t.trim().length > 0) {
+      parts.push(t.trim())
+    }
+  }
+  return parts.join('\n\n')
+}
+
 export const ThinkingRow = memo(function ThinkingRow({
-  activity
+  activities
 }: {
-  activity: OrchestrationThreadActivity
-}): React.JSX.Element {
-  const isComplete = activity.resolved === true
-  const reasoningText = readPayloadString(activity.payload, 'reasoningText')
-  const isReasoningItem = readPayloadString(activity.payload, 'itemType') === 'reasoning'
-  const hasReasoningBody =
-    isReasoningItem && Boolean(reasoningText && reasoningText.trim().length > 0)
+  activities: OrchestrationThreadActivity[]
+}): React.JSX.Element | null {
+  if (activities.length === 0) {
+    return null
+  }
+  const isComplete = activities.every((a) => a.resolved === true)
+  const reasoningText = combinedReasoningText(activities)
+  const hasReasoningBody = Boolean(reasoningText && reasoningText.trim().length > 0)
   const statusLabel = isComplete ? 'thought' : 'thinking…'
   const contentId = useId()
   const [reasoningExpanded, setReasoningExpanded] = useState(() => !isComplete)

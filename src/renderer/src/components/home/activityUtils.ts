@@ -309,10 +309,3 @@ export function labelForApproval(activity: OrchestrationThreadActivity): string 
   if (requestType === 'file_read_approval') return 'read approval'
   return 'approval'
 }
-
-export function resolvedApprovalLabel(activity: OrchestrationThreadActivity): string {
-  const decision = readPayloadString(activity.payload, 'decision')
-  if (decision === 'decline' || decision === 'cancel') return 'declined'
-  if (decision === 'accept' || decision === 'acceptForSession') return 'approved'
-  return 'resolved'
-}

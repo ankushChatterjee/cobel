@@ -1,12 +1,7 @@
 import { memo } from 'react'
 import type { OrchestrationThreadActivity } from '../../../../../shared/agent'
 import { EmbeddedDiffView } from '../../diff/DiffReview'
-import {
-  extractFileChangeDiff,
-  labelForApproval,
-  readQuestions,
-  resolvedApprovalLabel
-} from '../activityUtils'
+import { extractFileChangeDiff, labelForApproval, readQuestions } from '../activityUtils'
 import type { ApprovalDecision, OnAnswer, OnApprove } from '../types'
 
 export const ApprovalActions = memo(function ApprovalActions({
@@ -43,18 +38,6 @@ export const ApprovalActions = memo(function ApprovalActions({
   )
 })
 
-export const ApprovalResolutionLine = memo(function ApprovalResolutionLine({
-  activity
-}: {
-  activity: OrchestrationThreadActivity
-}): React.JSX.Element {
-  return (
-    <article className="approval-resolution-line" aria-label={resolvedApprovalLabel(activity)}>
-      <span>{resolvedApprovalLabel(activity)}</span>
-    </article>
-  )
-})
-
 export const PendingPrompt = memo(function PendingPrompt({
   activity,
   submittingDecision,
@@ -78,7 +61,7 @@ export const PendingPrompt = memo(function PendingPrompt({
         diff={fileChange.diff}
         title={fileChange.title}
         compactTitle
-        status={<span>{isResolved ? resolvedApprovalLabel(activity) : requestLabel}</span>}
+        status={isResolved ? undefined : <span>{requestLabel}</span>}
         actions={
           !isResolved ? (
             <ApprovalActions
@@ -95,7 +78,7 @@ export const PendingPrompt = memo(function PendingPrompt({
   if (isApproval) {
     return (
       <div className={`pending-prompt approval-prompt ${isResolved ? 'resolved' : ''}`}>
-        <span>{isResolved ? resolvedApprovalLabel(activity) : requestLabel}</span>
+        {isResolved ? null : <span>{requestLabel}</span>}
         <p>{activity.summary}</p>
         {!isResolved ? (
           <ApprovalActions

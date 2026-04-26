@@ -1127,7 +1127,7 @@ describe('renderer app', () => {
     expect(container.querySelector('.button-spinner')).toBeInTheDocument()
   })
 
-  it('renders resolved approvals as a quiet approved line', async () => {
+  it('does not render a separate transcript row for resolved approvals', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     mockThreadSnapshotWithActivities([
@@ -1160,8 +1160,8 @@ describe('renderer app', () => {
     const { container } = render(<RouterProvider router={router} />)
     await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
 
-    expect(await screen.findByLabelText('approved')).toHaveTextContent('approved')
-    expect(container.querySelector('.approval-resolution-line')).toBeInTheDocument()
+    expect(screen.queryByLabelText('approved')).not.toBeInTheDocument()
+    expect(container.querySelector('.approval-resolution-line')).not.toBeInTheDocument()
     expect(container.querySelector('.embedded-diff-card')).not.toBeInTheDocument()
     expect(container.querySelector('.activity-row.approval')).not.toBeInTheDocument()
   })
