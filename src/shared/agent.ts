@@ -1,6 +1,8 @@
 import type { FileEditChange } from './fileEditChanges'
+import type { FileReadPreview } from './fileReadPreview'
 
 export type { FileEditChange } from './fileEditChanges'
+export type { FileReadPreview } from './fileReadPreview'
 
 export type ProviderId = 'codex' | 'opencode'
 
@@ -34,6 +36,7 @@ export type CanonicalItemType =
   | 'dynamic_tool_call'
   | 'collab_agent_tool_call'
   | 'web_search'
+  | 'code_search'
   | 'image_view'
   | 'review_entered'
   | 'review_exited'
@@ -152,6 +155,7 @@ export type ProviderRuntimeEvent =
         detail?: string
         data?: unknown
         fileEditChanges?: FileEditChange[]
+        fileReadPreview?: FileReadPreview
       }
     })
   | (RuntimeEventBase & {

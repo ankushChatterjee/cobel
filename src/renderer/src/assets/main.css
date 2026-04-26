@@ -1897,6 +1897,39 @@
   opacity: 0.7;
 }
 
+.tool-line-search .tool-search-inline {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-line-search .tool-search-icon {
+  flex-shrink: 0;
+  opacity: 0.5;
+  color: var(--text-muted);
+}
+
+.tool-line-search .tool-search-query {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.tool-line-search.is-running .tool-search-icon {
+  opacity: 0.85;
+  color: var(--accent-primary);
+}
+
+.tool-line-search.is-error .tool-search-query {
+  color: var(--error);
+}
+
 /* ── Tool group ────────────────────────────────────────────── */
 
 .tool-group {
@@ -1979,6 +2012,40 @@
   font-size: 11px;
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   line-height: 1.55;
+}
+
+.file-read-tool-line .tool-line-summary {
+  min-width: 0;
+}
+
+.file-read-preview-path {
+  padding: 0 10px 6px 26px;
+  font-size: 10px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-read-preview-body {
+  padding-top: 0;
+}
+
+.file-read-preview-type {
+  margin: 0 0 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.file-read-preview-content {
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ── Pending prompt ───────────────────────────────────────── */

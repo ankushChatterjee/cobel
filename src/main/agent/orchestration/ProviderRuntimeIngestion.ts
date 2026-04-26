@@ -9,6 +9,7 @@ import type {
   RuntimeSessionState
 } from '../../../shared/agent'
 import { mergeFileEditChanges, readCanonicalFileEditChanges } from '../../../shared/fileEditChanges'
+import { mergeFileReadPreview, readCanonicalFileReadPreview } from '../../../shared/fileReadPreview'
 import { OrchestrationEngine } from './OrchestrationEngine'
 
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000
@@ -391,6 +392,10 @@ export class ProviderRuntimeIngestion {
         return prev.length > 0 ? prev : undefined
       })()
     )
+    const mergedReadPreview = mergeFileReadPreview(
+      readCanonicalFileReadPreview(event.payload),
+      readCanonicalFileReadPreview(existing?.payload)
+    )
     const toolPayload: Record<string, unknown> = {
       ...existing?.payload,
       itemType: event.payload.itemType ?? readPayloadString(existing?.payload, 'itemType'),
@@ -401,6 +406,9 @@ export class ProviderRuntimeIngestion {
     }
     if (mergedFileEdit && mergedFileEdit.length > 0) {
       toolPayload.fileEditChanges = mergedFileEdit
+    }
+    if (mergedReadPreview) {
+      toolPayload.fileReadPreview = mergedReadPreview
     }
     this.engine.upsertActivity(
       {
