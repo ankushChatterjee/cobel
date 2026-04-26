@@ -7,7 +7,14 @@ import type {
   OrchestrationThread
 } from '../../../../shared/agent'
 import { DEFAULT_THREAD_TITLE } from '../../../../shared/threadTitle'
-import { isHiddenActivity, isRuntimeError, isToolActivity } from './activityUtils'
+import {
+  isHiddenActivity,
+  isPendingPrompt,
+  isRuntimeError,
+  isThinkingActivity,
+  isToolActivity,
+  statusFromActivity
+} from './activityUtils'
 import { legacyWorkspaceKey } from './storage'
 import type { ActivityTranscriptItem, MessageTranscriptItem, TranscriptItem, TranscriptRenderGroup } from './types'
 
@@ -151,8 +158,9 @@ export function buildTranscriptItems(thread: OrchestrationThread | null): Transc
 export function groupTranscriptItems(items: TranscriptItem[]): TranscriptRenderGroup[] {
   const groups: TranscriptRenderGroup[] = []
   let toolRun: ActivityTranscriptItem[] = []
+  let reasoningRun: ActivityTranscriptItem[] = []
 
-  function flushRun(): void {
+  function flushToolRun(): void {
     if (toolRun.length === 0) return
     groups.push({
       kind: 'tool-run',
@@ -162,15 +170,37 @@ export function groupTranscriptItems(items: TranscriptItem[]): TranscriptRenderG
     toolRun = []
   }
 
+  function flushReasoningRun(): void {
+    if (reasoningRun.length === 0) return
+    if (reasoningRun.length === 1) {
+      groups.push({ kind: 'non-tool', item: reasoningRun[0] })
+    } else {
+      groups.push({
+        kind: 'reasoning-run',
+        id: `reasoning:${reasoningRun[0].id}:${reasoningRun[reasoningRun.length - 1].id}`,
+        activities: reasoningRun
+      })
+    }
+    reasoningRun = []
+  }
+
   for (const item of items) {
     if (item.kind === 'activity' && isToolActivity(item.activity)) {
+      flushReasoningRun()
       toolRun.push(item)
-    } else {
-      flushRun()
-      groups.push({ kind: 'non-tool', item })
+      continue
     }
+    if (item.kind === 'activity' && isThinkingActivity(item.activity)) {
+      flushToolRun()
+      reasoningRun.push(item)
+      continue
+    }
+    flushToolRun()
+    flushReasoningRun()
+    groups.push({ kind: 'non-tool', item })
   }
-  flushRun()
+  flushToolRun()
+  flushReasoningRun()
   return groups
 }
 
@@ -184,34 +214,111 @@ export function buildCheckpointByAssistantMessageId(
   return map
 }
 
+/** Transcript, assistant output, or terminal session state — visible progress beyond an empty run. */
+export function threadHasTranscriptVisibleProgress(thread: OrchestrationThread): boolean {
+  const sessionStatus = thread.session?.status
+  if (sessionStatus === 'ready' || sessionStatus === 'stopped' || sessionStatus === 'interrupted') {
+    return true
+  }
+  if (sessionStatus === 'error') {
+    return true
+  }
+  if (thread.messages.some((m) => m.role === 'assistant')) {
+    return true
+  }
+  if (thread.activities.some((a) => !isHiddenActivity(a))) {
+    return true
+  }
+  if (thread.proposedPlans.length > 0) {
+    return true
+  }
+  return false
+}
+
+/**
+ * In-flight tool/task work already shows a line-level spinner; skip the duplicate transcript tail spinner.
+ */
+export function threadHasInFlightWorkIndicator(thread: OrchestrationThread | null): boolean {
+  if (!thread) return false
+  for (const activity of thread.activities) {
+    if (activity.resolved === true) continue
+    if (activity.kind.startsWith('tool.') || activity.kind.startsWith('task.')) {
+      const s = statusFromActivity(activity)
+      if (s === 'running' || s === 'inProgress') {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * When the model is still processing but there is no thinking row, assistant stream, or tool run yet,
+ * keep a tail "thinking…" row so the thread never looks stalled.
+ */
+export function shouldShowTranscriptEndThinkingRow(
+  thread: OrchestrationThread | null,
+  input: {
+    isPendingTurnStart: boolean
+    isSessionActive: boolean
+    hasActiveThinkingActivity: boolean
+  }
+): boolean {
+  if (input.hasActiveThinkingActivity) return false
+  if (thread) {
+    if (thread.activities.some(isPendingPrompt)) return false
+    if (thread.messages.some((m) => m.role === 'assistant' && m.streaming)) {
+      return false
+    }
+    if (threadHasInFlightWorkIndicator(thread)) {
+      return false
+    }
+  }
+  return input.isPendingTurnStart || input.isSessionActive
+}
+
+export function eventClearsPendingTurnWait(event: OrchestrationEvent): boolean {
+  switch (event.type) {
+    case 'thread.message-upserted':
+      return event.message.role === 'assistant'
+    case 'thread.activity-upserted':
+      return !isHiddenActivity(event.activity)
+    case 'thread.proposed-plan-upserted':
+      return true
+    case 'thread.latest-turn-set':
+      return event.latestTurn !== null && event.latestTurn.status !== 'running'
+    case 'thread.session-set': {
+      if (event.session === null) {
+        return true
+      }
+      const s = event.session.status
+      return (
+        s === 'ready' || s === 'stopped' || s === 'interrupted' || s === 'error' || s === 'idle'
+      )
+    }
+    case 'thread.snapshot.changed':
+      return threadHasTranscriptVisibleProgress(event.thread)
+    case 'thread.turn-diff-completed':
+    case 'thread.reverted':
+      return true
+    case 'thread.created':
+    case 'thread.renamed':
+    case 'thread.archived':
+    case 'thread.deleted':
+      return false
+    default: {
+      const _exhaustive: never = event
+      return _exhaustive
+    }
+  }
+}
+
 export function threadSnapshotHasAssistantResponse(thread: OrchestrationThread): boolean {
-  return (
-    thread.messages.some((message) => message.role === 'assistant') ||
-    thread.activities.length > 0 ||
-    thread.proposedPlans.length > 0 ||
-    thread.session?.status === 'ready' ||
-    thread.session?.status === 'stopped' ||
-    thread.session?.status === 'interrupted' ||
-    thread.session?.status === 'error'
-  )
+  return threadHasTranscriptVisibleProgress(thread)
 }
 
 export function eventHasAssistantResponse(event: OrchestrationEvent): boolean {
-  if (event.type === 'thread.message-upserted') return event.message.role === 'assistant'
-  if (event.type === 'thread.activity-upserted') return true
-  if (event.type === 'thread.proposed-plan-upserted') return true
-  if (event.type === 'thread.latest-turn-set') {
-    return event.latestTurn !== null && event.latestTurn.status !== 'running'
-  }
-  if (event.type === 'thread.session-set') {
-    return (
-      event.session?.status === 'ready' ||
-      event.session?.status === 'stopped' ||
-      event.session?.status === 'interrupted' ||
-      event.session?.status === 'error'
-    )
-  }
-  return false
+  return eventClearsPendingTurnWait(event)
 }
 
 export function readSessionErrorForDisplay(thread: OrchestrationThread | null): string | null {

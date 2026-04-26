@@ -2,6 +2,7 @@ import { memo, useMemo } from 'react'
 import type { OrchestrationCheckpointSummary } from '../../../../../shared/agent'
 import { groupTranscriptItems } from '../threadUtils'
 import type { ApprovalDecision, OnAnswer, OnApprove, OnOpenDiff, OnPreviewDiff, TranscriptItem } from '../types'
+import { ThinkingRow } from './MessageRow'
 import { ToolGroup } from './ToolGroup'
 import { ToolLine } from './ToolLine'
 import { TranscriptRow } from './TranscriptRow'
@@ -47,6 +48,14 @@ export const TranscriptList = memo(function TranscriptList({
               onPreviewDiff={onPreviewDiff}
               onOpenDiff={onOpenDiff}
               onRevert={onRevert}
+            />
+          )
+        }
+        if (group.kind === 'reasoning-run') {
+          return (
+            <ThinkingRow
+              key={group.id}
+              activities={group.activities.map((item) => item.activity)}
             />
           )
         }

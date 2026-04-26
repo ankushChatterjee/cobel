@@ -57,6 +57,7 @@ export type TranscriptItem = MessageTranscriptItem | ActivityTranscriptItem
 
 export type TranscriptRenderGroup =
   | { kind: 'non-tool'; item: TranscriptItem }
+  | { kind: 'reasoning-run'; id: string; activities: ActivityTranscriptItem[] }
   | { kind: 'tool-run'; id: string; activities: ActivityTranscriptItem[] }
 
 export type ApprovalDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel'

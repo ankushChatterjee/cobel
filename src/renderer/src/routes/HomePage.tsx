@@ -72,13 +72,14 @@ import {
   createEmptyThread,
   createId,
   derivePlanTitle,
-  eventHasAssistantResponse,
+  eventClearsPendingTurnWait,
   findLatestProposedPlan,
   mergePendingUserMessages,
   projectIdForPath,
   readSessionErrorForDisplay,
   runLegacyMigration,
-  threadSnapshotHasAssistantResponse,
+  shouldShowTranscriptEndThinkingRow,
+  threadHasTranscriptVisibleProgress,
   upsertById,
   upsertOptimisticUserMessage
 } from '../components/home/threadUtils'
@@ -196,7 +197,15 @@ export function HomePage(): React.JSX.Element {
       ) ?? false,
     [thread]
   )
-  const showPendingThinking = isPendingThinking && !hasActiveThinkingActivity
+  const showPendingThinking = useMemo(
+    () =>
+      shouldShowTranscriptEndThinkingRow(thread, {
+        isPendingTurnStart: isPendingThinking,
+        isSessionActive: isRunning,
+        hasActiveThinkingActivity
+      }),
+    [thread, isPendingThinking, isRunning, hasActiveThinkingActivity]
+  )
 
   useEffect(() => {
     setSubmittingApprovals((current) => {
@@ -430,7 +439,7 @@ export function HomePage(): React.JSX.Element {
         if (item.snapshot.snapshotSequence < lastSequenceRef.current) return
         lastSequenceRef.current = item.snapshot.snapshotSequence
         setThread(mergePendingUserMessages(item.snapshot.thread, pendingUserMessagesRef.current))
-        if (threadSnapshotHasAssistantResponse(item.snapshot.thread)) {
+        if (threadHasTranscriptVisibleProgress(item.snapshot.thread)) {
           setIsPendingThinking(false)
         }
         return
@@ -438,7 +447,7 @@ export function HomePage(): React.JSX.Element {
 
       if (item.event.sequence <= lastSequenceRef.current) return
       lastSequenceRef.current = item.event.sequence
-      if (eventHasAssistantResponse(item.event)) {
+      if (eventClearsPendingTurnWait(item.event)) {
         setIsPendingThinking(false)
       }
       if (item.event.type === 'thread.message-upserted') {
@@ -857,6 +866,7 @@ export function HomePage(): React.JSX.Element {
       const implementationPrompt = buildPlanImplementationPrompt(plan.text)
       const titleSeed = `Implement ${derivePlanTitle(plan.text)}`
       setError(null)
+      setIsPendingThinking(true)
       setInteractionMode('default')
       setRuntimeMode(executionRuntimeMode)
       setThreadComposerPreferences((current) => ({
@@ -883,6 +893,7 @@ export function HomePage(): React.JSX.Element {
           createdAt
         })
       } catch (implementError) {
+        setIsPendingThinking(false)
         setError(implementError instanceof Error ? implementError.message : String(implementError))
       }
     },

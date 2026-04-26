@@ -4,7 +4,7 @@ import { isPendingPrompt, isRuntimeError, isThinkingActivity } from '../activity
 import type { ApprovalDecision, OnAnswer, OnApprove, OnOpenDiff, OnPreviewDiff, TranscriptItem } from '../types'
 import { ActivityRow } from './ActivityRow'
 import { MessageRow, ThinkingRow } from './MessageRow'
-import { ApprovalResolutionLine, PendingPrompt } from './PendingPrompt'
+import { PendingPrompt } from './PendingPrompt'
 import { SessionErrorBanner } from './SessionErrorBanner'
 
 export const TranscriptRow = memo(function TranscriptRow({
@@ -25,7 +25,7 @@ export const TranscriptRow = memo(function TranscriptRow({
   onPreviewDiff: OnPreviewDiff
   onOpenDiff: OnOpenDiff
   onRevert: (turnCount: number) => Promise<void>
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   if (item.kind === 'message') {
     return (
       <MessageRow
@@ -51,9 +51,9 @@ export const TranscriptRow = memo(function TranscriptRow({
     )
   }
   if (activity.kind === 'approval.resolved') {
-    return <ApprovalResolutionLine activity={activity} />
+    return null
   }
-  if (isThinkingActivity(activity)) return <ThinkingRow activity={activity} />
+  if (isThinkingActivity(activity)) return <ThinkingRow activities={[activity]} />
   if (isRuntimeError(activity)) {
     return <SessionErrorBanner message={activity.summary} />
   }
