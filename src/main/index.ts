@@ -1,7 +1,7 @@
 import { app, shell, BrowserWindow, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import icon from '../../resources/icon.png?asset'
+import icon from '../../resources/icons/png/256x256.png?asset'
 import { AgentBackend } from './agent/AgentBackend'
 import { registerAgentIpc } from './agent/ipc/registerAgentIpc'
 import { openDatabase } from './agent/persistence/Sqlite'

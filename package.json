@@ -35,6 +35,7 @@
     "@pierre/trees": "1.0.0-beta.3",
     "@tanstack/react-router": "^1.168.23",
     "better-sqlite3": "^12.9.0",
+    "electron-icon-builder": "^2.0.1",
     "lucide-react": "^1.8.0",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
