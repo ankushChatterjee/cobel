@@ -10,6 +10,7 @@ import type {
   CanonicalItemType,
   CanonicalRequestType,
   ChatAttachment,
+  FileReadPreview,
   ModelInfo,
   ProviderApprovalDecision,
   ProviderRuntimeEvent,
@@ -114,6 +115,7 @@ function toToolLifecycleItemType(toolName: string): CanonicalItemType {
   ) {
     return 'file_change'
   }
+  if (normalized === 'grep') return 'code_search'
   if (normalized.includes('web')) return 'web_search'
   if (normalized.includes('mcp')) return 'mcp_tool_call'
   if (normalized.includes('image')) return 'image_view'
@@ -226,6 +228,93 @@ function fileEditChangesFromOpenCodeToolPart(part: Part): FileEditChange[] | und
       ? state.metadata
       : undefined
   return fileEditChangesFromOpenCodeMetadata(meta, fallbacks)
+}
+
+function basenamePath(filePath: string): string {
+  const t = filePath.trim()
+  if (!t) return t
+  const norm = t.replace(/\\/g, '/')
+  const i = norm.lastIndexOf('/')
+  return i >= 0 ? norm.slice(i + 1) : norm
+}
+
+/** OpenCode read tool wraps path/type/content in pseudo-tags on stdout. */
+function parseOpenCodeReadTaggedOutput(output: string): {
+  path: string
+  resourceType?: string
+  content: string
+} | undefined {
+  const pathMatch = output.match(/<path>([\s\S]*?)<\/path>/i)
+  const typeMatch = output.match(/<type>([\s\S]*?)<\/type>/i)
+  const contentMatch = output.match(/<content>([\s\S]*?)<\/content>/i)
+  if (!pathMatch && !contentMatch) return undefined
+  const path = pathMatch?.[1]?.trim() ?? ''
+  const resourceType = typeMatch?.[1]?.trim()
+  const content = contentMatch?.[1]?.trim() ?? ''
+  if (!path && !content) return undefined
+  return { path: path || '(file)', resourceType, content }
+}
+
+function readInputFilePath(state: Extract<Part, { type: 'tool' }>['state']): string | undefined {
+  if (!('input' in state) || !state.input || typeof state.input !== 'object') return undefined
+  const fp = (state.input as Record<string, unknown>).filePath
+  return typeof fp === 'string' && fp.trim() ? fp.trim() : undefined
+}
+
+function fileReadPreviewFromOpenCodeReadTool(part: Extract<Part, { type: 'tool' }>): FileReadPreview | undefined {
+  if (part.tool.toLowerCase() !== 'read') return undefined
+  const { state } = part
+  let path = readInputFilePath(state) ?? ''
+  let content = ''
+  let resourceType: string | undefined
+  let truncated: boolean | undefined
+
+  if (state.status === 'completed' && 'output' in state && typeof state.output === 'string') {
+    const parsed = parseOpenCodeReadTaggedOutput(state.output)
+    if (parsed) {
+      path = path || parsed.path
+      content = parsed.content
+      resourceType = parsed.resourceType
+    } else if (state.output.trim()) {
+      content = state.output
+    }
+  } else if (
+    (state.status === 'running' || state.status === 'pending') &&
+    'metadata' in state &&
+    state.metadata &&
+    typeof state.metadata === 'object'
+  ) {
+    const m = state.metadata as Record<string, unknown>
+    if (typeof m.preview === 'string') content = m.preview
+    if (typeof m.truncated === 'boolean') truncated = m.truncated
+  }
+
+  if (!path && !content.trim()) return undefined
+  return { path: path || '(file)', content, resourceType, truncated }
+}
+
+function toolLifecycleTitle(part: Extract<Part, { type: 'tool' }>): string {
+  const st = part.state
+  const toolLower = part.tool.toLowerCase()
+
+  if ('title' in st && typeof st.title === 'string' && st.title.trim()) {
+    const t = st.title.trim()
+    if (!(toolLower === 'grep' && t.toLowerCase() === 'grep')) return t
+  }
+
+  if (toolLower === 'grep' && 'input' in st && st.input && typeof st.input === 'object') {
+    const input = st.input as Record<string, unknown>
+    const pattern = typeof input.pattern === 'string' && input.pattern.trim() ? input.pattern.trim() : ''
+    if (pattern) {
+      const include =
+        typeof input.include === 'string' && input.include.trim() ? input.include.trim() : ''
+      return include ? `${pattern} (${include})` : pattern
+    }
+  }
+
+  const fp = readInputFilePath(st)
+  if (fp) return basenamePath(fp)
+  return part.tool
 }
 
 function sessionErrorMessage(error: unknown): string {
@@ -783,9 +872,14 @@ export class OpenCodeAdapter implements ProviderAdapter {
         }
         if (part.type === 'tool') {
           const itemType = toToolLifecycleItemType(part.tool)
-          const title =
-            part.state.status === 'running' ? (part.state.title ?? part.tool) : part.tool
-          const detail = detailFromToolPart(part)
+          const title = toolLifecycleTitle(part)
+          const fileReadPreview = fileReadPreviewFromOpenCodeReadTool(part)
+          const detail =
+            part.state.status === 'error'
+              ? detailFromToolPart(part)
+              : fileReadPreview
+                ? undefined
+                : detailFromToolPart(part)
           const fileEditChanges = fileEditChangesFromOpenCodeToolPart(part)
           const payload = {
             itemType,
@@ -797,6 +891,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
             ...(title ? { title } : {}),
             ...(detail ? { detail } : {}),
             ...(fileEditChanges ? { fileEditChanges } : {}),
+            ...(fileReadPreview ? { fileReadPreview } : {}),
             data: { tool: part.tool, state: part.state }
           }
           const evType =

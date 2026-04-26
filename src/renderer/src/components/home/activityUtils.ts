@@ -4,6 +4,7 @@ import {
   fileEditChangesToPreview,
   readCanonicalFileEditChanges
 } from '../../../../shared/fileEditChanges'
+import { readCanonicalFileReadPreview } from '../../../../shared/fileReadPreview'
 
 export function isPendingPrompt(activity: OrchestrationThreadActivity): boolean {
   return (
@@ -100,6 +101,7 @@ export function labelForActivity(activity: OrchestrationThreadActivity): string 
   if (activity.kind === 'runtime.error') return 'error'
   if (activity.kind.includes('approval')) return 'approval'
   if (activity.kind.includes('user-input')) return 'input'
+  if (readCanonicalFileReadPreview(activity.payload)) return 'read'
   const itemType = readPayloadString(activity.payload, 'itemType')
   switch (itemType) {
     case 'command_execution':
@@ -109,6 +111,7 @@ export function labelForActivity(activity: OrchestrationThreadActivity): string 
     case 'reasoning':
       return 'thinking'
     case 'web_search':
+    case 'code_search':
       return 'search'
     case 'mcp_tool_call':
       return 'mcp'
@@ -195,6 +198,7 @@ export function statusLabel(status: string): string {
 }
 
 export function categorizeToolActivity(activity: OrchestrationThreadActivity): string {
+  if (readCanonicalFileReadPreview(activity.payload)) return 'read'
   const label = labelForActivity(activity)
   if (label === 'terminal' || label === 'mcp') return label
   if (label === 'edit') return 'edit'
@@ -217,6 +221,7 @@ export function categorizeToolActivity(activity: OrchestrationThreadActivity): s
 
 export function verbForActivity(activity: OrchestrationThreadActivity): string {
   const payload = activity.payload ?? {}
+  if (readCanonicalFileReadPreview(payload)) return 'Read'
   const title = readPayloadString(payload, 'title') ?? activity.summary
   const label = labelForActivity(activity)
   if (label === 'edit') return 'Edited'
