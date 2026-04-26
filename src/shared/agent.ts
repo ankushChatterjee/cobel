@@ -1,3 +1,7 @@
+import type { FileEditChange } from './fileEditChanges'
+
+export type { FileEditChange } from './fileEditChanges'
+
 export type ProviderId = 'codex' | 'opencode'
 
 export type RuntimeMode = 'approval-required' | 'auto-accept-edits' | 'full-access'
@@ -147,6 +151,7 @@ export type ProviderRuntimeEvent =
         title?: string
         detail?: string
         data?: unknown
+        fileEditChanges?: FileEditChange[]
       }
     })
   | (RuntimeEventBase & {
@@ -155,6 +160,7 @@ export type ProviderRuntimeEvent =
         requestType: CanonicalRequestType
         detail?: string
         args?: unknown
+        fileEditChanges?: FileEditChange[]
       }
     })
   | (RuntimeEventBase & {

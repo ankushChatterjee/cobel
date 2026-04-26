@@ -364,6 +364,23 @@ describe('EmbeddedDiffView', () => {
     expect(container.querySelector('.embedded-diff-raw-line.deletion')).toHaveTextContent('-old')
     expect(container.querySelector('.embedded-diff-raw-line.addition')).toHaveTextContent('+new')
   })
+
+  it('compact single-file embedded diff has no inner file header row', async () => {
+    const user = userEvent.setup()
+    const patch = `diff --git a/src/components/layout/Sidebar.tsx b/src/components/layout/Sidebar.tsx
+--- a/src/components/layout/Sidebar.tsx
++++ b/src/components/layout/Sidebar.tsx
+@@ -1,1 +1,1 @@
+-old
++new
+`
+    const { container } = render(
+      <EmbeddedDiffView diff={patch} title="/abs/src/components/layout/Sidebar.tsx" compactTitle />
+    )
+    await user.click(screen.getByRole('button', { name: /Sidebar\.tsx/i }))
+    expect(container.querySelector('.diff-file-collapse-header')).toBeNull()
+    expect(container.querySelector('.embedded-diff-single-file')).not.toBeNull()
+  })
 })
 
 describe('FloatingDiffPill', () => {

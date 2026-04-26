@@ -6,6 +6,7 @@ import type {
   ProviderSession,
   RuntimeContentStreamKind
 } from '../../../../shared/agent'
+import { fileEditChangesFromUnknownPayload } from '../../../../shared/fileEditChanges'
 import { CodexAppServerManager, type ProviderEvent } from './CodexAppServerManager'
 import { ProviderEventBus } from '../types'
 import type { ProviderAdapter, SendTurnInput, StartSessionInput } from '../types'
@@ -209,16 +210,21 @@ export function mapProviderEvent(event: ProviderEvent): ProviderRuntimeEvent | n
       return itemEvent(base, 'item.updated', event)
     case 'item/commandExecution/requestApproval':
     case 'item/fileRead/requestApproval':
-    case 'item/fileChange/requestApproval':
+    case 'item/fileChange/requestApproval': {
+      const requestType = requestTypeForMethod(event.method)
+      const fileEditChanges =
+        requestType === 'file_change_approval' ? fileEditChangesFromUnknownPayload(event.payload) : undefined
       return {
         ...base,
         type: 'request.opened',
         payload: {
-          requestType: requestTypeForMethod(event.method),
+          requestType,
           detail: approvalDetail(event),
-          args: event.payload
+          args: event.payload,
+          ...(fileEditChanges ? { fileEditChanges } : {})
         }
       }
+    }
     case 'item/requestApproval/decision':
       return null
     case 'serverRequest/resolved':
@@ -295,6 +301,8 @@ function itemEvent(
   }
   const title = readToolTitle(itemPayload) ?? readToolTitle(payload)
   const detail = readToolDetail(itemPayload) ?? readToolDetail(payload)
+  const fileEditChanges =
+    itemType === 'file_change' ? fileEditChangesFromUnknownPayload(payload) : undefined
   return {
     ...base,
     type,
@@ -303,6 +311,7 @@ function itemEvent(
       status: readItemStatus(itemPayload, type),
       title,
       detail,
+      ...(fileEditChanges ? { fileEditChanges } : {}),
       data: {
         ...payload,
         normalized: {

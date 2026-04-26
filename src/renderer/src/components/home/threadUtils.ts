@@ -253,6 +253,40 @@ export function threadHasInFlightWorkIndicator(thread: OrchestrationThread | nul
 }
 
 /**
+ * A model turn is still in flight (waiting for the next model chunk, tool, or end of turn).
+ * - Session can be `ready` with `activeTurnId` set between sub-steps.
+ * - Do not short-circuit on `latestTurn.status === 'completed'`: the aggregate can still describe
+ *   the *previous* turn for a short window after the user sends while the new turn is starting;
+ *   check session first, then `latestTurn`, then `activeTurnId`.
+ * - A finished turn (terminal `latestTurn` and no `activeTurnId` and not running) yields false.
+ */
+export function isOrchestrationModelTurnInProgress(thread: OrchestrationThread | null): boolean {
+  if (!thread) return false
+  const s = thread.session?.status
+  if (s === 'starting' || s === 'running') return true
+  const turnSt = thread.latestTurn?.status
+  if (turnSt === 'running') return true
+  if (thread.session?.activeTurnId) return true
+  return false
+}
+
+/**
+ * After merging a server snapshot, clear the optimistic "pending turn" flag only when the snapshot
+ * reflects real model/orchestration progress — not merely `session: ready`, which would fire on every
+ * snapshot and hide the thinking row before the model responds.
+ */
+export function snapshotMergeClearsPendingTurnStart(thread: OrchestrationThread): boolean {
+  if (isOrchestrationModelTurnInProgress(thread)) return true
+  if (thread.proposedPlans.length > 0) return true
+  // Do not clear on historical activities alone — any prior tool row would make this true forever
+  // on every snapshot. New work clears via this helper when turn/session/assistant show progress
+  // or through incremental `thread.activity-upserted` + `eventClearsPendingTurnWait`.
+  const last = thread.messages[thread.messages.length - 1]
+  if (last?.role === 'assistant') return true
+  return false
+}
+
+/**
  * When the model is still processing but there is no thinking row, assistant stream, or tool run yet,
  * keep a tail "thinking…" row so the thread never looks stalled.
  */
@@ -260,7 +294,6 @@ export function shouldShowTranscriptEndThinkingRow(
   thread: OrchestrationThread | null,
   input: {
     isPendingTurnStart: boolean
-    isSessionActive: boolean
     hasActiveThinkingActivity: boolean
   }
 ): boolean {
@@ -274,7 +307,7 @@ export function shouldShowTranscriptEndThinkingRow(
       return false
     }
   }
-  return input.isPendingTurnStart || input.isSessionActive
+  return input.isPendingTurnStart || isOrchestrationModelTurnInProgress(thread)
 }
 
 export function eventClearsPendingTurnWait(event: OrchestrationEvent): boolean {
@@ -292,12 +325,16 @@ export function eventClearsPendingTurnWait(event: OrchestrationEvent): boolean {
         return true
       }
       const s = event.session.status
-      return (
-        s === 'ready' || s === 'stopped' || s === 'interrupted' || s === 'error' || s === 'idle'
-      )
+      // Rely on `thread.latest-turn-set` (or assistant message, etc.) to end a turn. Session
+      // can stay `ready` (or be re-broadcast as `ready`) while we are still waiting for the
+      // first model token after a send, which would spuriously clear the optimistic wait flag.
+      if (s === 'ready') {
+        return false
+      }
+      return s === 'stopped' || s === 'interrupted' || s === 'error' || s === 'idle'
     }
     case 'thread.snapshot.changed':
-      return threadHasTranscriptVisibleProgress(event.thread)
+      return snapshotMergeClearsPendingTurnStart(event.thread)
     case 'thread.turn-diff-completed':
     case 'thread.reverted':
       return true
@@ -313,8 +350,9 @@ export function eventClearsPendingTurnWait(event: OrchestrationEvent): boolean {
   }
 }
 
+/** Same rules as after a full snapshot merge: model/orchestration has actually started. */
 export function threadSnapshotHasAssistantResponse(thread: OrchestrationThread): boolean {
-  return threadHasTranscriptVisibleProgress(thread)
+  return snapshotMergeClearsPendingTurnStart(thread)
 }
 
 export function eventHasAssistantResponse(event: OrchestrationEvent): boolean {

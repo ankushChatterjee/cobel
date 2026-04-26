@@ -8,6 +8,7 @@ import type {
   RuntimeContentStreamKind,
   RuntimeSessionState
 } from '../../../shared/agent'
+import { mergeFileEditChanges, readCanonicalFileEditChanges } from '../../../shared/fileEditChanges'
 import { OrchestrationEngine } from './OrchestrationEngine'
 
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000
@@ -153,19 +154,26 @@ export class ProviderRuntimeIngestion {
       case 'request.opened':
         this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
         this.flushAssistant(event, { closeSegment: true })
-        this.engine.upsertActivity(
-          {
-            id: `approval:${event.requestId ?? event.eventId}`,
-            kind: 'approval.requested',
-            tone: 'approval',
-            summary: event.payload.detail ?? titleForRequest(event.payload.requestType),
-            payload: { requestType: event.payload.requestType, args: event.payload.args },
-            turnId: event.turnId ?? null,
-            resolved: false,
-            createdAt: event.createdAt
-          },
-          event.threadId
-        )
+        {
+          const approvalFileEdit = readCanonicalFileEditChanges(event.payload)
+          this.engine.upsertActivity(
+            {
+              id: `approval:${event.requestId ?? event.eventId}`,
+              kind: 'approval.requested',
+              tone: 'approval',
+              summary: event.payload.detail ?? titleForRequest(event.payload.requestType),
+              payload: {
+                requestType: event.payload.requestType,
+                args: event.payload.args,
+                ...(approvalFileEdit.length > 0 ? { fileEditChanges: approvalFileEdit } : {})
+              },
+              turnId: event.turnId ?? null,
+              resolved: false,
+              createdAt: event.createdAt
+            },
+            event.threadId
+          )
+        }
         this.engine.setSession({
           threadId: event.threadId,
           status: 'ready',
@@ -373,6 +381,27 @@ export class ProviderRuntimeIngestion {
         : event.type === 'item.started'
           ? 'tool.started'
           : 'tool.updated'
+    const mergedFileEdit = mergeFileEditChanges(
+      (() => {
+        const inc = readCanonicalFileEditChanges(event.payload)
+        return inc.length > 0 ? inc : undefined
+      })(),
+      (() => {
+        const prev = readCanonicalFileEditChanges(existing?.payload)
+        return prev.length > 0 ? prev : undefined
+      })()
+    )
+    const toolPayload: Record<string, unknown> = {
+      ...existing?.payload,
+      itemType: event.payload.itemType ?? readPayloadString(existing?.payload, 'itemType'),
+      status: nextStatus,
+      title: event.payload.title ?? readPayloadString(existing?.payload, 'title'),
+      detail: event.payload.detail ?? readPayloadString(existing?.payload, 'detail'),
+      data: event.payload.data ?? existing?.payload?.data
+    }
+    if (mergedFileEdit && mergedFileEdit.length > 0) {
+      toolPayload.fileEditChanges = mergedFileEdit
+    }
     this.engine.upsertActivity(
       {
         id,
@@ -383,14 +412,7 @@ export class ProviderRuntimeIngestion {
           existing?.summary ??
           event.payload.detail ??
           titleForItem(event.payload.itemType),
-        payload: {
-          ...existing?.payload,
-          itemType: event.payload.itemType ?? readPayloadString(existing?.payload, 'itemType'),
-          status: nextStatus,
-          title: event.payload.title ?? readPayloadString(existing?.payload, 'title'),
-          detail: event.payload.detail ?? readPayloadString(existing?.payload, 'detail'),
-          data: event.payload.data ?? existing?.payload?.data
-        },
+        payload: toolPayload,
         turnId: event.turnId ?? null,
         createdAt: event.createdAt
       },

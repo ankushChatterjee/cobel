@@ -582,6 +582,51 @@ function CollapsibleFileDiff({
   )
 }
 
+type EmbeddedFileDiffOptions = typeof diffOptionsBase & {
+  diffStyle: DiffStyleMode
+  overflow: 'wrap' | 'scroll'
+}
+
+function EmbeddedDiffSingleFileBody({
+  fileDiff,
+  options
+}: {
+  fileDiff: FileDiffMetadata
+  options: EmbeddedFileDiffOptions
+}): React.JSX.Element {
+  const [contentVisible, setContentVisible] = useState(false)
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setContentVisible(false)
+    const el = contentRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      if (el.offsetHeight > 0) {
+        setContentVisible(true)
+        observer.disconnect()
+      }
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [fileDiff])
+
+  return (
+    <div
+      ref={contentRef}
+      className={`diff-file-content embedded-diff-single-file ${contentVisible ? 'visible' : ''}`}
+    >
+      <FileDiff
+        fileDiff={fileDiff}
+        options={{
+          ...options,
+          disableFileHeader: true
+        }}
+      />
+    </div>
+  )
+}
+
 export const EmbeddedDiffView = memo(function EmbeddedDiffView({
   diff,
   title,
@@ -609,6 +654,7 @@ export const EmbeddedDiffView = memo(function EmbeddedDiffView({
   const autoCollapsed = lineCount > 400 || files.length > 5 || diff.length > 80_000
   const displayFileCount = files.length || 1
   const displayTitle = compactTitle ? basename(title) : title
+  const minimalSingleFile = compactTitle && files.length === 1
   const [collapsed, setCollapsed] = useState(true)
 
   useEffect(() => {
@@ -635,6 +681,8 @@ export const EmbeddedDiffView = memo(function EmbeddedDiffView({
               <DiffStats additions={totals.additions} deletions={totals.deletions} />
               {autoCollapsed ? <span className="embedded-diff-meta">large</span> : null}
             </>
+          ) : minimalSingleFile ? (
+            <DiffStats additions={totals.additions} deletions={totals.deletions} />
           ) : null}
         </button>
         {status ? <div className="embedded-diff-status">{status}</div> : null}
@@ -646,17 +694,28 @@ export const EmbeddedDiffView = memo(function EmbeddedDiffView({
           {files.length > 0 ? (
             <WorkerPoolContextProvider {...diffWorkerPool}>
               <div className="diff-file-stack">
-                {files.map((file) => (
-                  <CollapsibleFileDiff
-                    key={`${file.prevName ?? ''}:${file.name}`}
-                    fileDiff={file}
+                {minimalSingleFile ? (
+                  <EmbeddedDiffSingleFileBody
+                    fileDiff={files[0]!}
                     options={{
                       ...diffOptionsBase,
                       diffStyle: 'unified',
                       overflow: 'scroll'
                     }}
                   />
-                ))}
+                ) : (
+                  files.map((file) => (
+                    <CollapsibleFileDiff
+                      key={`${file.prevName ?? ''}:${file.name}`}
+                      fileDiff={file}
+                      options={{
+                        ...diffOptionsBase,
+                        diffStyle: 'unified',
+                        overflow: 'scroll'
+                      }}
+                    />
+                  ))
+                )}
               </div>
             </WorkerPoolContextProvider>
           ) : (

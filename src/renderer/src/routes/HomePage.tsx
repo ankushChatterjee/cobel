@@ -79,7 +79,7 @@ import {
   readSessionErrorForDisplay,
   runLegacyMigration,
   shouldShowTranscriptEndThinkingRow,
-  threadHasTranscriptVisibleProgress,
+  snapshotMergeClearsPendingTurnStart,
   upsertById,
   upsertOptimisticUserMessage
 } from '../components/home/threadUtils'
@@ -201,10 +201,9 @@ export function HomePage(): React.JSX.Element {
     () =>
       shouldShowTranscriptEndThinkingRow(thread, {
         isPendingTurnStart: isPendingThinking,
-        isSessionActive: isRunning,
         hasActiveThinkingActivity
       }),
-    [thread, isPendingThinking, isRunning, hasActiveThinkingActivity]
+    [thread, isPendingThinking, hasActiveThinkingActivity]
   )
 
   useEffect(() => {
@@ -439,7 +438,7 @@ export function HomePage(): React.JSX.Element {
         if (item.snapshot.snapshotSequence < lastSequenceRef.current) return
         lastSequenceRef.current = item.snapshot.snapshotSequence
         setThread(mergePendingUserMessages(item.snapshot.thread, pendingUserMessagesRef.current))
-        if (threadHasTranscriptVisibleProgress(item.snapshot.thread)) {
+        if (snapshotMergeClearsPendingTurnStart(item.snapshot.thread)) {
           setIsPendingThinking(false)
         }
         return
