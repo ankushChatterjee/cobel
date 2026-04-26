@@ -358,9 +358,22 @@ export class OpenCodeAdapter implements ProviderAdapter {
   private readonly sessions = new Map<string, OpenCodeSessionContext>()
   private probeCache: { at: number; summary: ProviderSummary; models: ModelInfo[] } | null = null
   private readonly cacheTtlMs = 45_000
+  /** When true, child `opencode serve` exiting (e.g. SIGINT during app teardown) must not surface as a runtime error. */
+  private suppressUnexpectedServerExit = false
 
   streamEvents(listener: (event: ProviderRuntimeEvent) => void): () => void {
     return this.bus.subscribe(listener)
+  }
+
+  /**
+   * Stops every OpenCode session and closes managed `opencode serve` processes.
+   * Call from app `before-quit` so the child is not left to die from SIGINT alone.
+   */
+  async disposeAllSessions(): Promise<void> {
+    this.suppressUnexpectedServerExit = true
+    const contexts = [...this.sessions.values()]
+    this.sessions.clear()
+    await Promise.all(contexts.map((ctx) => stopOpenCodeContext(ctx)))
   }
 
   async getSummary(): Promise<ProviderSummary> {
@@ -784,7 +797,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
     })()
 
     context.server.process?.once('exit', (code, signal) => {
-      if (context.stopped) return
+      if (context.stopped || this.suppressUnexpectedServerExit) return
+      if (signal === 'SIGINT' || signal === 'SIGTERM') return
       this.emitUnexpectedExit(
         context,
         `OpenCode server exited unexpectedly (${signal ?? code ?? 'unknown'}).`
@@ -793,7 +807,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   private emitUnexpectedExit(context: OpenCodeSessionContext, message: string): void {
-    if (context.stopped) return
+    if (context.stopped || this.suppressUnexpectedServerExit) return
     context.stopped = true
     this.sessions.delete(context.session.threadId)
     try {

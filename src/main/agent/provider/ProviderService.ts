@@ -103,6 +103,16 @@ export class ProviderService {
     await this.getAdapter(provider).stopSession(input)
   }
 
+  /** Closes all OpenCode child processes (used on app quit). */
+  async disposeOpenCodeSessions(): Promise<void> {
+    const openCode = this.adapters.get('opencode') as
+      | { disposeAllSessions?: () => Promise<void> }
+      | undefined
+    if (openCode && typeof openCode.disposeAllSessions === 'function') {
+      await openCode.disposeAllSessions()
+    }
+  }
+
   subscribe(listener: (event: ProviderRuntimeEvent) => void): () => void {
     this.emitter.on('event', listener)
     return () => this.emitter.off('event', listener)

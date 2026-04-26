@@ -347,6 +347,11 @@ export class AgentBackend {
     }
   }
 
+  /** Release provider child processes before the Electron app exits. */
+  async prepareQuit(): Promise<void> {
+    await this.providers.disposeOpenCodeSessions()
+  }
+
   private providerForThread(threadId: string): ProviderId {
     return this.engine.getThread(threadId).session?.providerName ?? 'codex'
   }

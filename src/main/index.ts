@@ -20,6 +20,19 @@ const agentBackend = new AgentBackend({
 
 registerAgentIpc(agentBackend)
 
+let appQuitTeardownStarted = false
+app.on('before-quit', (event) => {
+  if (appQuitTeardownStarted) return
+  appQuitTeardownStarted = true
+  event.preventDefault()
+  void agentBackend
+    .prepareQuit()
+    .catch(() => undefined)
+    .finally(() => {
+      app.quit()
+    })
+})
+
 if (is.dev) {
   app.commandLine.appendSwitch(
     'remote-debugging-port',
