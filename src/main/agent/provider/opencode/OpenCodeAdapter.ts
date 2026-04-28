@@ -21,7 +21,11 @@ import type {
 } from '../../../../shared/agent'
 import type { FileEditChange } from '../../../../shared/fileEditChanges'
 import { fileEditChangesFromOpenCodeMetadata } from '../../../../shared/fileEditChanges'
-import { parseThreadTitleResponse } from '../../../../shared/threadTitle'
+import {
+  buildThreadTitlePrompt,
+  parseThreadTitleResponse,
+  THREAD_TITLE_OUTPUT_SCHEMA
+} from '../../../../shared/threadTitle'
 import {
   createEventId,
   nowIso,
@@ -415,6 +419,9 @@ export class OpenCodeAdapter implements ProviderAdapter {
         })
         if (r.code === 0) version = r.stdout.trim().split('\n')[0] ?? ''
       }
+      if (!resolvedBinaryPath && !cfg.serverUrl) {
+        throw new Error(`OpenCode CLI was not found: ${cfg.binaryPath}`)
+      }
       const server = await connectToOpenCodeServer({
         binaryPath: resolvedBinaryPath ?? cfg.binaryPath,
         serverUrl: cfg.serverUrl || null
@@ -676,23 +683,32 @@ export class OpenCodeAdapter implements ProviderAdapter {
       })
       const sid = (titleSession.data as { id?: string })?.id
       if (!sid) return null
-      const prompt =
-        `Reply with a short thread title (max 8 words) for this user message. Output only the title, no quotes.\n\n${input.input.slice(0, 2000)}`
-      await client.session.promptAsync({
+      const prompt = buildThreadTitlePrompt(input.input)
+      const result = await client.session.prompt({
         sessionID: sid,
         model: { providerID: parsed.providerID, modelID: parsed.modelID },
-        parts: [{ type: 'text', text: prompt }]
-      })
-      const messages = await client.session.messages({ sessionID: sid })
-      const rows = (messages.data ?? []) as Array<{ info?: { role?: string }; parts?: Array<{ type?: string; text?: string }> }>
-      let assistantText = ''
-      for (const row of rows) {
-        if (row.info?.role !== 'assistant') continue
-        for (const p of row.parts ?? []) {
-          if (p.type === 'text' && p.text) assistantText += p.text
+        parts: [{ type: 'text', text: prompt }],
+        format: {
+          type: 'json_schema',
+          schema: THREAD_TITLE_OUTPUT_SCHEMA,
+          retryCount: 2
         }
-      }
+      })
       await client.session.delete({ sessionID: sid }).catch(() => undefined)
+      const structured = (result.data?.info as { structured?: unknown })?.structured
+      if (
+        structured &&
+        typeof structured === 'object' &&
+        structured !== null &&
+        typeof (structured as Record<string, unknown>).title === 'string'
+      ) {
+        return parseThreadTitleResponse(JSON.stringify(structured))
+      }
+      // Fallback: read the assistant text from the response parts
+      let assistantText = ''
+      for (const p of (result.data?.parts ?? []) as Array<{ type?: string; text?: string }>) {
+        if (p.type === 'text' && p.text) assistantText += p.text
+      }
       const raw = assistantText.trim()
       if (!raw) return null
       return parseThreadTitleResponse(raw)

@@ -30,7 +30,7 @@ function prependCliPathSegments(): void {
   if (process.platform === 'linux') {
     candidates.push('/usr/local/bin', '/usr/bin', '/bin')
   }
-  candidates.push(join(home, '.local', 'bin'))
+  candidates.push(join(home, '.local', 'bin'), join(home, '.opencode', 'bin'))
 
   const existing = (process.env.PATH ?? '').split(sep).filter(Boolean)
   const existingSet = new Set(existing)

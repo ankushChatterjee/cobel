@@ -739,12 +739,13 @@ function openCodeBinaryCandidates(binaryPath: string): string[] {
       : [
           '/opt/homebrew/bin',
           '/usr/local/bin',
-          '/usr/bin',
-          '/bin',
-          Path.join(home, '.local', 'bin'),
-          Path.join(home, 'bin'),
-          Path.join(home, '.bun', 'bin'),
-          Path.join(home, 'Library', 'pnpm'),
+        '/usr/bin',
+        '/bin',
+        Path.join(home, '.local', 'bin'),
+        Path.join(home, '.opencode', 'bin'),
+        Path.join(home, 'bin'),
+        Path.join(home, '.bun', 'bin'),
+        Path.join(home, 'Library', 'pnpm'),
           Path.join(home, '.npm-global', 'bin')
         ]
 
