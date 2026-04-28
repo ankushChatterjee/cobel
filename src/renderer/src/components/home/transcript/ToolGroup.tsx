@@ -1,8 +1,12 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { statusFromActivity, statusToneForTool, summarizeToolRun } from '../activityUtils'
+import { readPayloadString, statusFromActivity, statusToneForTool, summarizeToolRun } from '../activityUtils'
 import type { ActivityTranscriptItem } from '../types'
 import { ToolLine } from './ToolLine'
+
+function isEditActivity(item: ActivityTranscriptItem): boolean {
+  return readPayloadString(item.activity.payload, 'itemType') === 'file_change'
+}
 
 export const ToolGroup = memo(function ToolGroup({
   activities,
@@ -29,6 +33,9 @@ export const ToolGroup = memo(function ToolGroup({
       : allComplete
         ? 'is-complete'
         : ''
+
+  const editActivities = activities.filter(isEditActivity)
+  const collapsibleActivities = activities.filter((item) => !isEditActivity(item))
 
   // Start open while streaming; auto-collapse when the run finishes.
   // User can re-open after collapse.
@@ -71,9 +78,9 @@ export const ToolGroup = memo(function ToolGroup({
         </span>
         <span className="tool-group-label">{summary}</span>
       </button>
-      {open ? (
+      {open && collapsibleActivities.length > 0 ? (
         <div className="tool-group-body">
-          {activities.map((item) => (
+          {collapsibleActivities.map((item) => (
             <ToolLine
               key={item.id}
               activity={item.activity}
@@ -83,6 +90,14 @@ export const ToolGroup = memo(function ToolGroup({
           ))}
         </div>
       ) : null}
+      {editActivities.map((item) => (
+        <ToolLine
+          key={item.id}
+          activity={item.activity}
+          expanded={expandedToolIds.has(item.activity.id)}
+          onToggle={() => onToggleTool(item.activity.id)}
+        />
+      ))}
     </div>
   )
 })

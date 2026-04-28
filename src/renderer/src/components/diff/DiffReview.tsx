@@ -673,10 +673,10 @@ export const EmbeddedDiffView = memo(function EmbeddedDiffView({
   const displayFileCount = files.length || 1
   const displayTitle = compactTitle ? basename(title) : title
   const minimalSingleFile = compactTitle && files.length === 1
-  const [collapsed, setCollapsed] = useState(true)
+  const [collapsed, setCollapsed] = useState(false)
 
   useEffect(() => {
-    setCollapsed(true)
+    setCollapsed(false)
   }, [diff])
 
   return (

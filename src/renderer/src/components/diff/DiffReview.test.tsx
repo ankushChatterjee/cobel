@@ -374,39 +374,36 @@ describe('ChangedFilePills', () => {
 })
 
 describe('EmbeddedDiffView', () => {
-  it('renders a compact embedded diff collapsed by default', async () => {
+  it('renders a compact embedded diff expanded by default', async () => {
     const { container } = render(
       <EmbeddedDiffView diff={lastTurnDiff} title="src/components/Button.tsx" />
     )
     const toggle = container.querySelector<HTMLButtonElement>('.embedded-diff-toggle')
 
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryAllByTestId('mock-file-diff')).toHaveLength(0)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.queryAllByTestId('mock-file-diff')).toHaveLength(2)
   })
 
-  it('expands collapsed diffs on demand', async () => {
+  it('collapses expanded diffs on demand', async () => {
     const user = userEvent.setup()
     const hugeDiff = Array.from({ length: 410 }, (_, index) => `+line ${index}`).join('\n')
 
     render(<EmbeddedDiffView diff={hugeDiff} title="large patch" />)
 
     const toggle = screen.getByRole('button', { name: /large patch/i })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByText(/\+line 1/i)).not.toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('+line 1')).toBeInTheDocument()
 
     await user.click(toggle)
 
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('+line 1')).toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/\+line 1/i)).not.toBeInTheDocument()
   })
 
   it('colors added and removed lines in raw embedded diffs', async () => {
-    const user = userEvent.setup()
     const { container } = render(
       <EmbeddedDiffView diff={'@@ -1 +1 @@\n-old\n+new\n context'} title="raw patch" />
     )
-
-    await user.click(screen.getByRole('button', { name: /raw patch/i }))
 
     expect(container.querySelector('.embedded-diff-raw-line.hunk')).toHaveTextContent('@@')
     expect(container.querySelector('.embedded-diff-raw-line.deletion')).toHaveTextContent('-old')
@@ -414,18 +411,15 @@ describe('EmbeddedDiffView', () => {
   })
 
   it('compact single-file embedded diff has no inner file header row', async () => {
-    const user = userEvent.setup()
-    const patch = `diff --git a/src/components/layout/Sidebar.tsx b/src/components/layout/Sidebar.tsx
+    const { container } = render(
+      <EmbeddedDiffView diff={`diff --git a/src/components/layout/Sidebar.tsx b/src/components/layout/Sidebar.tsx
 --- a/src/components/layout/Sidebar.tsx
 +++ b/src/components/layout/Sidebar.tsx
 @@ -1,1 +1,1 @@
 -old
 +new
-`
-    const { container } = render(
-      <EmbeddedDiffView diff={patch} title="/abs/src/components/layout/Sidebar.tsx" compactTitle />
+`} title="/abs/src/components/layout/Sidebar.tsx" compactTitle />
     )
-    await user.click(screen.getByRole('button', { name: /Sidebar\.tsx/i }))
     expect(container.querySelector('.diff-file-collapse-header')).toBeNull()
     expect(container.querySelector('.embedded-diff-single-file')).not.toBeNull()
   })

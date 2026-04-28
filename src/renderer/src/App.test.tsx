@@ -1121,9 +1121,9 @@ describe('renderer app', () => {
 
     expect(await screen.findByRole('button', { name: /app\.ts/i })).toHaveAttribute(
       'aria-expanded',
-      'false'
+      'true'
     )
-    expect(screen.queryByText(/\+new line/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/\+new line/i)).toBeInTheDocument()
 
     const approve = screen.getByRole('button', { name: /approve/i })
     await user.click(approve)
