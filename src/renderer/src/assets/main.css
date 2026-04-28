@@ -456,6 +456,28 @@
   color: var(--error);
 }
 
+.thread-show-more-button {
+  width: fit-content;
+  margin-left: 33px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.thread-show-more-button:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
 
 /* ── Chat surface ─────────────────────────────────────────── */
 

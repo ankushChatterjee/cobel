@@ -1,9 +1,12 @@
-import { KeyboardEvent, PointerEvent } from 'react'
+import { KeyboardEvent, PointerEvent, useState } from 'react'
 import { Folder, FolderOpen, Plus, Trash2 } from 'lucide-react'
 import type { OrchestrationShellSnapshot, ProjectSummary, ThreadShellSummary } from '../../../../shared/agent'
 import { formatThreadLastUsed, formatTime } from './formatUtils'
 import { minSidebarWidth, maxSidebarWidth } from './storage'
+import { threadsForProject } from './threadUtils'
 import type { ActiveSelection } from './types'
+
+const INITIAL_VISIBLE_THREADS = 7
 
 export function ProjectSidebar({
   shell,
@@ -34,6 +37,8 @@ export function ProjectSidebar({
   onResizeMove: (event: PointerEvent<HTMLDivElement>) => void
   onResizeEnd: (event: PointerEvent<HTMLDivElement>) => void
 }): React.JSX.Element {
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() => new Set())
+
   return (
     <aside className="project-sidebar" aria-label="Projects">
       <div className="sidebar-header">
@@ -57,14 +62,22 @@ export function ProjectSidebar({
         ) : (
           <nav className="project-list" aria-label="Project list">
             {shell.projects.map((project) => {
-              const threads = shell.threads.filter(
-                (t) => t.projectId === project.id && !t.archivedAt
-              )
+              const threads = threadsForProject(shell, project.id)
               const isOpen = openProjectIds.has(project.id)
               const isActive = project.id === selection.activeProjectId
               const activeChat = shell.threads.find(
                 (t) => t.projectId === selection.activeProjectId && t.id === selection.activeChatId
               )
+              const newestThreads = threads.slice(0, INITIAL_VISIBLE_THREADS)
+              const activeChatOutsideInitialThreads =
+                activeChat?.projectId === project.id &&
+                !newestThreads.some((thread) => thread.id === activeChat.id)
+              const showAllThreads =
+                expandedProjectIds.has(project.id) || activeChatOutsideInitialThreads
+              const visibleThreads = showAllThreads
+                ? threads
+                : threads.slice(0, INITIAL_VISIBLE_THREADS)
+              const shouldShowMoreButton = !showAllThreads && threads.length > INITIAL_VISIBLE_THREADS
               return (
                 <section key={project.id} className="project-group">
                   <div className="project-row">
@@ -93,7 +106,7 @@ export function ProjectSidebar({
                   </div>
                   {isOpen ? (
                     <div className="thread-list">
-                      {threads.map((chat) => (
+                      {visibleThreads.map((chat) => (
                         <div
                           key={chat.id}
                           className={`thread-row ${chat.id === activeChat?.id ? 'active' : ''}`}
@@ -123,6 +136,17 @@ export function ProjectSidebar({
                           </button>
                         </div>
                       ))}
+                      {shouldShowMoreButton ? (
+                        <button
+                          type="button"
+                          className="thread-show-more-button"
+                          onClick={() =>
+                            setExpandedProjectIds((current) => new Set(current).add(project.id))
+                          }
+                        >
+                          Show More
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </section>

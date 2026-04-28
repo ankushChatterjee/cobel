@@ -4,6 +4,7 @@ import type {
   OrchestrationMessage,
   OrchestrationProposedPlan,
   OrchestrationShellSnapshot,
+  ThreadShellSummary,
   OrchestrationThread
 } from '../../../../shared/agent'
 import { DEFAULT_THREAD_TITLE } from '../../../../shared/threadTitle'
@@ -125,6 +126,28 @@ export function durationBetween(start: string, end: string): number | null {
 export function timestampForSort(value: string): number {
   const timestamp = new Date(value).getTime()
   return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+export function compareThreadsByUpdatedAtDesc(
+  left: ThreadShellSummary,
+  right: ThreadShellSummary
+): number {
+  const updatedAtDiff = timestampForSort(right.updatedAt) - timestampForSort(left.updatedAt)
+  if (updatedAtDiff !== 0) return updatedAtDiff
+
+  const createdAtDiff = timestampForSort(right.createdAt) - timestampForSort(left.createdAt)
+  if (createdAtDiff !== 0) return createdAtDiff
+
+  return left.id.localeCompare(right.id)
+}
+
+export function threadsForProject(
+  shell: OrchestrationShellSnapshot,
+  projectId: string
+): ThreadShellSummary[] {
+  return shell.threads
+    .filter((thread) => thread.projectId === projectId && !thread.archivedAt)
+    .sort(compareThreadsByUpdatedAtDesc)
 }
 
 export function buildTranscriptItems(thread: OrchestrationThread | null): TranscriptItem[] {

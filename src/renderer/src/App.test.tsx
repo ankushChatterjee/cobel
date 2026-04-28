@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   ModelCatalog,
   ModelInfo,
+  OrchestrationShellSnapshot,
   OrchestrationThreadActivity,
   OrchestrationThreadStreamItem
 } from '../../shared/agent'
@@ -277,7 +278,7 @@ describe('renderer app', () => {
     ).filter((button) => !button.classList.contains('new-thread'))
     expect(threadButtons).toHaveLength(2)
 
-    await user.click(threadButtons[0])
+    await user.click(threadButtons[1])
 
     const runtimeSelectAfterReturn = (await screen.findByLabelText(/^runtime mode$/i)) as HTMLSelectElement
     const modelSelectAfterReturn = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
@@ -1248,6 +1249,90 @@ describe('renderer app', () => {
       expect(screen.queryByRole('button', { name: /delete new thread/i })).not.toBeInTheDocument()
     })
     confirmSpy.mockRestore()
+  })
+
+  it('orders sidebar threads from latest to oldest and reveals older items with Show More', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    const projectId = 'project:demo'
+    const projectPath = '/Users/ankush/codespace/gencode'
+    const snapshot: OrchestrationShellSnapshot = {
+      projects: [
+        {
+          id: projectId,
+          name: 'demo',
+          path: projectPath,
+          createdAt: '2026-04-19T00:00:00.000Z',
+          updatedAt: '2026-04-19T00:00:00.000Z',
+          archivedAt: null
+        }
+      ],
+      threads: [3, 9, 1, 7, 4, 8, 2, 6, 5].map((index) => ({
+        id: `thread-${index}`,
+        projectId,
+        title: `Thread ${index}`,
+        cwd: projectPath,
+        branch: 'main',
+        latestTurnId: null,
+        sessionStatus: 'idle' as const,
+        createdAt: `2026-04-19T00:0${index}:00.000Z`,
+        updatedAt: `2026-04-19T00:0${index}:00.000Z`,
+        archivedAt: null
+      }))
+    }
+
+    vi.mocked(window.agentApi.subscribeShell).mockImplementationOnce((listener) => {
+      listener({ kind: 'snapshot', snapshot })
+      return vi.fn()
+    })
+    vi.mocked(window.agentApi.getShellSnapshot).mockResolvedValueOnce(snapshot)
+    vi.mocked(window.agentApi.subscribeThread).mockImplementation((input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: input.threadId,
+            title: snapshot.threads.find((thread) => thread.id === input.threadId)?.title ?? input.threadId
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    const { container } = render(<RouterProvider router={router} />)
+
+    await user.click(await screen.findByRole('button', { name: /^demo$/i }))
+
+    const visibleLabels = Array.from(container.querySelectorAll<HTMLElement>('.thread-link .thread-label'))
+    expect(visibleLabels.map((label) => label.textContent)).toEqual([
+      'Thread 9',
+      'Thread 8',
+      'Thread 7',
+      'Thread 6',
+      'Thread 5',
+      'Thread 4',
+      'Thread 3'
+    ])
+    expect(container.querySelector('.thread-row.active .thread-label')).toHaveTextContent('Thread 9')
+    expect(screen.getByRole('button', { name: /show more/i })).toBeInTheDocument()
+    expect(screen.queryByText('Thread 2')).not.toBeInTheDocument()
+    expect(screen.queryByText('Thread 1')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /show more/i }))
+
+    const expandedLabels = Array.from(container.querySelectorAll<HTMLElement>('.thread-link .thread-label'))
+    expect(expandedLabels.map((label) => label.textContent)).toEqual([
+      'Thread 9',
+      'Thread 8',
+      'Thread 7',
+      'Thread 6',
+      'Thread 5',
+      'Thread 4',
+      'Thread 3',
+      'Thread 2',
+      'Thread 1'
+    ])
   })
 
   it('creates a new thread in the clicked project, not the previously active one', async () => {

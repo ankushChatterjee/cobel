@@ -82,6 +82,7 @@ import {
   runLegacyMigration,
   shouldShowTranscriptEndThinkingRow,
   snapshotMergeClearsPendingTurnStart,
+  threadsForProject,
   upsertById,
   upsertOptimisticUserMessage
 } from '../components/home/threadUtils'
@@ -691,7 +692,7 @@ export function HomePage(): React.JSX.Element {
       }
       return next
     })
-    const firstThread = shell.threads.find((t) => t.projectId === project.id && !t.archivedAt)
+    const firstThread = threadsForProject(shell, project.id)[0] ?? null
     setSelection({
       activeProjectId: project.id,
       activeChatId: firstThread?.id ?? null
@@ -711,12 +712,7 @@ export function HomePage(): React.JSX.Element {
     setError(null)
     const createdAt = new Date().toISOString()
     const fallbackThread =
-      shell.threads.find(
-        (candidate) =>
-          candidate.projectId === chat.projectId &&
-          candidate.id !== chat.id &&
-          !candidate.archivedAt
-      ) ?? null
+      threadsForProject(shell, chat.projectId).find((candidate) => candidate.id !== chat.id) ?? null
 
     if (selection.activeChatId === chat.id) {
       setSelection({
@@ -774,7 +770,7 @@ export function HomePage(): React.JSX.Element {
       })
       setSelection({ activeProjectId: projectId, activeChatId: chatId })
     } else {
-      const firstThread = shell.threads.find((t) => t.projectId === projectId && !t.archivedAt)
+      const firstThread = threadsForProject(shell, projectId)[0] ?? null
       setSelection({ activeProjectId: projectId, activeChatId: firstThread?.id ?? null })
     }
     setOpenProjectIds((prev) => new Set([...prev, projectId]))
