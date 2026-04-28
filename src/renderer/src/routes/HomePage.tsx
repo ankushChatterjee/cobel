@@ -13,6 +13,7 @@ import type {
   InteractionMode,
   ModelCatalog,
   ModelInfo,
+  ProviderSummary,
   OpenWorkspaceFolderResult,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -37,6 +38,7 @@ import {
   type DiffStyleMode
 } from '../components/diff/DiffReview'
 import { ChatComposer } from '../components/home/ChatComposer'
+import { NoProjectSplash } from '../components/home/NoProjectSplash'
 import { CommitMessageDialog, RevertWarningDialog } from '../components/home/Dialogs'
 import { ProjectSidebar } from '../components/home/ProjectSidebar'
 import { ThreadSidebar, PlanSidebarPanel } from '../components/home/ThreadSidebar'
@@ -102,6 +104,8 @@ export function HomePage(): React.JSX.Element {
   const [openProjectIds, setOpenProjectIds] = useState<Set<string>>(() => new Set())
   const [thread, setThread] = useState<OrchestrationThread | null>(null)
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null)
+  const [providerProbe, setProviderProbe] = useState<ProviderSummary[] | null>(null)
+  const [providerProbeError, setProviderProbeError] = useState<string | null>(null)
   const [selectedProvider, setSelectedProvider] = useState<ProviderId>('codex')
   const [composerResetToken, setComposerResetToken] = useState(0)
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(defaultRuntimeMode)
@@ -152,7 +156,7 @@ export function HomePage(): React.JSX.Element {
     [shell.threads, selection.activeProjectId, selection.activeChatId]
   )
   const activeThreadId = activeChat?.id ?? null
-  const providerSummaries = modelCatalog?.providers ?? []
+  const providerSummaries = modelCatalog?.providers ?? providerProbe ?? []
   const allCatalogModels = useMemo((): ModelInfo[] => {
     if (!modelCatalog) return []
     const codex = modelCatalog.modelsByProvider.codex ?? []
@@ -287,13 +291,36 @@ export function HomePage(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    if (!activeProject) {
+      setModelCatalog(null)
+      setError(null)
+      setProviderProbeError(null)
+      setProviderProbe(null)
+      void window.agentApi
+        .listProviders()
+        .then((rows) => {
+          setProviderProbe(rows)
+          setProviderProbeError(null)
+        })
+        .catch((probeError) => {
+          setProviderProbe([])
+          setProviderProbeError(
+            probeError instanceof Error ? probeError.message : String(probeError)
+          )
+        })
+      return
+    }
+    setProviderProbeError(null)
     void window.agentApi
       .listModelCatalog()
-      .then(setModelCatalog)
+      .then((catalog) => {
+        setModelCatalog(catalog)
+        setError(null)
+      })
       .catch((catalogError) => {
         setError(catalogError instanceof Error ? catalogError.message : String(catalogError))
       })
-  }, [])
+  }, [activeProject])
 
   useEffect(() => {
     if (!activeThreadId) return
@@ -1081,11 +1108,18 @@ export function HomePage(): React.JSX.Element {
           <div className="chat-title-group">
             <h1>{activeChat?.title ?? 'Open a project'}</h1>
             <span>
-              <strong className="chat-project-name">{activeProject?.name ?? 'no project'}</strong> ·{' '}
-              {sessionStatus}
+              {activeProject ? (
+                <>
+                  <strong className="chat-project-name">{activeProject.name}</strong> ·{' '}
+                  {sessionStatus}
+                </>
+              ) : (
+                'Add a folder from the sidebar to begin'
+              )}
             </span>
           </div>
           <div className="header-actions">
+            {activeThreadId ? (
             <FloatingDiffPill
               threadId={activeThreadId}
               summaries={thread?.checkpoints ?? []}
@@ -1097,30 +1131,35 @@ export function HomePage(): React.JSX.Element {
                   : openDiffPanel({ mode: 'full' })
               }
             />
+            ) : null}
           </div>
         </header>
 
         <div className="chat-primary">
           <section
             ref={conversationRef}
-            className="conversation"
+            className={`conversation${!activeProject ? ' conversation--no-project' : ''}`}
             aria-live="polite"
             onScroll={handleConversationScroll}
           >
-            <div className="status-line">
-              <span>{sessionStatus}</span>
-              <span>{activeProject?.path ?? 'no workspace'}</span>
-              <span>{providerStatusLine}</span>
-            </div>
+            {activeProject ? (
+              <div className="status-line">
+                <span>{sessionStatus}</span>
+                <span>{activeProject.path}</span>
+                <span>{providerStatusLine}</span>
+              </div>
+            ) : null}
 
             <div ref={transcriptStackRef} className="conversation-transcript-stack">
               {!activeProject ? (
-                <div className="empty-state">
-                  <p>What would you build?</p>
-                </div>
+                <NoProjectSplash providers={providerProbe} errorMessage={providerProbeError} />
               ) : transcriptItems.length === 0 ? (
                 <div className="empty-state">
-                  <p>What would you build?</p>
+                  <NoProjectSplash
+                    mode="empty-chat"
+                    providers={providerSummaries}
+                    errorMessage={null}
+                  />
                 </div>
               ) : (
                 <TranscriptList
@@ -1145,30 +1184,32 @@ export function HomePage(): React.JSX.Element {
             </div>
           </section>
 
-          <div className="composer-wrap">
-            <div className="composer-stack">
-              <ChatComposer
-                key={composerResetToken}
-                enabled={Boolean(activeProject)}
-                isRunning={isRunning}
-                interactionMode={interactionMode}
-                runtimeMode={runtimeMode}
-                catalogModels={allCatalogModels}
-                model={model}
-                effort={effort}
-                providerSummaries={providerSummaries}
-                selectedProviderId={selectedProvider}
-                providerLocked={providerLocked}
-                onInteractionModeChange={handleInteractionModeChange}
-                onRuntimeModeChange={handleRuntimeModeChange}
-                onModelChange={handleModelChange}
-                onEffortChange={handleEffortChange}
-                onSubmitPrompt={sendPrompt}
-                onInterrupt={interruptTurn}
-                onStop={stopSession}
-              />
+          {activeProject ? (
+            <div className="composer-wrap">
+              <div className="composer-stack">
+                <ChatComposer
+                  key={composerResetToken}
+                  enabled={Boolean(activeProject)}
+                  isRunning={isRunning}
+                  interactionMode={interactionMode}
+                  runtimeMode={runtimeMode}
+                  catalogModels={allCatalogModels}
+                  model={model}
+                  effort={effort}
+                  providerSummaries={providerSummaries}
+                  selectedProviderId={selectedProvider}
+                  providerLocked={providerLocked}
+                  onInteractionModeChange={handleInteractionModeChange}
+                  onRuntimeModeChange={handleRuntimeModeChange}
+                  onModelChange={handleModelChange}
+                  onEffortChange={handleEffortChange}
+                  onSubmitPrompt={sendPrompt}
+                  onInterrupt={interruptTurn}
+                  onStop={stopSession}
+                />
+              </div>
             </div>
-          </div>
+          ) : null}
           <DiffPreviewPopover
             preview={diffPreview}
             threadId={activeThreadId}

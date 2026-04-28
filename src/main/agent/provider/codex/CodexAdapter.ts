@@ -21,6 +21,15 @@ export class CodexAdapter implements ProviderAdapter {
     this.manager.onEvent((event) => this.handleRawEvent(event))
   }
 
+  async resolveCLI(): Promise<{
+    id: 'codex'
+    name: string
+    status: 'available' | 'missing' | 'error'
+    detail?: string
+  }> {
+    return this.getSummary()
+  }
+
   async getSummary(): Promise<{
     id: 'codex'
     name: string

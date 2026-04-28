@@ -56,14 +56,20 @@ describe('renderer app', () => {
     expect(screen.getByLabelText(/no projects open/i)).toHaveTextContent(/no projects open/i)
     expect(screen.getAllByRole('button', { name: /add project/i })).toHaveLength(1)
     expect(screen.queryByRole('button', { name: /open folder/i })).not.toBeInTheDocument()
-    expect(screen.getByRole('textbox', { name: /ask codex/i })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: /ask codex/i })).not.toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: /welcome/i })).getByText(/^Cobel$/i)).toBeInTheDocument()
     expect(screen.getByText(/codex-cli 0\.121\.0/i)).toBeInTheDocument()
+    expect(screen.getByText(/not installed/i)).toBeInTheDocument()
   })
 
   it('defaults to Write permissions and keeps Full access selectable', async () => {
+    const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
 
     render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
 
     const runtimeSelect = (await screen.findByLabelText(/^runtime mode$/i)) as HTMLSelectElement
     const optionValues = Array.from(runtimeSelect.options).map((option) => option.value)
@@ -240,8 +246,10 @@ describe('renderer app', () => {
     const effortSelect = (await screen.findByLabelText(/effort/i)) as HTMLSelectElement
 
     expect(runtimeSelect.value).toBe('auto-accept-edits')
-    expect(modelSelect.value).toBe('gpt-5.4-mini')
-    expect(effortSelect.value).toBe('minimal')
+    await waitFor(() => {
+      expect(modelSelect.value).toBe('gpt-5.4-mini')
+      expect(effortSelect.value).toBe('minimal')
+    })
 
     await user.selectOptions(runtimeSelect, 'full-access')
     await user.selectOptions(modelSelect, 'gpt-5.4')

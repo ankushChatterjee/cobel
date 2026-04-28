@@ -248,13 +248,18 @@ export async function findAvailablePort(): Promise<number> {
 }
 
 export function resolveOpenCodeBinaryPath(binaryPath: string): string {
-  if (Path.isAbsolute(binaryPath)) {
-    return binaryPath
+  const trimmed = binaryPath.trim()
+  if (!trimmed) {
+    throw new Error('OpenCode CLI path is empty.')
   }
-  return execFileSync('which', [binaryPath], {
-    encoding: 'utf8',
-    timeout: 3_000
-  }).trim()
+  for (const candidate of openCodeBinaryCandidates(trimmed)) {
+    if (isExecutableBinary(candidate)) return candidate
+  }
+  const searchLabel =
+    trimmed.includes(Path.sep) || trimmed.includes('\\')
+      ? trimmed
+      : `${trimmed} (PATH + common install locations)`
+  throw new Error(`OpenCode CLI was not found: ${searchLabel}`)
 }
 
 export function detectMacosSigkillHint(binaryPath: string): string | null {
@@ -698,5 +703,74 @@ export function readOpenCodeConfigFromEnv(): OpenCodeEnvConfig {
     binaryPath: (process.env.OPENCODE_BINARY_PATH ?? 'opencode').trim() || 'opencode',
     serverUrl: (process.env.OPENCODE_SERVER_URL ?? '').trim(),
     serverPassword: (process.env.OPENCODE_SERVER_PASSWORD ?? '').trim()
+  }
+}
+
+function openCodeBinaryCandidates(binaryPath: string): string[] {
+  const candidates = new Set<string>()
+  const add = (candidate: string | null | undefined): void => {
+    const trimmed = candidate?.trim()
+    if (!trimmed) return
+    candidates.add(trimmed)
+  }
+
+  if (Path.isAbsolute(binaryPath)) {
+    add(binaryPath)
+    return [...candidates]
+  }
+
+  if (binaryPath.includes('/') || binaryPath.includes('\\')) {
+    add(Path.resolve(binaryPath))
+  }
+
+  for (const entry of (process.env.PATH ?? '').split(Path.delimiter)) {
+    if (!entry) continue
+    add(Path.join(entry, binaryPath))
+  }
+
+  const home = OS.homedir()
+  const commonDirs =
+    process.platform === 'win32'
+      ? [
+          Path.join(home, 'AppData', 'Local', 'Programs', 'opencode'),
+          Path.join(home, 'AppData', 'Roaming', 'npm'),
+          Path.join(home, '.bun', 'bin')
+        ]
+      : [
+          '/opt/homebrew/bin',
+          '/usr/local/bin',
+          '/usr/bin',
+          '/bin',
+          Path.join(home, '.local', 'bin'),
+          Path.join(home, 'bin'),
+          Path.join(home, '.bun', 'bin'),
+          Path.join(home, 'Library', 'pnpm'),
+          Path.join(home, '.npm-global', 'bin')
+        ]
+
+  for (const dir of commonDirs) {
+    add(Path.join(dir, binaryPath))
+  }
+
+  if (process.platform === 'win32' && Path.extname(binaryPath) === '') {
+    for (const candidate of [...candidates]) {
+      add(`${candidate}.exe`)
+      add(`${candidate}.cmd`)
+      add(`${candidate}.bat`)
+    }
+  }
+
+  return [...candidates]
+}
+
+function isExecutableBinary(candidate: string): boolean {
+  try {
+    const stat = FS.statSync(candidate)
+    if (!stat.isFile()) return false
+    if (process.platform === 'win32') return true
+    FS.accessSync(candidate, FS.constants.X_OK)
+    return true
+  } catch {
+    return false
   }
 }

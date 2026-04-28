@@ -9,6 +9,10 @@ export class FakeProviderAdapter implements ProviderAdapter {
   private readonly bus = new ProviderEventBus()
   private readonly sessions = new Map<string, ProviderSession>()
 
+  async resolveCLI(): Promise<{ id: 'codex'; name: string; status: 'available'; detail: string }> {
+    return this.getSummary()
+  }
+
   async getSummary(): Promise<{ id: 'codex'; name: string; status: 'available'; detail: string }> {
     return {
       id: 'codex',

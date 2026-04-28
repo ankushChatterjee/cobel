@@ -1,3 +1,4 @@
+import './prependCliPath'
 import { app, shell, BrowserWindow, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -16,6 +17,10 @@ const agentBackend = new AgentBackend({
   useFakeProvider:
     process.env.COBEL_FAKE_PROVIDER === '1' || process.env.GENCODE_FAKE_PROVIDER === '1',
   db
+})
+
+void agentBackend.initialize().catch((error) => {
+  console.error('Failed to resolve provider CLIs during startup.', error)
 })
 
 registerAgentIpc(agentBackend)

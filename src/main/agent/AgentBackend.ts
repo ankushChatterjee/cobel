@@ -42,6 +42,7 @@ export class AgentBackend {
   private readonly snapshots: SnapshotQuery
   private readonly checkpointStore: CheckpointStore
   private readonly pendingThreadNaming = new Set<Promise<void>>()
+  private readonly initialization: Promise<void>
 
   constructor(options: { useFakeProvider?: boolean; db?: Database } = {}) {
     if (options.db) {
@@ -77,14 +78,21 @@ export class AgentBackend {
       this.ingestion.enqueue(event)
       this.checkpointReactor.enqueue(event)
     })
+    this.initialization = this.providers.initialize()
   }
 
   async listProviders(): Promise<ProviderSummary[]> {
+    await this.initialization
     return this.providers.listProviders()
   }
 
   async listModelCatalog() {
+    await this.initialization
     return this.providers.listModelCatalog()
+  }
+
+  async initialize(): Promise<void> {
+    await this.initialization
   }
 
   getShellSnapshot(): OrchestrationShellSnapshot {

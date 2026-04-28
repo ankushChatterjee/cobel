@@ -139,10 +139,15 @@ export class CodexAppServerManager {
 
   async getSummary(): Promise<{ status: 'available' | 'missing' | 'error'; detail?: string }> {
     try {
+      const resolvedPath = await this.resolveCodexBinaryPath()
       const { stdout, stderr } = await execFileAsync(this.codexBinaryPath(), ['--version'], {
         timeout: 5_000
       })
-      return { status: 'available', detail: (stdout || stderr).trim() }
+      const version = (stdout || stderr).trim()
+      return {
+        status: 'available',
+        detail: [version, resolvedPath].filter(Boolean).join(' · ')
+      }
     } catch (error) {
       return { status: 'missing', detail: error instanceof Error ? error.message : String(error) }
     }
@@ -773,6 +778,13 @@ export class CodexAppServerManager {
 
   private codexBinaryPath(): string {
     return this.options.codexBinaryPath ?? process.env.CODEX_BINARY_PATH ?? 'codex'
+  }
+
+  private async resolveCodexBinaryPath(): Promise<string> {
+    const binaryPath = this.codexBinaryPath()
+    if (binaryPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(binaryPath)) return binaryPath
+    const { stdout } = await execFileAsync('which', [binaryPath], { timeout: 5_000 })
+    return stdout.trim() || binaryPath
   }
 
   private emitSession(threadId: string, method: string, payload?: unknown): void {

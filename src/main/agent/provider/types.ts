@@ -40,6 +40,7 @@ export interface GenerateThreadTitleInput {
 export interface ProviderAdapter {
   readonly id: ProviderId
   readonly supportsStructuredOutput: boolean
+  resolveCLI(): Promise<ProviderSummary>
   getSummary(): Promise<ProviderSummary>
   startSession(input: StartSessionInput): Promise<ProviderSession>
   sendTurn(input: SendTurnInput): Promise<{ turnId: string; resumeCursor?: unknown }>

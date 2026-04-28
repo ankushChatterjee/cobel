@@ -194,6 +194,12 @@ const agentApiMock: AgentApi = {
       name: 'Codex',
       status: 'available' as const,
       detail: 'codex-cli 0.121.0'
+    },
+    {
+      id: 'opencode' as const,
+      name: 'OpenCode',
+      status: 'missing' as const,
+      detail: 'not installed'
     }
   ]),
   listModelCatalog: vi.fn(async () => ({

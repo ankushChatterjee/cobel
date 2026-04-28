@@ -20,26 +20,46 @@ export class ProviderService {
   private readonly adapters = new Map<ProviderId, ProviderAdapter>()
   private readonly emitter = new EventEmitter()
   private readonly unsubscribers: Array<() => void> = []
+  private readonly providerSummaries = new Map<ProviderId, ProviderSummary>()
+  private initializationPromise: Promise<void> | null = null
 
   register(adapter: ProviderAdapter): void {
     this.adapters.set(adapter.id, adapter)
     this.unsubscribers.push(adapter.streamEvents((event) => this.emitter.emit('event', event)))
   }
 
+  async initialize(): Promise<void> {
+    if (this.initializationPromise) return this.initializationPromise
+    this.initializationPromise = Promise.all(
+      [...this.adapters.values()].map(async (adapter) => {
+        const summary = await this.resolveAdapterSummary(adapter)
+        this.providerSummaries.set(adapter.id, summary)
+      })
+    ).then(() => undefined)
+    return this.initializationPromise
+  }
+
   async listProviders(): Promise<ProviderSummary[]> {
-    const summaries = await Promise.all(
-      [...this.adapters.values()].map((adapter) => adapter.getSummary())
-    )
-    return summaries
+    await this.initialize()
+    return [...this.adapters.keys()]
+      .map((id) => this.providerSummaries.get(id))
+      .filter((summary): summary is ProviderSummary => Boolean(summary))
   }
 
   async listModels(provider: ProviderId): Promise<ModelInfo[]> {
+    await this.initialize()
     const adapter = this.adapters.get(provider)
     if (!adapter) return []
+    const summary = this.providerSummaries.get(provider)
+    if (summary && summary.status !== 'available') return []
     const maybeListModels = (adapter as unknown as { listModels?: () => Promise<ModelInfo[]> })
       .listModels
     if (typeof maybeListModels !== 'function') return []
-    return maybeListModels.call(adapter)
+    try {
+      return await maybeListModels.call(adapter)
+    } catch {
+      return []
+    }
   }
 
   async listModelCatalog(): Promise<ModelCatalog> {
@@ -121,6 +141,19 @@ export class ProviderService {
   dispose(): void {
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe()
     this.emitter.removeAllListeners()
+  }
+
+  private async resolveAdapterSummary(adapter: ProviderAdapter): Promise<ProviderSummary> {
+    try {
+      return await adapter.resolveCLI()
+    } catch (error) {
+      return {
+        id: adapter.id,
+        name: adapter.id === 'opencode' ? 'OpenCode' : 'Codex',
+        status: 'error',
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    }
   }
 
   private getAdapter(provider: ProviderId): ProviderAdapter {

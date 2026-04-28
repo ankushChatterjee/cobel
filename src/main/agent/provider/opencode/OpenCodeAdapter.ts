@@ -77,6 +77,12 @@ interface OpenCodeSessionContext {
   readonly eventsAbortController: AbortController
 }
 
+interface OpenCodeProbeResult {
+  summary: ProviderSummary
+  models: ModelInfo[]
+  resolvedBinaryPath: string | null
+}
+
 function buildEventBase(input: {
   threadId: string
   turnId?: string
@@ -356,13 +362,18 @@ export class OpenCodeAdapter implements ProviderAdapter {
   readonly supportsStructuredOutput = false
   private readonly bus = new ProviderEventBus()
   private readonly sessions = new Map<string, OpenCodeSessionContext>()
-  private probeCache: { at: number; summary: ProviderSummary; models: ModelInfo[] } | null = null
+  private probeCache: { at: number; result: OpenCodeProbeResult } | null = null
   private readonly cacheTtlMs = 45_000
   /** When true, child `opencode serve` exiting (e.g. SIGINT during app teardown) must not surface as a runtime error. */
   private suppressUnexpectedServerExit = false
 
   streamEvents(listener: (event: ProviderRuntimeEvent) => void): () => void {
     return this.bus.subscribe(listener)
+  }
+
+  async resolveCLI(): Promise<ProviderSummary> {
+    const { summary } = await this.probe()
+    return summary
   }
 
   /**
@@ -377,8 +388,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   async getSummary(): Promise<ProviderSummary> {
-    const { summary } = await this.probe()
-    return summary
+    return this.resolveCLI()
   }
 
   async listModels(): Promise<ModelInfo[]> {
@@ -386,28 +396,27 @@ export class OpenCodeAdapter implements ProviderAdapter {
     return models
   }
 
-  private async probe(): Promise<{ summary: ProviderSummary; models: ModelInfo[] }> {
+  private async probe(): Promise<OpenCodeProbeResult> {
     const now = Date.now()
     if (this.probeCache && now - this.probeCache.at < this.cacheTtlMs) {
-      return { summary: this.probeCache.summary, models: this.probeCache.models }
+      return this.probeCache.result
     }
     const cfg = readOpenCodeConfigFromEnv()
     let summary: ProviderSummary
     let models: ModelInfo[] = []
+    let resolvedBinaryPath: string | null = null
     try {
-      const binaryPath = cfg.binaryPath
       let version = ''
-      try {
+      resolvedBinaryPath = resolveBinarySafe(cfg.binaryPath)
+      if (resolvedBinaryPath) {
         const r = await runOpenCodeCommand({
-          binaryPath: resolveBinarySafe(binaryPath),
+          binaryPath: resolvedBinaryPath,
           args: ['--version']
         })
         if (r.code === 0) version = r.stdout.trim().split('\n')[0] ?? ''
-      } catch {
-        // ignore
       }
       const server = await connectToOpenCodeServer({
-        binaryPath: resolveBinarySafe(binaryPath),
+        binaryPath: resolvedBinaryPath ?? cfg.binaryPath,
         serverUrl: cfg.serverUrl || null
       })
       try {
@@ -418,15 +427,18 @@ export class OpenCodeAdapter implements ProviderAdapter {
         })
         const inv = await loadOpenCodeInventory(client)
         models = inventoryToModelInfos(inv)
+        const detailParts = [
+          version || (server.external ? 'Remote server' : 'OpenCode CLI'),
+          resolvedBinaryPath,
+          `${models.length} model${models.length === 1 ? '' : 's'}`
+        ].filter((part): part is string => Boolean(part))
         summary = {
           id: PROVIDER,
           name: 'OpenCode',
           status: models.length > 0 ? 'available' : 'error',
           detail:
             models.length > 0
-              ? version
-                ? `${version} · ${models.length} models`
-                : `${models.length} models`
+              ? detailParts.join(' · ')
               : 'No connected upstream models (check provider auth in OpenCode).'
         }
       } finally {
@@ -438,11 +450,12 @@ export class OpenCodeAdapter implements ProviderAdapter {
         id: PROVIDER,
         name: 'OpenCode',
         status: 'missing',
-        detail: msg
+        detail: formatProbeFailure(msg, cfg.serverUrl)
       }
     }
-    this.probeCache = { at: now, summary, models }
-    return { summary, models }
+    const result = { summary, models, resolvedBinaryPath }
+    this.probeCache = { at: now, result }
+    return result
   }
 
   async startSession(input: StartSessionInput): Promise<ProviderSession> {
@@ -484,7 +497,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     }
 
     const server = await connectToOpenCodeServer({
-      binaryPath: resolveBinarySafe(cfg.binaryPath),
+      binaryPath: await this.resolveBinaryPath(),
       serverUrl: cfg.serverUrl || null
     })
     const client = createOpenCodeSdkClient({
@@ -643,7 +656,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     const cfg = readOpenCodeConfigFromEnv()
     const directory = input.cwd?.trim() || process.cwd()
     const server = await connectToOpenCodeServer({
-      binaryPath: resolveBinarySafe(cfg.binaryPath),
+      binaryPath: await this.resolveBinaryPath(),
       serverUrl: cfg.serverUrl || null
     })
     try {
@@ -768,6 +781,14 @@ export class OpenCodeAdapter implements ProviderAdapter {
 
   private emit(event: ProviderRuntimeEvent): void {
     this.bus.emit(event)
+  }
+
+  private async resolveBinaryPath(): Promise<string> {
+    const { resolvedBinaryPath } = await this.probe()
+    const cfg = readOpenCodeConfigFromEnv()
+    if (resolvedBinaryPath) return resolvedBinaryPath
+    if (cfg.serverUrl) return cfg.binaryPath
+    throw new Error(`OpenCode CLI was not found: ${cfg.binaryPath}`)
   }
 
   private requireSession(threadId: string): OpenCodeSessionContext {
@@ -1151,12 +1172,18 @@ async function stopOpenCodeContext(context: OpenCodeSessionContext): Promise<voi
   context.server.close()
 }
 
-function resolveBinarySafe(binaryPath: string): string {
+function resolveBinarySafe(binaryPath: string): string | null {
   try {
     return resolveOpenCodeBinaryPath(binaryPath)
   } catch {
-    return binaryPath
+    return null
   }
+}
+
+function formatProbeFailure(message: string, serverUrl: string): string {
+  if (!serverUrl) return message
+  if (message.includes(serverUrl)) return message
+  return `${message} (remote server: ${serverUrl})`
 }
 
 function resolveComposerAttachment(attachment: ChatAttachment): string | null {
