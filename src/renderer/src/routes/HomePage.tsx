@@ -157,6 +157,8 @@ export function HomePage(): React.JSX.Element {
     [shell.threads, selection.activeProjectId, selection.activeChatId]
   )
   const activeThreadId = activeChat?.id ?? null
+  const activeSidebarScopeKey =
+    activeThreadId ?? (activeProject ? `project:${activeProject.id}` : null)
   const providerSummaries = modelCatalog?.providers ?? providerProbe ?? []
   const allCatalogModels = useMemo((): ModelInfo[] => {
     if (!modelCatalog) return []
@@ -183,7 +185,9 @@ export function HomePage(): React.JSX.Element {
   const sessionStatus = thread?.session?.status ?? 'idle'
   const activeTurnId = thread?.session?.activeTurnId
   const isRunning = sessionStatus === 'starting' || sessionStatus === 'running'
-  const activeSidebarState = activeThreadId ? threadSidebarState[activeThreadId] : undefined
+  const activeSidebarState = activeSidebarScopeKey
+    ? threadSidebarState[activeSidebarScopeKey]
+    : undefined
   const transcriptItems = useMemo(() => buildTranscriptItems(thread), [thread])
   const latestProposedPlan = useMemo(
     () => findLatestProposedPlan(thread?.proposedPlans ?? [], thread?.latestTurn?.id ?? null),
@@ -830,15 +834,17 @@ export function HomePage(): React.JSX.Element {
     [activeThreadId]
   )
 
-  const updateActiveThreadSidebarState = useCallback(
+  const updateActiveSidebarState = useCallback(
     (updater: (current: ThreadSidebarState) => ThreadSidebarState) => {
-      if (!activeThreadId) return
+      if (!activeSidebarScopeKey) return
       setThreadSidebarState((current) => ({
         ...current,
-        [activeThreadId]: updater(current[activeThreadId] ?? { open: false, activeTabId: null })
+        [activeSidebarScopeKey]: updater(
+          current[activeSidebarScopeKey] ?? { open: false, activeTabId: null }
+        )
       }))
     },
-    [activeThreadId]
+    [activeSidebarScopeKey]
   )
 
   const openDiffPanel = useCallback(
@@ -846,14 +852,14 @@ export function HomePage(): React.JSX.Element {
       setDiffPanelMode(input.mode ?? 'full')
       setSelectedDiffTurnId(input.turnId ?? null)
       setSelectedDiffFilePath(input.filePath ?? null)
-      updateActiveThreadSidebarState((current) => ({
+      updateActiveSidebarState((current) => ({
         ...current,
         open: true,
         activeTabId: 'review'
       }))
       setDiffPreview(null)
     },
-    [updateActiveThreadSidebarState]
+    [updateActiveSidebarState]
   )
 
   const showDiffPreview = useCallback(
@@ -1001,7 +1007,7 @@ export function HomePage(): React.JSX.Element {
     if (latestProposedPlan.turnId !== thread?.latestTurn?.id) return
     const expectedTabId = `plan:${latestProposedPlan.id}` as SidebarTabId
     if (activeSidebarState?.open && activeSidebarState.activeTabId === expectedTabId) return
-    updateActiveThreadSidebarState(() => ({
+    updateActiveSidebarState(() => ({
       open: true,
       activeTabId: expectedTabId
     }))
@@ -1011,7 +1017,7 @@ export function HomePage(): React.JSX.Element {
     activeThreadId,
     latestProposedPlan,
     thread?.latestTurn?.id,
-    updateActiveThreadSidebarState
+    updateActiveSidebarState
   ])
 
   const sidebarStyle = useMemo(
@@ -1115,19 +1121,16 @@ export function HomePage(): React.JSX.Element {
             </span>
           </div>
           <div className="header-actions">
-            {activeThreadId ? (
             <FloatingDiffPill
-              threadId={activeThreadId}
-              summaries={thread?.checkpoints ?? []}
+              workspacePath={activeProject?.path ?? thread?.cwd ?? null}
               workspaceDiffVersion={workspaceDiffVersion}
               open={activeSidebarState?.open === true && resolvedSidebarTabId === 'review'}
               onToggle={() =>
                 activeSidebarState?.open === true && resolvedSidebarTabId === 'review'
-                  ? updateActiveThreadSidebarState((current) => ({ ...current, open: false }))
+                  ? updateActiveSidebarState((current) => ({ ...current, open: false }))
                   : openDiffPanel({ mode: 'full' })
               }
             />
-            ) : null}
           </div>
         </header>
 
@@ -1218,13 +1221,13 @@ export function HomePage(): React.JSX.Element {
           tabs={sidebarTabs}
           activeTabId={resolvedSidebarTabId}
           onSelectTab={(tabId) =>
-            updateActiveThreadSidebarState((current) => ({
+            updateActiveSidebarState((current) => ({
               ...current,
               open: true,
               activeTabId: tabId
             }))
           }
-          onClose={() => updateActiveThreadSidebarState((current) => ({ ...current, open: false }))}
+          onClose={() => updateActiveSidebarState((current) => ({ ...current, open: false }))}
           resizeLabel="Resize review panel"
           resizeMin={minDiffPanelWidth}
           resizeMax={maxDiffPanelWidth}
@@ -1239,6 +1242,7 @@ export function HomePage(): React.JSX.Element {
                 <DiffReviewSidebar
                   open
                   embedded
+                  workspacePath={activeProject?.path ?? thread?.cwd ?? null}
                   threadId={activeThreadId}
                   summaries={thread?.checkpoints ?? []}
                   mode={diffPanelMode}

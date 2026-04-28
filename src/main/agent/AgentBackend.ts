@@ -12,7 +12,9 @@ import type {
   ProviderSummary,
   RespondToApprovalInput,
   RespondToUserInputInput,
-  StopSessionInput
+  StopSessionInput,
+  WorkspaceDiffRequest,
+  WorkspaceDiffResult
 } from '../../shared/agent'
 import {
   canReplaceThreadTitle,
@@ -345,6 +347,13 @@ export class AgentBackend {
       input.fromTurnCount
     )
     return { ...input, ...result }
+  }
+
+  async getWorkspaceDiff(input: WorkspaceDiffRequest): Promise<WorkspaceDiffResult> {
+    const cwd = input.cwd.trim()
+    if (!cwd) throw new Error('A workspace path is required.')
+    const result = await this.checkpointStore.diffWorkspace(cwd)
+    return { cwd, ...result }
   }
 
   async drain(): Promise<void> {

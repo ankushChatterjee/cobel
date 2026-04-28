@@ -227,6 +227,12 @@ const agentApiMock: AgentApi = {
     files: [],
     truncated: false
   })),
+  getWorkspaceDiff: vi.fn(async (input) => ({
+    ...input,
+    diff: '',
+    files: [],
+    truncated: false
+  })),
   openWorkspaceFolder: vi.fn(async () => ({
     path: '/Users/ankush/codespace/gencode',
     name: 'gencode'

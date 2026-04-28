@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type { CheckpointFileChange } from '../../../shared/agent'
 
@@ -53,9 +53,25 @@ export class CheckpointStore {
     return { ...diff, files }
   }
 
+  async diffWorkspace(
+    cwd: string
+  ): Promise<{ diff: string; files: CheckpointFileChange[]; truncated: boolean }> {
+    const indexCommit = await this.captureIndexCommit(cwd, 'cobel index snapshot')
+    const worktreeCommit = await this.captureWorktreeFromIndexCommit(
+      cwd,
+      'cobel workspace snapshot'
+    )
+    const [diff, files] = await Promise.all([
+      this.diffCommits(cwd, indexCommit, worktreeCommit),
+      this.summarizeCommits(cwd, indexCommit, worktreeCommit)
+    ])
+    return { ...diff, files }
+  }
+
   private async captureWorktreeCommit(cwd: string, message: string): Promise<string> {
     const tempDir = await mkdtemp(join(tmpdir(), 'cobel-checkpoint-'))
     const tempIndexPath = join(tempDir, `index-${randomUUID()}`)
+    await this.ensureTempIndexFile(tempIndexPath)
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       GIT_INDEX_FILE: tempIndexPath,
@@ -70,15 +86,30 @@ export class CheckpointStore {
         await this.git(cwd, ['read-tree', 'HEAD'], { env })
       }
       await this.git(cwd, ['add', '-A', '--', '.'], { env })
-      const treeOid = (await this.git(cwd, ['write-tree'], { env })).stdout.trim()
-      if (!treeOid) throw new Error('git write-tree returned an empty tree oid.')
-      const commitOid = (
-        await this.git(cwd, ['commit-tree', treeOid, '-m', message], {
-          env
-        })
-      ).stdout.trim()
-      if (!commitOid) throw new Error('git commit-tree returned an empty commit oid.')
-      return commitOid
+      return await this.captureCommitFromIndex(cwd, message, env)
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  }
+
+  private async captureIndexCommit(cwd: string, message: string): Promise<string> {
+    const tempDir = await mkdtemp(join(tmpdir(), 'cobel-index-'))
+    const tempIndexPath = join(tempDir, `index-${randomUUID()}`)
+    const env = await this.createIndexSnapshotEnv(cwd, tempIndexPath)
+    try {
+      return await this.captureCommitFromIndex(cwd, message, env)
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  }
+
+  private async captureWorktreeFromIndexCommit(cwd: string, message: string): Promise<string> {
+    const tempDir = await mkdtemp(join(tmpdir(), 'cobel-workspace-'))
+    const tempIndexPath = join(tempDir, `index-${randomUUID()}`)
+    const env = await this.createIndexSnapshotEnv(cwd, tempIndexPath)
+    try {
+      await this.git(cwd, ['add', '-A', '--', '.'], { env })
+      return await this.captureCommitFromIndex(cwd, message, env)
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }
@@ -224,6 +255,57 @@ export class CheckpointStore {
       allowNonZeroExit: true
     })
     return result.code === 0 && result.stdout.trim().length > 0
+  }
+
+  private async createIndexSnapshotEnv(
+    cwd: string,
+    tempIndexPath: string
+  ): Promise<NodeJS.ProcessEnv> {
+    await this.ensureTempIndexFile(tempIndexPath)
+    const indexPath = (await this.git(cwd, ['rev-parse', '--git-path', 'index'])).stdout.trim()
+    const resolvedIndexPath = indexPath
+      ? (isAbsolute(indexPath) ? indexPath : resolve(cwd, indexPath))
+      : ''
+    if (resolvedIndexPath) {
+      try {
+        await copyFile(resolvedIndexPath, tempIndexPath)
+      } catch (error) {
+        const maybeError = error as NodeJS.ErrnoException
+        if (maybeError.code !== 'ENOENT') throw error
+      }
+    }
+    return this.createGitEnv(tempIndexPath)
+  }
+
+  private async ensureTempIndexFile(tempIndexPath: string): Promise<void> {
+    await writeFile(tempIndexPath, '')
+  }
+
+  private createGitEnv(tempIndexPath: string): NodeJS.ProcessEnv {
+    return {
+      ...process.env,
+      GIT_INDEX_FILE: tempIndexPath,
+      GIT_AUTHOR_NAME: 'Cobel',
+      GIT_AUTHOR_EMAIL: 'cobel@example.invalid',
+      GIT_COMMITTER_NAME: 'Cobel',
+      GIT_COMMITTER_EMAIL: 'cobel@example.invalid'
+    }
+  }
+
+  private async captureCommitFromIndex(
+    cwd: string,
+    message: string,
+    env: NodeJS.ProcessEnv
+  ): Promise<string> {
+    const treeOid = (await this.git(cwd, ['write-tree'], { env })).stdout.trim()
+    if (!treeOid) throw new Error('git write-tree returned an empty tree oid.')
+    const commitOid = (
+      await this.git(cwd, ['commit-tree', treeOid, '-m', message], {
+        env
+      })
+    ).stdout.trim()
+    if (!commitOid) throw new Error('git commit-tree returned an empty commit oid.')
+    return commitOid
   }
 
   private async git(

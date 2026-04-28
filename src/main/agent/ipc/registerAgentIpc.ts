@@ -64,6 +64,16 @@ export function registerAgentIpc(backend: AgentBackend): void {
     })
   })
 
+  ipcMain.handle(AGENT_CHANNELS.getWorkspaceDiff, async (event, input) => {
+    validateSender(event)
+    if (!input || typeof input.cwd !== 'string' || input.cwd.trim().length === 0) {
+      throw new Error('workspace path is required.')
+    }
+    return backend.getWorkspaceDiff({
+      cwd: input.cwd
+    })
+  })
+
   ipcMain.handle(AGENT_CHANNELS.openWorkspaceFolder, async (event) => {
     validateSender(event)
     const result = await dialog.showOpenDialog({
@@ -218,6 +228,7 @@ export function removeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_CHANNELS.clearThread)
   ipcMain.removeHandler(AGENT_CHANNELS.getCheckpointDiff)
   ipcMain.removeHandler(AGENT_CHANNELS.getCheckpointWorktreeDiff)
+  ipcMain.removeHandler(AGENT_CHANNELS.getWorkspaceDiff)
   ipcMain.removeHandler(AGENT_CHANNELS.openWorkspaceFolder)
   ipcMain.removeHandler(AGENT_CHANNELS.revealPath)
   ipcMain.removeHandler(AGENT_CHANNELS.subscribeThread)

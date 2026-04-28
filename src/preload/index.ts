@@ -20,6 +20,7 @@ const agentApi: AgentApi = {
   getCheckpointDiff: (input) => ipcRenderer.invoke(AGENT_CHANNELS.getCheckpointDiff, input),
   getCheckpointWorktreeDiff: (input) =>
     ipcRenderer.invoke(AGENT_CHANNELS.getCheckpointWorktreeDiff, input),
+  getWorkspaceDiff: (input) => ipcRenderer.invoke(AGENT_CHANNELS.getWorkspaceDiff, input),
   openWorkspaceFolder: () => ipcRenderer.invoke(AGENT_CHANNELS.openWorkspaceFolder),
   revealPath: (input) => ipcRenderer.invoke(AGENT_CHANNELS.revealPath, input),
   getShellSnapshot: (): Promise<OrchestrationShellSnapshot> =>

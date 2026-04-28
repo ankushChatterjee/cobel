@@ -339,6 +339,34 @@ describe('AgentBackend', () => {
     expect(shell.threads[0]!.title).toBe('Thread One')
   })
 
+  it('returns workspace-scoped unstaged diffs without requiring a thread', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'cobel-agent-workspace-diff-'))
+    const backend = new AgentBackend({ useFakeProvider: true })
+
+    try {
+      await execFileAsync('git', ['init'], { cwd })
+      await execFileAsync('git', ['config', 'user.name', 'Cobel Test'], { cwd })
+      await execFileAsync('git', ['config', 'user.email', 'cobel@example.invalid'], { cwd })
+      await writeFile(join(cwd, 'note.txt'), 'before\n')
+      await execFileAsync('git', ['add', 'note.txt'], { cwd })
+      await execFileAsync('git', ['commit', '-m', 'initial'], { cwd })
+
+      await writeFile(join(cwd, 'note.txt'), 'before\nafter\n')
+      await writeFile(join(cwd, 'draft.txt'), 'draft\n')
+
+      const result = await backend.getWorkspaceDiff({ cwd })
+      expect(result.cwd).toBe(cwd)
+      expect(result.files).toEqual([
+        { path: 'draft.txt', kind: 'added', additions: 1, deletions: 0, binary: false },
+        { path: 'note.txt', kind: 'modified', additions: 1, deletions: 0, binary: false }
+      ])
+      expect(result.diff).toContain('+++ b/draft.txt')
+      expect(result.diff).toContain('+after')
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('restores checkpoint files without pruning chat or checkpoint history', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'cobel-agent-revert-'))
     const db = openInMemoryDatabase()

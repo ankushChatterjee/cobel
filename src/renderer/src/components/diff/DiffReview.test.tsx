@@ -117,12 +117,16 @@ function DiffReviewHarness({
   open = true,
   initialMode = 'full',
   initialSelectedFilePath = null,
-  summariesOverride = summaries
+  summariesOverride = summaries,
+  threadId = 'thread:test',
+  workspacePath = '/tmp/project'
 }: {
   open?: boolean
   initialMode?: DiffPanelMode
   initialSelectedFilePath?: string | null
   summariesOverride?: OrchestrationCheckpointSummary[]
+  threadId?: string | null
+  workspacePath?: string | null
 }): React.JSX.Element {
   const [mode, setMode] = useState<DiffPanelMode>(initialMode)
   const [diffStyle, setDiffStyle] = useState<DiffStyleMode>('unified')
@@ -133,7 +137,8 @@ function DiffReviewHarness({
   return (
     <DiffReviewSidebar
       open={open}
-      threadId="thread:test"
+      workspacePath={workspacePath}
+      threadId={threadId}
       summaries={summariesOverride}
       mode={mode}
       diffStyle={diffStyle}
@@ -171,7 +176,7 @@ function getTreeShadowRoot(container: HTMLElement): ShadowRoot {
 describe('DiffReviewSidebar tree integration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    window.agentApi.getCheckpointWorktreeDiff = vi.fn(async (input) => ({
+    window.agentApi.getWorkspaceDiff = vi.fn(async (input) => ({
       ...input,
       diff: fullDiff,
       files: [...summaries[0].files, ...summaries[1].files],
@@ -272,7 +277,7 @@ describe('DiffReviewSidebar tree integration', () => {
   })
 
   it('does not render a tree toggle when the diff has no changed files', async () => {
-    window.agentApi.getCheckpointWorktreeDiff = vi.fn(async (input) => ({
+    window.agentApi.getWorkspaceDiff = vi.fn(async (input) => ({
       ...input,
       diff: '',
       files: [],
@@ -285,8 +290,51 @@ describe('DiffReviewSidebar tree integration', () => {
       expect(
         screen.queryByRole('button', { name: /show changed files tree/i })
       ).not.toBeInTheDocument()
-      expect(screen.getByText('No completed checkpoint diffs yet.')).toBeInTheDocument()
+      expect(screen.getByText('No unstaged workspace changes.')).toBeInTheDocument()
     })
+  })
+
+  it('allows full diff without an active thread and keeps last turn unavailable', async () => {
+    const user = userEvent.setup()
+    render(<DiffReviewHarness threadId={null} summariesOverride={[]} />)
+
+    await waitFor(() => {
+      const renderedDiffs = screen.getAllByTestId('mock-file-diff')
+      expect(renderedDiffs).toHaveLength(3)
+    })
+
+    expect(screen.getByRole('button', { name: 'Last turn' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Last turn' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('No turn-specific diff is available yet.')).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows workspace stats in full mode instead of the checkpoint empty-copy', async () => {
+    render(<DiffReviewHarness />)
+
+    expect(await screen.findByText('+3')).toBeInTheDocument()
+    expect(screen.getByText('-3')).toBeInTheDocument()
+    expect(screen.queryByText('No completed changes yet')).not.toBeInTheDocument()
+  })
+
+  it('disables last turn and hides the pager when no turn diff summaries are available', async () => {
+    const emptyTurnSummaries: OrchestrationCheckpointSummary[] = [
+      {
+        id: 'checkpoint-empty',
+        turnId: 'turn-empty',
+        checkpointTurnCount: 1,
+        status: 'ready',
+        files: [],
+        completedAt: '2026-04-23T10:00:00.000Z'
+      }
+    ]
+
+    render(<DiffReviewHarness summariesOverride={emptyTurnSummaries} />)
+
+    expect(await screen.findByRole('button', { name: 'Last turn' })).toBeDisabled()
+    expect(screen.queryByLabelText(/latest turn/i)).not.toBeInTheDocument()
   })
 })
 
@@ -388,55 +436,49 @@ describe('FloatingDiffPill', () => {
     vi.clearAllMocks()
   })
 
-  it('refreshes when new checkpoint summaries arrive', async () => {
-    const initialSummaries = [summaries[0]]
-    const updatedSummaries = summaries
-    const getCheckpointWorktreeDiff = vi
+  it('refreshes when workspace diffs change and stays visible when empty', async () => {
+    const getWorkspaceDiff = vi
       .fn()
       .mockResolvedValueOnce({
-        threadId: 'thread:test',
-        fromTurnCount: 0,
+        cwd: '/tmp/project',
         diff: fullDiff,
-        files: initialSummaries[0].files,
+        files: summaries[0].files,
         truncated: false
       })
       .mockResolvedValueOnce({
-        threadId: 'thread:test',
-        fromTurnCount: 0,
-        diff: fullDiff,
-        files: [...summaries[0].files, ...summaries[1].files],
+        cwd: '/tmp/project',
+        diff: '',
+        files: [],
         truncated: false
       })
 
-    window.agentApi.getCheckpointWorktreeDiff = getCheckpointWorktreeDiff
+    window.agentApi.getWorkspaceDiff = getWorkspaceDiff
 
     const { rerender } = render(
       <FloatingDiffPill
-        threadId="thread:test"
-        summaries={initialSummaries}
+        workspacePath="/tmp/project"
         workspaceDiffVersion={0}
         open={false}
         onToggle={() => {}}
       />
     )
 
-    expect(await screen.findByRole('button', { name: /review/i })).toHaveTextContent('+1')
-    expect(screen.getByRole('button', { name: /review/i })).toHaveTextContent('-2')
+    expect(await screen.findByRole('button', { name: /workspace diff/i })).toHaveTextContent('+1')
+    expect(screen.getByRole('button', { name: /workspace diff/i })).toHaveTextContent('-2')
 
     rerender(
       <FloatingDiffPill
-        threadId="thread:test"
-        summaries={updatedSummaries}
-        workspaceDiffVersion={0}
+        workspacePath="/tmp/project"
+        workspaceDiffVersion={1}
         open={false}
         onToggle={() => {}}
       />
     )
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /review/i })).toHaveTextContent('+3')
-      expect(screen.getByRole('button', { name: /review/i })).toHaveTextContent('-3')
+      expect(screen.getByRole('button', { name: /workspace diff/i })).toHaveTextContent('•')
+      expect(screen.getByRole('button', { name: /workspace diff/i })).toHaveClass('empty')
     })
-    expect(getCheckpointWorktreeDiff).toHaveBeenCalledTimes(2)
+    expect(getWorkspaceDiff).toHaveBeenCalledTimes(2)
   })
 })

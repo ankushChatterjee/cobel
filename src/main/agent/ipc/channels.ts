@@ -14,6 +14,7 @@ export const AGENT_CHANNELS = {
   clearThread: 'agent:clear-thread',
   getCheckpointDiff: 'agent:get-checkpoint-diff',
   getCheckpointWorktreeDiff: 'agent:get-checkpoint-worktree-diff',
+  getWorkspaceDiff: 'agent:get-workspace-diff',
   openWorkspaceFolder: 'agent:open-workspace-folder',
   revealPath: 'agent:reveal-path',
   threadEvent: (subscriptionId: string) => `agent:thread-event:${subscriptionId}`,

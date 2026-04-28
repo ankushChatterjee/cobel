@@ -290,6 +290,17 @@ export interface CheckpointWorktreeDiffResult {
   truncated: boolean
 }
 
+export interface WorkspaceDiffRequest {
+  cwd: string
+}
+
+export interface WorkspaceDiffResult {
+  cwd: string
+  diff: string
+  files: CheckpointFileChange[]
+  truncated: boolean
+}
+
 export interface OrchestrationSession {
   threadId: string
   status: 'idle' | 'starting' | 'running' | 'ready' | 'interrupted' | 'stopped' | 'error'
@@ -631,6 +642,7 @@ export interface AgentApi {
   getCheckpointWorktreeDiff(
     input: CheckpointWorktreeDiffRequest
   ): Promise<CheckpointWorktreeDiffResult>
+  getWorkspaceDiff(input: WorkspaceDiffRequest): Promise<WorkspaceDiffResult>
   openWorkspaceFolder(): Promise<OpenWorkspaceFolderResult | null>
   revealPath(input: { path: string }): Promise<void>
 }

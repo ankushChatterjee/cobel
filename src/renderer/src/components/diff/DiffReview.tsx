@@ -15,8 +15,8 @@ import { ChevronDown, GitCommitHorizontal, RefreshCw, TextWrap, Undo2 } from 'lu
 import type {
   CheckpointDiffResult,
   CheckpointFileChange,
-  CheckpointWorktreeDiffResult,
-  OrchestrationCheckpointSummary
+  OrchestrationCheckpointSummary,
+  WorkspaceDiffResult
 } from '../../../../shared/agent'
 import {
   DiffChangedFilesTree,
@@ -43,8 +43,7 @@ interface ChangedFilePillsProps {
 }
 
 interface FloatingDiffPillProps {
-  threadId: string | null
-  summaries: OrchestrationCheckpointSummary[]
+  workspacePath: string | null
   workspaceDiffVersion: number
   open: boolean
   onToggle: () => void
@@ -53,6 +52,7 @@ interface FloatingDiffPillProps {
 interface DiffReviewSidebarProps {
   open: boolean
   embedded?: boolean
+  workspacePath: string | null
   threadId: string | null
   summaries: OrchestrationCheckpointSummary[]
   mode: DiffPanelMode
@@ -99,6 +99,7 @@ interface DiffToolbarPillProps {
   as?: 'button' | 'span'
   active?: boolean
   iconOnly?: boolean
+  disabled?: boolean
   className?: string
   children: ReactNode
   title?: string
@@ -207,28 +208,31 @@ export const ChangedFilePills = memo(function ChangedFilePills({
 })
 
 export const FloatingDiffPill = memo(function FloatingDiffPill({
-  threadId,
-  summaries,
+  workspacePath,
   workspaceDiffVersion,
   open,
   onToggle
 }: FloatingDiffPillProps): React.JSX.Element | null {
-  const ready = summaries.filter((summary) => summary.status === 'ready')
-  const refreshKey = `${workspaceDiffVersion}:${buildCheckpointRefreshKey(ready)}`
-  const { result } = useCheckpointWorktreeDiff(threadId, 0, ready.length > 0, refreshKey)
-  if (ready.length === 0) return null
-  const files = result?.files ?? ready.flatMap((summary) => summary.files)
+  if (!workspacePath) return null
+  const { result } = useWorkspaceDiff(workspacePath, true, workspaceDiffVersion)
+  const files = result?.files ?? []
   const totals = summarizeFiles(files)
-  if (totals.additions === 0 && totals.deletions === 0) return null
+  const hasChanges = totals.additions > 0 || totals.deletions > 0
   return (
     <button
       type="button"
-      className={`header-diff-pill ${open ? 'active' : ''}`}
+      className={`header-diff-pill ${open ? 'active' : ''} ${hasChanges ? '' : 'empty'}`.trim()}
       onClick={onToggle}
-      aria-label={open ? 'Close review diff' : 'Open review diff'}
-      title={open ? 'Close review diff' : 'Open review diff'}
+      aria-label={open ? 'Close workspace diff' : 'Open workspace diff'}
+      title={open ? 'Close workspace diff' : 'Open workspace diff'}
     >
-      <DiffStats additions={totals.additions} deletions={totals.deletions} />
+      {hasChanges ? (
+        <DiffStats additions={totals.additions} deletions={totals.deletions} />
+      ) : (
+        <span className="header-diff-pill-empty" aria-hidden="true">
+          •
+        </span>
+      )}
     </button>
   )
 })
@@ -236,6 +240,7 @@ export const FloatingDiffPill = memo(function FloatingDiffPill({
 export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   open,
   embedded = false,
+  workspacePath,
   threadId,
   summaries,
   mode,
@@ -261,15 +266,15 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   onResizeEnd,
   onResizeKeyDown
 }: DiffReviewSidebarProps): React.JSX.Element | null {
-  const readySummaries = useMemo(
+  const turnSummaries = useMemo(
     () =>
       summaries
-        .filter((summary) => summary.status === 'ready')
+        .filter((summary) => summary.status === 'ready' && summary.files.length > 0)
         .sort((left, right) => left.checkpointTurnCount - right.checkpointTurnCount),
     [summaries]
   )
-  const latest = readySummaries[readySummaries.length - 1] ?? null
-  const selectedTurn = readySummaries.find((summary) => summary.turnId === selectedTurnId) ?? latest
+  const latest = turnSummaries[turnSummaries.length - 1] ?? null
+  const selectedTurn = turnSummaries.find((summary) => summary.turnId === selectedTurnId) ?? latest
   const [treeOpen, setTreeOpen] = useState(false)
   const range =
     mode === 'turn' && selectedTurn
@@ -277,14 +282,11 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
           fromTurnCount: selectedTurn.checkpointTurnCount - 1,
           toTurnCount: selectedTurn.checkpointTurnCount
         }
-      : latest
-        ? { fromTurnCount: 0, toTurnCount: latest.checkpointTurnCount }
-        : null
-  const worktreeDiff = useCheckpointWorktreeDiff(
-    threadId,
-    0,
-    open && mode !== 'turn' && readySummaries.length > 0,
-    `${workspaceDiffVersion}:${buildCheckpointRefreshKey(readySummaries)}`
+      : null
+  const workspaceDiff = useWorkspaceDiff(
+    workspacePath,
+    open && mode === 'full',
+    workspaceDiffVersion
   )
   const headerCopy =
     mode === 'turn' && selectedTurn
@@ -294,10 +296,8 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
           subtitle: summarizeFiles(selectedTurn.files)
         }
       : {
-          title: 'All changes',
-          subtitle: summarizeFiles(
-            worktreeDiff.result?.files ?? readySummaries.flatMap((summary) => summary.files)
-          )
+          title: 'Workspace changes',
+          subtitle: summarizeFiles(workspaceDiff.result?.files ?? [])
         }
   const checkpointDiff = useCheckpointDiff(
     threadId,
@@ -305,16 +305,16 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
     open && mode === 'turn',
     workspaceDiffVersion
   )
-  const result = mode === 'turn' ? checkpointDiff.result : worktreeDiff.result
-  const loading = mode === 'turn' ? checkpointDiff.loading : worktreeDiff.loading
-  const error = mode === 'turn' ? checkpointDiff.error : worktreeDiff.error
+  const result = mode === 'turn' ? checkpointDiff.result : workspaceDiff.result
+  const loading = mode === 'turn' ? checkpointDiff.loading : workspaceDiff.loading
+  const error = mode === 'turn' ? checkpointDiff.error : workspaceDiff.error
   const files = useMemo(() => parsePatch(result?.diff ?? '', range), [result?.diff, range])
   const summaryFiles = useMemo(
     () =>
       mode === 'turn' && selectedTurn
         ? selectedTurn.files
-        : (worktreeDiff.result?.files ?? readySummaries.flatMap((summary) => summary.files)),
-    [mode, readySummaries, selectedTurn, worktreeDiff.result?.files]
+        : (workspaceDiff.result?.files ?? []),
+    [mode, selectedTurn, workspaceDiff.result?.files]
   )
   const visibleFiles = useMemo(
     () => filterDiffFiles(files, selectedFilePath),
@@ -348,14 +348,31 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   )
   const canCommitFull =
     mode === 'full' &&
-    range !== null &&
+    Boolean(threadId) &&
     headerCopy.subtitle.additions + headerCopy.subtitle.deletions > 0
   const hasTreeFiles = fileChoices.length > 0
+  const hasTurnDiffs = turnSummaries.length > 0
+  const emptyStateLabel =
+    mode === 'turn'
+      ? 'No turn-specific diff is available yet.'
+      : workspacePath
+        ? 'No unstaged workspace changes.'
+        : 'No workspace is selected.'
+  const shouldShowStats =
+    mode === 'full'
+      ? Boolean(workspacePath)
+      : range !== null
 
   useEffect(() => {
     if (hasTreeFiles) return
     setTreeOpen(false)
   }, [hasTreeFiles])
+
+  useEffect(() => {
+    if (mode !== 'turn') return
+    if (hasTurnDiffs) return
+    onModeChange('full')
+  }, [hasTurnDiffs, mode, onModeChange])
 
   const content = (
     <>
@@ -377,13 +394,13 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
         />
       )}
       <div className="diff-review-header">
-        {range ? (
+        {shouldShowStats ? (
           <DiffStats
             additions={headerCopy.subtitle.additions}
             deletions={headerCopy.subtitle.deletions}
           />
         ) : (
-          <span className="diff-header-empty">No completed changes yet</span>
+          <span className="diff-header-empty">No turn diff available</span>
         )}
         <div className="diff-review-controls">
           <SegmentedControl
@@ -391,7 +408,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
             value={mode}
             options={[
               { value: 'full', label: 'Full' },
-              { value: 'turn', label: 'Last turn' }
+              { value: 'turn', label: 'Last turn', disabled: !hasTurnDiffs }
             ]}
             onChange={(value) => onModeChange(value as DiffPanelMode)}
           />
@@ -415,9 +432,9 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
             </DiffToolbarPill>
           ) : null}
 
-          {mode === 'turn' && readySummaries.length > 1 ? (
+          {mode === 'turn' && turnSummaries.length > 1 ? (
             <DiffTurnPager
-              summaries={readySummaries}
+              summaries={turnSummaries}
               selectedTurn={selectedTurn}
               latest={latest}
               onSelectTurn={onSelectTurn}
@@ -473,11 +490,12 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
         <div className="diff-review-body">
           <div className="diff-review-body-layout">
             <div className="diff-review-content">
-              {!range ? <DiffEmptyState label="No completed checkpoint diffs yet." /> : null}
+              {mode === 'turn' && !range ? <DiffEmptyState label={emptyStateLabel} /> : null}
+              {mode === 'full' && !workspacePath ? <DiffEmptyState label={emptyStateLabel} /> : null}
               {loading ? <DiffEmptyState label="Loading diff..." /> : null}
               {error ? <DiffEmptyState label={error} tone="error" /> : null}
               {result && result.diff.trim().length === 0 ? (
-                <DiffEmptyState label="No net changes in this range." />
+                <DiffEmptyState label={emptyStateLabel} />
               ) : null}
               {!loading &&
               !error &&
@@ -879,20 +897,19 @@ function useCheckpointDiff(
   return { result, loading, error }
 }
 
-function useCheckpointWorktreeDiff(
-  threadId: string | null,
-  fromTurnCount: number,
+function useWorkspaceDiff(
+  workspacePath: string | null,
   enabled: boolean,
   version: string | number
-): { result: CheckpointWorktreeDiffResult | null; loading: boolean; error: string | null } {
-  const [result, setResult] = useState<CheckpointWorktreeDiffResult | null>(null)
+): { result: WorkspaceDiffResult | null; loading: boolean; error: string | null } {
+  const [result, setResult] = useState<WorkspaceDiffResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const latestKeyRef = useRef<string | null>(null)
-  const key = threadId ? `${threadId}:${fromTurnCount}:worktree:${version}` : null
+  const key = workspacePath ? `${workspacePath}:workspace:${version}` : null
 
   useEffect(() => {
-    if (!enabled || !threadId || !key) {
+    if (!enabled || !workspacePath || !key) {
       setResult(null)
       setLoading(false)
       setError(null)
@@ -902,7 +919,7 @@ function useCheckpointWorktreeDiff(
     setLoading(true)
     setError(null)
     void window.agentApi
-      .getCheckpointWorktreeDiff({ threadId, fromTurnCount })
+      .getWorkspaceDiff({ cwd: workspacePath })
       .then((nextResult) => {
         if (latestKeyRef.current !== key) return
         setResult(nextResult)
@@ -914,7 +931,7 @@ function useCheckpointWorktreeDiff(
       .finally(() => {
         if (latestKeyRef.current === key) setLoading(false)
       })
-  }, [enabled, fromTurnCount, key, threadId])
+  }, [enabled, key, workspacePath])
 
   return { result, loading, error }
 }
@@ -969,6 +986,7 @@ function DiffToolbarPill({
   as = 'button',
   active = false,
   iconOnly = false,
+  disabled = false,
   className,
   children,
   title,
@@ -997,6 +1015,7 @@ function DiffToolbarPill({
       type="button"
       className={classes}
       onClick={onClick}
+      disabled={disabled}
       title={title}
       aria-label={ariaLabel}
     >
@@ -1013,7 +1032,7 @@ function SegmentedControl({
 }: {
   label: string
   value: string
-  options: Array<{ value: string; label: string }>
+  options: Array<{ value: string; label: string; disabled?: boolean }>
   onChange: (value: string) => void
 }): React.JSX.Element {
   return (
@@ -1022,9 +1041,11 @@ function SegmentedControl({
         <DiffToolbarPill
           key={option.value}
           active={option.value === value}
-          onClick={() => onChange(option.value)}
+          disabled={option.disabled}
+          onClick={option.disabled ? undefined : () => onChange(option.value)}
+          title={option.disabled ? `${option.label} unavailable` : undefined}
         >
-          {option.label}
+          <span aria-disabled={option.disabled ? 'true' : undefined}>{option.label}</span>
         </DiffToolbarPill>
       ))}
     </div>
@@ -1052,22 +1073,6 @@ function filterDiffFiles(
 
 function formatSelectedPath(path: string): string {
   return path.endsWith('/') ? path : path
-}
-
-function buildCheckpointRefreshKey(summaries: OrchestrationCheckpointSummary[]): string {
-  if (summaries.length === 0) return 'none'
-  return summaries
-    .map((summary) =>
-      [
-        summary.id,
-        summary.status,
-        summary.checkpointTurnCount,
-        summary.completedAt,
-        summary.files.length,
-        summary.errorMessage ?? ''
-      ].join(':')
-    )
-    .join('|')
 }
 
 function summarizeFiles(files: CheckpointFileChange[]): {

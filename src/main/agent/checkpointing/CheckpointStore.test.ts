@@ -74,6 +74,44 @@ describe('CheckpointStore', () => {
     expect(clearedDiff.files).toEqual([])
     expect(clearedDiff.diff).toBe('')
   })
+
+  it('diffs the current workspace against the current index state', async () => {
+    const cwd = await createGitRepo()
+    const store = new CheckpointStore()
+
+    await writeFile(join(cwd, 'tracked.txt'), 'base\n')
+    await git(cwd, ['add', 'tracked.txt'])
+    await git(cwd, [
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.invalid',
+      'commit',
+      '-m',
+      'init'
+    ])
+
+    await store.captureCheckpoint(cwd, 'thread:test', 0)
+    await writeFile(join(cwd, 'tracked.txt'), 'base\nunstaged\n')
+    await writeFile(join(cwd, 'new.txt'), 'untracked\n')
+    await writeFile(join(cwd, 'staged-only.txt'), 'staged\n')
+    await git(cwd, ['add', 'staged-only.txt'])
+
+    const diff = await store.diffWorkspace(cwd)
+    expect(diff.truncated).toBe(false)
+    expect(diff.files).toEqual([
+      { path: 'new.txt', kind: 'added', additions: 1, deletions: 0, binary: false },
+      { path: 'tracked.txt', kind: 'modified', additions: 1, deletions: 0, binary: false }
+    ])
+    expect(diff.diff).toContain('+++ b/new.txt')
+    expect(diff.diff).toContain('+unstaged')
+    expect(diff.diff).not.toContain('staged-only.txt')
+
+    await git(cwd, ['add', 'tracked.txt', 'new.txt'])
+    const cleared = await store.diffWorkspace(cwd)
+    expect(cleared.files).toEqual([])
+    expect(cleared.diff).toBe('')
+  })
 })
 
 async function createGitRepo(): Promise<string> {
