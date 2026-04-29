@@ -645,6 +645,7 @@ export interface AgentApi {
   getWorkspaceDiff(input: WorkspaceDiffRequest): Promise<WorkspaceDiffResult>
   openWorkspaceFolder(): Promise<OpenWorkspaceFolderResult | null>
   revealPath(input: { path: string }): Promise<void>
+  appendDebugTrace(input: { stage: string; payload: Record<string, unknown> }): Promise<void>
 }
 
 export const DEFAULT_THREAD_ID = 'local:main'

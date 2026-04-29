@@ -9,6 +9,7 @@ import {
 import { basename } from 'node:path'
 import type { RespondToApprovalInput, RespondToUserInputInput } from '../../../shared/agent'
 import type { AgentBackend } from '../AgentBackend'
+import { traceCommandEvent } from '../debug/commandEventTrace'
 import { AGENT_CHANNELS } from './channels'
 
 const subscriptions = new Map<string, () => void>()
@@ -92,6 +93,16 @@ export function registerAgentIpc(backend: AgentBackend): void {
     const error = await shell.openPath(input.path)
     if (error) throw new Error(error)
   })
+
+  ipcMain.handle(
+    AGENT_CHANNELS.appendDebugTrace,
+    async (event, input: { stage?: unknown; payload?: unknown }) => {
+      validateSender(event)
+      if (!input || typeof input.stage !== 'string') throw new Error('stage is required.')
+      if (!input.payload || typeof input.payload !== 'object') throw new Error('payload is required.')
+      traceCommandEvent(input.stage, input.payload as Record<string, unknown>)
+    }
+  )
 
   ipcMain.handle(
     AGENT_CHANNELS.subscribeThread,
@@ -231,6 +242,7 @@ export function removeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_CHANNELS.getWorkspaceDiff)
   ipcMain.removeHandler(AGENT_CHANNELS.openWorkspaceFolder)
   ipcMain.removeHandler(AGENT_CHANNELS.revealPath)
+  ipcMain.removeHandler(AGENT_CHANNELS.appendDebugTrace)
   ipcMain.removeHandler(AGENT_CHANNELS.subscribeThread)
   ipcMain.removeHandler(AGENT_CHANNELS.unsubscribeThread)
   ipcMain.removeHandler(AGENT_CHANNELS.subscribeShell)

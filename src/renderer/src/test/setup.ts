@@ -237,7 +237,8 @@ const agentApiMock: AgentApi = {
     path: '/Users/ankush/codespace/gencode',
     name: 'gencode'
   })),
-  revealPath: vi.fn(async () => {})
+  revealPath: vi.fn(async () => {}),
+  appendDebugTrace: vi.fn(async () => {})
 }
 
 window.agentApi = agentApiMock

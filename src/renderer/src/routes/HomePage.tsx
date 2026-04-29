@@ -76,6 +76,7 @@ import {
   derivePlanTitle,
   eventClearsPendingTurnWait,
   findLatestProposedPlan,
+  isOrchestrationModelTurnInProgress,
   mergePendingUserMessages,
   projectIdForPath,
   readSessionErrorForDisplay,
@@ -114,6 +115,7 @@ export function HomePage(): React.JSX.Element {
   const [model, setModel] = useState<string>('')
   const [effort, setEffort] = useState<ReasoningEffort>('medium')
   const lastSequenceRef = useRef(0)
+  const lastCommittedCommandSequenceRef = useRef(0)
   const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const diffPanelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const conversationRef = useRef<HTMLElement | null>(null)
@@ -185,6 +187,7 @@ export function HomePage(): React.JSX.Element {
   const sessionStatus = thread?.session?.status ?? 'idle'
   const activeTurnId = thread?.session?.activeTurnId
   const isRunning = sessionStatus === 'starting' || sessionStatus === 'running'
+  const turnInProgress = useMemo(() => isOrchestrationModelTurnInProgress(thread), [thread])
   const activeSidebarState = activeSidebarScopeKey
     ? threadSidebarState[activeSidebarScopeKey]
     : undefined
@@ -481,6 +484,34 @@ export function HomePage(): React.JSX.Element {
       if (eventClearsPendingTurnWait(item.event)) {
         setIsPendingThinking(false)
       }
+      if (isCommandActivityEvent(item.event)) {
+        void window.agentApi
+          .appendDebugTrace({
+            stage: 'renderer.thread-event.received',
+            payload: {
+              threadId: item.event.threadId,
+              turnId: item.event.activity.turnId ?? null,
+              activityId: item.event.activity.id,
+              itemId: readCommandItemId(item.event.activity.id),
+              itemType:
+                typeof item.event.activity.payload?.itemType === 'string'
+                  ? item.event.activity.payload.itemType
+                  : null,
+              title:
+                typeof item.event.activity.payload?.title === 'string'
+                  ? item.event.activity.payload.title
+                  : null,
+              summary: item.event.activity.summary,
+              status:
+                typeof item.event.activity.payload?.status === 'string'
+                  ? item.event.activity.payload.status
+                  : null,
+              activityKind: item.event.activity.kind,
+              sequence: item.event.sequence
+            }
+          })
+          .catch(() => {})
+      }
       if (item.event.type === 'thread.message-upserted') {
         pendingUserMessagesRef.current.delete(item.event.message.id)
       }
@@ -520,6 +551,46 @@ export function HomePage(): React.JSX.Element {
   useLayoutEffect(() => {
     scrollConversationToBottomIfStuck()
   }, [thread, scrollConversationToBottomIfStuck])
+
+  useEffect(() => {
+    if (!thread) return
+    const latestCommandActivity = [...thread.activities]
+      .filter(
+        (activity) =>
+          activity.payload?.itemType === 'command_execution' &&
+          typeof activity.sequence === 'number'
+      )
+      .sort((left, right) => (right.sequence ?? 0) - (left.sequence ?? 0))[0]
+    if (!latestCommandActivity || typeof latestCommandActivity.sequence !== 'number') return
+    if (latestCommandActivity.sequence <= lastCommittedCommandSequenceRef.current) return
+    lastCommittedCommandSequenceRef.current = latestCommandActivity.sequence
+    void window.agentApi
+      .appendDebugTrace({
+        stage: 'renderer.thread-state.committed',
+        payload: {
+          threadId: thread.id,
+          turnId: latestCommandActivity.turnId ?? null,
+          activityId: latestCommandActivity.id,
+          itemId: readCommandItemId(latestCommandActivity.id),
+          itemType:
+            typeof latestCommandActivity.payload?.itemType === 'string'
+              ? latestCommandActivity.payload.itemType
+              : null,
+          title:
+            typeof latestCommandActivity.payload?.title === 'string'
+              ? latestCommandActivity.payload.title
+              : null,
+          summary: latestCommandActivity.summary,
+          status:
+            typeof latestCommandActivity.payload?.status === 'string'
+              ? latestCommandActivity.payload.status
+              : null,
+          activityKind: latestCommandActivity.kind,
+          sequence: latestCommandActivity.sequence
+        }
+      })
+      .catch(() => {})
+  }, [thread])
 
   useEffect(() => {
     const stack = transcriptStackRef.current
@@ -1152,7 +1223,7 @@ export function HomePage(): React.JSX.Element {
             <div ref={transcriptStackRef} className="conversation-transcript-stack">
               {!activeProject ? (
                 <NoProjectSplash providers={providerProbe} errorMessage={providerProbeError} />
-              ) : transcriptItems.length === 0 ? (
+              ) : transcriptItems.length === 0 && !showPendingThinking ? (
                 <div className="empty-state">
                   <NoProjectSplash
                     mode="empty-chat"
@@ -1164,6 +1235,8 @@ export function HomePage(): React.JSX.Element {
                 <TranscriptList
                   items={transcriptItems}
                   showPendingThinking={showPendingThinking}
+                  turnInProgress={turnInProgress}
+                  providerName={thread?.session?.providerName ?? null}
                   expandedToolIds={expandedToolIds}
                   submittingApprovals={submittingApprovals}
                   checkpointByAssistantMessageId={checkpointByAssistantMessageId}
@@ -1312,4 +1385,18 @@ function readOpenProjectError(error: unknown): string {
     return 'Project picker is not registered in the running desktop process. Fully restart bun run dev.'
   }
   return message
+}
+
+function isCommandActivityEvent(
+  event: Parameters<typeof applyOrchestrationEvent>[1]
+): event is Extract<
+  Parameters<typeof applyOrchestrationEvent>[1],
+  { type: 'thread.activity-upserted' }
+> {
+  if (event.type !== 'thread.activity-upserted') return false
+  return event.activity.payload?.itemType === 'command_execution'
+}
+
+function readCommandItemId(activityId: string): string | null {
+  return activityId.startsWith('tool:') ? activityId.slice('tool:'.length) : null
 }

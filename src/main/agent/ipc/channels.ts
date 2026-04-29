@@ -17,6 +17,7 @@ export const AGENT_CHANNELS = {
   getWorkspaceDiff: 'agent:get-workspace-diff',
   openWorkspaceFolder: 'agent:open-workspace-folder',
   revealPath: 'agent:reveal-path',
+  appendDebugTrace: 'agent:append-debug-trace',
   threadEvent: (subscriptionId: string) => `agent:thread-event:${subscriptionId}`,
   shellEvent: (subscriptionId: string) => `agent:shell-event:${subscriptionId}`
 } as const

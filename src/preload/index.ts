@@ -23,6 +23,7 @@ const agentApi: AgentApi = {
   getWorkspaceDiff: (input) => ipcRenderer.invoke(AGENT_CHANNELS.getWorkspaceDiff, input),
   openWorkspaceFolder: () => ipcRenderer.invoke(AGENT_CHANNELS.openWorkspaceFolder),
   revealPath: (input) => ipcRenderer.invoke(AGENT_CHANNELS.revealPath, input),
+  appendDebugTrace: (input) => ipcRenderer.invoke(AGENT_CHANNELS.appendDebugTrace, input),
   getShellSnapshot: (): Promise<OrchestrationShellSnapshot> =>
     ipcRenderer.invoke(AGENT_CHANNELS.getShellSnapshot),
 

@@ -19,6 +19,7 @@ import type {
 } from '../../../shared/agent'
 import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
 import { DEFAULT_THREAD_TITLE, deriveTitleSeed } from '../../../shared/threadTitle'
+import { traceCommandEvent } from '../debug/commandEventTrace'
 import type { OrchestrationEventStore } from '../persistence/OrchestrationEventStore'
 import type { ProjectionPipeline } from '../persistence/ProjectionPipeline'
 import type { SnapshotQuery } from '../persistence/SnapshotQuery'
@@ -243,6 +244,19 @@ export class OrchestrationEngine {
       ?.thread.activities.find((candidate) => candidate.id === activity.id)
     const eventSequence = this.nextSequence()
     const activitySequence = existing?.sequence ?? eventSequence
+    traceCommandEvent('ingestion.activity-upserted', {
+      provider: this.threads.get(threadId)?.thread.session?.providerName ?? null,
+      threadId,
+      turnId: activity.turnId ?? null,
+      activityId: activity.id,
+      itemId: activity.id.startsWith('tool:') ? activity.id.slice('tool:'.length) : null,
+      itemType: readPayloadString(activity.payload, 'itemType'),
+      title: readPayloadString(activity.payload, 'title'),
+      summary: activity.summary,
+      status: readPayloadString(activity.payload, 'status'),
+      activityKind: activity.kind,
+      sequence: eventSequence
+    })
     this.apply({
       sequence: eventSequence,
       type: 'thread.activity-upserted',
@@ -630,6 +644,17 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+function readPayloadString(payload: unknown, key: string): string | null {
+  if (!payload || typeof payload !== 'object') return null
+  const value = (payload as Record<string, unknown>)[key]
+  return typeof value === 'string' ? value : null
+}
+
+const COBEL_DEBUG_EVENTS_ENABLED = /^(1|true|yes|on)$/i.test(
+  process.env.COBEL_DEBUG_EVENTS?.trim() ?? ''
+)
+
 function logEvent(label: string, payload: unknown): void {
+  if (!COBEL_DEBUG_EVENTS_ENABLED) return
   console.log(`[cobel:${label}]`, payload)
 }

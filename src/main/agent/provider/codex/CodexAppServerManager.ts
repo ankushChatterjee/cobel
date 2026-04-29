@@ -14,7 +14,9 @@ import {
   parseThreadTitleResponse,
   THREAD_TITLE_OUTPUT_SCHEMA
 } from '../../../../shared/threadTitle'
+import { traceCommandEvent } from '../../debug/commandEventTrace'
 import type { ModelInfo, ModelListResponse, TurnStartResponse } from './codex-api-types'
+import { dumpCodexRawStdoutLine } from './codexRawMessageDump'
 import { createEventId, nowIso } from '../types'
 
 const execFileAsync = promisify(execFile)
@@ -598,6 +600,7 @@ export class CodexAppServerManager {
   }
 
   private handleStdoutLine(context: CodexSessionContext, line: string): void {
+    dumpCodexRawStdoutLine(line, { threadId: context.session.threadId })
     let message: unknown
     try {
       message = JSON.parse(line)
@@ -691,6 +694,7 @@ export class CodexAppServerManager {
     titleState: TitleGenerationState & { done: Promise<string> },
     line: string
   ): void {
+    dumpCodexRawStdoutLine(line, { threadId: context.session.threadId })
     let message: unknown
     try {
       message = JSON.parse(line)
@@ -819,12 +823,30 @@ export class CodexAppServerManager {
       createdAt: nowIso(),
       ...input
     } satisfies ProviderEvent
+    traceCommandEvent('codex.raw', {
+      provider: 'codex',
+      eventId: event.id,
+      threadId: event.threadId,
+      turnId: event.turnId ?? null,
+      itemId: event.itemId ?? null,
+      method: event.method,
+      itemType: readString(readRecord(readRecord(event.payload)['item']), 'type') ?? null,
+      command:
+        readString(readRecord(readRecord(event.payload)['item']), 'command') ??
+        readString(event.payload, 'command') ??
+        null
+    })
     logEvent('codex/raw', event)
     this.emitter.emit('event', event)
   }
 }
 
+const COBEL_DEBUG_EVENTS_ENABLED = /^(1|true|yes|on)$/i.test(
+  process.env.COBEL_DEBUG_EVENTS?.trim() ?? ''
+)
+
 function logEvent(label: string, payload: unknown): void {
+  if (!COBEL_DEBUG_EVENTS_ENABLED) return
   console.log(`[cobel:${label}]`, payload)
 }
 

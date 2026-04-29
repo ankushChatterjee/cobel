@@ -7,6 +7,7 @@ import type {
   RuntimeContentStreamKind
 } from '../../../../shared/agent'
 import { fileEditChangesFromUnknownPayload } from '../../../../shared/fileEditChanges'
+import { traceCommandEvent } from '../../debug/commandEventTrace'
 import { CodexAppServerManager, type ProviderEvent } from './CodexAppServerManager'
 import { ProviderEventBus } from '../types'
 import type { ProviderAdapter, SendTurnInput, StartSessionInput } from '../types'
@@ -101,6 +102,24 @@ export class CodexAdapter implements ProviderAdapter {
   private handleRawEvent(event: ProviderEvent): void {
     const runtimeEvent = mapProviderEvent(event)
     if (runtimeEvent) {
+      traceCommandEvent('provider.runtime', {
+        provider: 'codex',
+        eventId: runtimeEvent.eventId,
+        threadId: runtimeEvent.threadId,
+        turnId: runtimeEvent.turnId ?? null,
+        itemId: runtimeEvent.itemId ?? null,
+        method: runtimeEvent.raw?.method ?? null,
+        itemType:
+          runtimeEvent.type === 'content.delta'
+            ? runtimeEvent.payload.streamKind === 'command_output'
+              ? 'command_execution'
+              : null
+            : (readString(runtimeEvent.payload, 'itemType') ?? null),
+        streamKind: runtimeEvent.type === 'content.delta' ? runtimeEvent.payload.streamKind : null,
+        title: runtimeEvent.type === 'content.delta' ? null : (readString(runtimeEvent.payload, 'title') ?? null),
+        detail: runtimeEvent.type === 'content.delta' ? null : (readString(runtimeEvent.payload, 'detail') ?? null),
+        runtimeType: runtimeEvent.type
+      })
       logEvent('codex/runtime', runtimeEvent)
       this.bus.emit(runtimeEvent)
     } else {
@@ -587,6 +606,11 @@ function readString(value: unknown, key: string): string | undefined {
   return typeof candidate === 'string' ? candidate : undefined
 }
 
+const COBEL_DEBUG_EVENTS_ENABLED = /^(1|true|yes|on)$/i.test(
+  process.env.COBEL_DEBUG_EVENTS?.trim() ?? ''
+)
+
 function logEvent(label: string, payload: unknown): void {
+  if (!COBEL_DEBUG_EVENTS_ENABLED) return
   console.log(`[cobel:${label}]`, payload)
 }
