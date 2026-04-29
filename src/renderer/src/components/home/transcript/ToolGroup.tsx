@@ -10,10 +10,14 @@ function isEditActivity(item: ActivityTranscriptItem): boolean {
 
 export const ToolGroup = memo(function ToolGroup({
   activities,
+  turnInProgress,
+  isLatestGroup,
   expandedToolIds,
   onToggleTool
 }: {
   activities: ActivityTranscriptItem[]
+  turnInProgress: boolean
+  isLatestGroup: boolean
   expandedToolIds: Set<string>
   onToggleTool: (activityId: string) => void
 }): React.JSX.Element {
@@ -39,7 +43,8 @@ export const ToolGroup = memo(function ToolGroup({
 
   // Start open while streaming; auto-collapse when the run finishes.
   // User can re-open after collapse.
-  const [open, setOpen] = useState(() => anyRunning)
+  const shouldStayOpenWhileActive = turnInProgress && isLatestGroup
+  const [open, setOpen] = useState(() => anyRunning || shouldStayOpenWhileActive)
   const userToggledRef = useRef(false)
   const prevRunningRef = useRef(anyRunning)
 
@@ -49,10 +54,25 @@ export const ToolGroup = memo(function ToolGroup({
     if (anyRunning && !wasRunning) {
       setOpen(true)
       userToggledRef.current = false
-    } else if (!anyRunning && wasRunning && !userToggledRef.current) {
+    } else if (
+      !anyRunning &&
+      wasRunning &&
+      !userToggledRef.current &&
+      !shouldStayOpenWhileActive
+    ) {
       setOpen(false)
     }
-  }, [anyRunning])
+  }, [anyRunning, shouldStayOpenWhileActive])
+
+  useEffect(() => {
+    if (shouldStayOpenWhileActive && !userToggledRef.current) {
+      setOpen(true)
+      return
+    }
+    if (!turnInProgress && !anyRunning && !userToggledRef.current) {
+      setOpen(false)
+    }
+  }, [anyRunning, shouldStayOpenWhileActive, turnInProgress])
 
   function handleToggle(): void {
     userToggledRef.current = true

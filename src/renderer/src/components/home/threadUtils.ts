@@ -4,6 +4,7 @@ import type {
   OrchestrationMessage,
   OrchestrationProposedPlan,
   OrchestrationShellSnapshot,
+  ProviderId,
   ThreadShellSummary,
   OrchestrationThread
 } from '../../../../shared/agent'
@@ -178,7 +179,14 @@ export function buildTranscriptItems(thread: OrchestrationThread | null): Transc
   })
 }
 
-export function groupTranscriptItems(items: TranscriptItem[]): TranscriptRenderGroup[] {
+function isEmptyAssistantMessage(item: TranscriptItem): boolean {
+  return item.kind === 'message' && item.message.role === 'assistant' && item.message.text.trim() === ''
+}
+
+export function groupTranscriptItems(
+  items: TranscriptItem[],
+  providerName: ProviderId | null | undefined = null
+): TranscriptRenderGroup[] {
   const groups: TranscriptRenderGroup[] = []
   let toolRun: ActivityTranscriptItem[] = []
   let reasoningRun: ActivityTranscriptItem[] = []
@@ -216,6 +224,9 @@ export function groupTranscriptItems(items: TranscriptItem[]): TranscriptRenderG
     if (item.kind === 'activity' && isThinkingActivity(item.activity)) {
       flushToolRun()
       reasoningRun.push(item)
+      continue
+    }
+    if (providerName === 'opencode' && reasoningRun.length > 0 && isEmptyAssistantMessage(item)) {
       continue
     }
     flushToolRun()
@@ -299,8 +310,23 @@ export function isOrchestrationModelTurnInProgress(thread: OrchestrationThread |
  * snapshot and hide the thinking row before the model responds.
  */
 export function snapshotMergeClearsPendingTurnStart(thread: OrchestrationThread): boolean {
-  if (isOrchestrationModelTurnInProgress(thread)) return true
   if (thread.proposedPlans.length > 0) return true
+  if (
+    thread.session?.status === 'stopped' ||
+    thread.session?.status === 'interrupted' ||
+    thread.session?.status === 'error' ||
+    thread.session?.status === 'idle'
+  ) {
+    return true
+  }
+  const activeTurnId =
+    thread.session?.activeTurnId ?? (thread.latestTurn?.status === 'running' ? thread.latestTurn.id : null)
+  if (
+    activeTurnId &&
+    thread.activities.some((activity) => !isHiddenActivity(activity) && activity.turnId === activeTurnId)
+  ) {
+    return true
+  }
   // Do not clear on historical activities alone — any prior tool row would make this true forever
   // on every snapshot. New work clears via this helper when turn/session/assistant show progress
   // or through incremental `thread.activity-upserted` + `eventClearsPendingTurnWait`.

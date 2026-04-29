@@ -136,7 +136,11 @@ export const ToolLine = memo(function ToolLine({
         </span>
         {searchBarUi ? (
           <span className="tool-search-inline">
-            <Search className="tool-search-icon" size={11} strokeWidth={2} aria-hidden />
+            {isRunning ? (
+              <span className="tool-search-spinner" aria-hidden="true" />
+            ) : (
+              <Search className="tool-search-icon" size={11} strokeWidth={2} aria-hidden />
+            )}
             <span className="tool-search-query">{queryLabel}</span>
           </span>
         ) : (

@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react'
-import type { OrchestrationCheckpointSummary } from '../../../../../shared/agent'
+import type { OrchestrationCheckpointSummary, ProviderId } from '../../../../../shared/agent'
 import { groupTranscriptItems } from '../threadUtils'
 import type { ApprovalDecision, OnAnswer, OnApprove, OnOpenDiff, OnPreviewDiff, TranscriptItem } from '../types'
 import { ThinkingRow } from './MessageRow'
@@ -10,6 +10,8 @@ import { TranscriptRow } from './TranscriptRow'
 export const TranscriptList = memo(function TranscriptList({
   items,
   showPendingThinking,
+  turnInProgress,
+  providerName,
   expandedToolIds,
   submittingApprovals,
   checkpointByAssistantMessageId,
@@ -22,6 +24,8 @@ export const TranscriptList = memo(function TranscriptList({
 }: {
   items: TranscriptItem[]
   showPendingThinking: boolean
+  turnInProgress: boolean
+  providerName: ProviderId | null
   expandedToolIds: Set<string>
   submittingApprovals: Map<string, ApprovalDecision>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
@@ -32,10 +36,11 @@ export const TranscriptList = memo(function TranscriptList({
   onOpenDiff: OnOpenDiff
   onRevert: (turnCount: number) => Promise<void>
 }): React.JSX.Element {
-  const groups = useMemo(() => groupTranscriptItems(items), [items])
+  const groups = useMemo(() => groupTranscriptItems(items, providerName), [items, providerName])
   return (
     <div className="transcript" aria-label="Conversation transcript">
-      {groups.map((group) => {
+      {groups.map((group, index) => {
+        const isLatestGroup = index === groups.length - 1
         if (group.kind === 'non-tool') {
           return (
             <TranscriptRow
@@ -75,15 +80,17 @@ export const TranscriptList = memo(function TranscriptList({
           <ToolGroup
             key={id}
             activities={activities}
+            turnInProgress={turnInProgress}
+            isLatestGroup={isLatestGroup}
             expandedToolIds={expandedToolIds}
             onToggleTool={onToggleTool}
           />
         )
       })}
       {showPendingThinking && (
-        <article className="thinking-row is-active" aria-label="Thinking">
+        <article className="thinking-row is-active" aria-label="Exploring">
           <span className="thinking-spinner" aria-hidden="true" />
-          <span>thinking…</span>
+          <span>Exploring</span>
         </article>
       )}
     </div>

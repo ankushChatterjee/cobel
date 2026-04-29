@@ -136,9 +136,53 @@ describe('renderer app', () => {
     )
     const transcript = await screen.findByLabelText(/conversation transcript/i)
     expect(within(transcript).getByText('Build the provider layer')).toBeInTheDocument()
-    expect(screen.getByLabelText('Thinking')).toBeInTheDocument()
-    expect(screen.getByText('thinking…')).toBeInTheDocument()
+    expect(screen.getByLabelText('Exploring')).toBeInTheDocument()
+    expect(screen.getByText('Exploring')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Build the provider layer' })).toBeInTheDocument()
+  })
+
+  it('shows Exploring for a first-message running turn even when transcript items are empty', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    const originalSubscribeThread = window.agentApi.subscribeThread
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            session: {
+              threadId: _input.threadId,
+              status: 'running',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: 'turn-1',
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:00.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'running',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: null
+            }
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    expect(await screen.findByLabelText(/conversation transcript/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('Exploring')).toBeInTheDocument()
+    expect(screen.getByText('Exploring')).toBeInTheDocument()
+    window.agentApi.subscribeThread = originalSubscribeThread
   })
 
   it('reuses the active plan tab when sending plan feedback', async () => {
