@@ -747,6 +747,39 @@ describe('ProviderRuntimeIngestion', () => {
     )
   })
 
+  it('creates a live command tool row from command output when no item lifecycle arrived yet', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'call-from-output',
+        payload: { streamKind: 'command_output', delta: 'pwd\n' }
+      })
+    )
+    await ingestion.drain()
+
+    expect(
+      engine
+        .getThread('thread-1')
+        .activities.find((activity) => activity.id === 'tool:call-from-output')
+    ).toEqual(
+      expect.objectContaining({
+        kind: 'tool.updated',
+        summary: 'terminal',
+        payload: expect.objectContaining({
+          itemType: 'command_execution',
+          status: 'inProgress',
+          title: 'terminal',
+          output: 'pwd\n'
+        })
+      })
+    )
+  })
+
   it('keeps a completed tool completed when late item updates arrive', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
@@ -845,7 +878,9 @@ describe('ProviderRuntimeIngestion', () => {
       expect.objectContaining({
         kind: 'tool.completed',
         payload: expect.objectContaining({
+          itemType: 'command_execution',
           status: 'completed',
+          title: 'terminal',
           output: 'done\n'
         })
       })

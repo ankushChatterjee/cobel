@@ -53,6 +53,7 @@ import {
   toOpenCodeQuestionAnswers,
   type OpenCodeServerConnection
 } from './opencodeRuntime'
+import { traceCommandEvent } from '../../debug/commandEventTrace'
 import { dumpOpenCodeSubscribeRawMessage } from './openCodeRawMessageDump'
 
 const PROVIDER = 'opencode' as const
@@ -213,7 +214,7 @@ function toolStateCreatedAt(part: Extract<Part, { type: 'tool' }>): string | und
   }
 }
 
-function fileEditChangesFromOpenCodeToolPart(part: Part): FileEditChange[] | undefined {
+export function fileEditChangesFromOpenCodeToolPart(part: Part): FileEditChange[] | undefined {
   if (part.type !== 'tool') return undefined
   const toolName = part.tool.toLowerCase()
   if (
@@ -230,14 +231,32 @@ function fileEditChangesFromOpenCodeToolPart(part: Part): FileEditChange[] | und
     const fp = (state.input as Record<string, unknown>).filePath
     if (typeof fp === 'string' && fp.trim()) fallbacks.push(fp)
   }
-  const meta =
+  const stateMeta =
     (state.status === 'running' || state.status === 'completed' || state.status === 'error') &&
     'metadata' in state &&
     state.metadata &&
     typeof state.metadata === 'object'
       ? state.metadata
       : undefined
-  return fileEditChangesFromOpenCodeMetadata(meta, fallbacks)
+  const fromState = fileEditChangesFromOpenCodeMetadata(stateMeta, fallbacks)
+  if (fromState && fromState.length > 0) return fromState
+  const partMeta = part.metadata && typeof part.metadata === 'object' ? part.metadata : undefined
+  const fromPart = fileEditChangesFromOpenCodeMetadata(partMeta, fallbacks)
+  if (fromPart && fromPart.length > 0) return fromPart
+  return undefined
+}
+
+function fileEditChangesFromSessionDiff(diff: unknown): FileEditChange[] | undefined {
+  if (!Array.isArray(diff)) return undefined
+  const out: FileEditChange[] = []
+  for (const entry of diff) {
+    if (!entry || typeof entry !== 'object') continue
+    const e = entry as Record<string, unknown>
+    const file = typeof e.file === 'string' ? e.file : ''
+    const patch = typeof e.patch === 'string' ? e.patch.trimEnd() : ''
+    if (file && patch) out.push({ path: file, diff: patch })
+  }
+  return out.length > 0 ? out : undefined
 }
 
 function basenamePath(filePath: string): string {
@@ -796,6 +815,24 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   private emit(event: ProviderRuntimeEvent): void {
+    traceCommandEvent('provider.runtime', {
+      provider: 'opencode',
+      eventId: event.eventId,
+      threadId: event.threadId,
+      turnId: event.turnId ?? null,
+      itemId: event.itemId ?? null,
+      method: typeof event.raw?.source === 'string' ? event.raw.source : 'opencode.sdk',
+      itemType:
+        event.type === 'content.delta'
+          ? event.payload.streamKind === 'command_output'
+            ? 'command_execution'
+            : null
+          : (readTracePayloadString(event.payload, 'itemType') ?? null),
+      streamKind: event.type === 'content.delta' ? event.payload.streamKind : null,
+      title: event.type === 'content.delta' ? null : (readTracePayloadString(event.payload, 'title') ?? null),
+      detail: event.type === 'content.delta' ? null : (readTracePayloadString(event.payload, 'detail') ?? null),
+      runtimeType: event.type
+    })
     this.bus.emit(event)
   }
 
@@ -1095,6 +1132,32 @@ export class OpenCodeAdapter implements ProviderAdapter {
         }
         break
       }
+      case 'session.diff': {
+        const diff = event.properties.diff
+        const fileEditChanges = fileEditChangesFromSessionDiff(diff)
+        if (fileEditChanges && fileEditChanges.length > 0) {
+          const title =
+            fileEditChanges.length === 1
+              ? basenamePath(fileEditChanges[0].path)
+              : 'file changes'
+          this.emit({
+            ...buildEventBase({
+              threadId: context.session.threadId,
+              turnId,
+              itemId: 'opencode:session-diff',
+              raw: event
+            }),
+            type: 'item.completed',
+            payload: {
+              itemType: 'file_change',
+              status: 'completed',
+              title,
+              fileEditChanges
+            }
+          })
+        }
+        break
+      }
       case 'session.error': {
         const message = sessionErrorMessage(event.properties.error)
         const activeTurn = context.activeTurnId
@@ -1211,4 +1274,10 @@ function resolveComposerAttachment(attachment: ChatAttachment): string | null {
     return null
   }
   return null
+}
+
+function readTracePayloadString(value: unknown, key: string): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const candidate = (value as Record<string, unknown>)[key]
+  return typeof candidate === 'string' ? candidate : undefined
 }

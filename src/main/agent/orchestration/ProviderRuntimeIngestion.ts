@@ -616,13 +616,15 @@ export class ProviderRuntimeIngestion {
         id,
         kind: terminal ? 'tool.completed' : 'tool.updated',
         tone: 'tool',
-        summary: existing?.summary ?? 'Tool output',
+        summary: existing?.summary ?? titleForToolOutput(event.payload.streamKind),
         payload: {
           ...existing?.payload,
-          itemType: readPayloadString(existing?.payload, 'itemType') ?? 'unknown',
+          itemType: readPayloadString(existing?.payload, 'itemType') ?? itemTypeForToolOutput(event.payload.streamKind),
           status: completed
             ? 'completed'
             : (completedTurnStatus ?? existing?.payload?.status ?? 'inProgress'),
+          title:
+            readPayloadString(existing?.payload, 'title') ?? titleForToolOutput(event.payload.streamKind),
           output,
           streamKind: event.payload.streamKind
         },
@@ -951,6 +953,18 @@ function isToolOutput(kind: RuntimeContentStreamKind): boolean {
   return kind === 'command_output' || kind === 'file_change_output'
 }
 
+function itemTypeForToolOutput(kind: RuntimeContentStreamKind): CanonicalItemType | 'unknown' {
+  if (kind === 'command_output') return 'command_execution'
+  if (kind === 'file_change_output') return 'file_change'
+  return 'unknown'
+}
+
+function titleForToolOutput(kind: RuntimeContentStreamKind): string {
+  if (kind === 'command_output') return 'terminal'
+  if (kind === 'file_change_output') return 'file changes'
+  return 'Tool output'
+}
+
 function toolActivityId(event: Pick<ProviderRuntimeEvent, 'itemId' | 'eventId'>): string {
   return `tool:${event.itemId ?? event.eventId}`
 }
@@ -1026,6 +1040,11 @@ function titleForRequest(requestType: string): string {
   return requestType.replaceAll('_', ' ')
 }
 
+const COBEL_DEBUG_EVENTS_ENABLED = /^(1|true|yes|on)$/i.test(
+  process.env.COBEL_DEBUG_EVENTS?.trim() ?? ''
+)
+
 function logEvent(label: string, payload: unknown): void {
+  if (!COBEL_DEBUG_EVENTS_ENABLED) return
   console.log(`[cobel:${label}]`, payload)
 }
