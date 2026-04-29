@@ -19,14 +19,36 @@ function combinedReasoningText(activities: OrchestrationThreadActivity[]): strin
 }
 
 export const ThinkingRow = memo(function ThinkingRow({
-  activities
+  activities,
+  activeTurnId,
+  turnInProgress,
+  latestTurnId
 }: {
   activities: OrchestrationThreadActivity[]
+  activeTurnId?: string | null
+  turnInProgress?: boolean
+  latestTurnId?: string | null
 }): React.JSX.Element | null {
   if (activities.length === 0) {
     return null
   }
-  const isComplete = activities.every((a) => a.resolved === true)
+  const belongsToActiveTurn =
+    turnInProgress === true &&
+    activeTurnId != null &&
+    activities.some((activity) => activity.turnId === activeTurnId)
+  const belongsToKnownCompletedTurn =
+    turnInProgress !== true &&
+    latestTurnId != null &&
+    activities.some((activity) => activity.turnId === latestTurnId)
+  const isComplete =
+    belongsToKnownCompletedTurn ||
+    (!belongsToActiveTurn && latestTurnId != null) ||
+    activities.every(
+      (activity) =>
+        activity.resolved === true ||
+        activity.kind === 'task.completed' ||
+        readPayloadString(activity.payload, 'status') === 'completed'
+    )
   const reasoningText = combinedReasoningText(activities)
   const hasReasoningBody = Boolean(reasoningText && reasoningText.trim().length > 0)
   const statusLabel = isComplete ? 'thought' : 'thinking…'

@@ -74,7 +74,6 @@ import {
   createEmptyThread,
   createId,
   derivePlanTitle,
-  eventClearsPendingTurnWait,
   findLatestProposedPlan,
   isOrchestrationModelTurnInProgress,
   mergePendingUserMessages,
@@ -116,6 +115,7 @@ export function HomePage(): React.JSX.Element {
   const [effort, setEffort] = useState<ReasoningEffort>('medium')
   const lastSequenceRef = useRef(0)
   const lastCommittedCommandSequenceRef = useRef(0)
+  const threadRef = useRef<OrchestrationThread | null>(null)
   const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const diffPanelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const conversationRef = useRef<HTMLElement | null>(null)
@@ -217,6 +217,10 @@ export function HomePage(): React.JSX.Element {
       }),
     [thread, isPendingThinking, hasActiveThinkingActivity]
   )
+
+  useEffect(() => {
+    threadRef.current = thread
+  }, [thread])
 
   useEffect(() => {
     setSubmittingApprovals((current) => {
@@ -472,8 +476,13 @@ export function HomePage(): React.JSX.Element {
       if (item.kind === 'snapshot') {
         if (item.snapshot.snapshotSequence < lastSequenceRef.current) return
         lastSequenceRef.current = item.snapshot.snapshotSequence
-        setThread(mergePendingUserMessages(item.snapshot.thread, pendingUserMessagesRef.current))
-        if (snapshotMergeClearsPendingTurnStart(item.snapshot.thread)) {
+        const mergedThread = mergePendingUserMessages(
+          item.snapshot.thread,
+          pendingUserMessagesRef.current
+        )
+        threadRef.current = mergedThread
+        setThread(mergedThread)
+        if (snapshotMergeClearsPendingTurnStart(mergedThread)) {
           setIsPendingThinking(false)
         }
         return
@@ -481,9 +490,6 @@ export function HomePage(): React.JSX.Element {
 
       if (item.event.sequence <= lastSequenceRef.current) return
       lastSequenceRef.current = item.event.sequence
-      if (eventClearsPendingTurnWait(item.event)) {
-        setIsPendingThinking(false)
-      }
       if (isCommandActivityEvent(item.event)) {
         void window.agentApi
           .appendDebugTrace({
@@ -515,12 +521,14 @@ export function HomePage(): React.JSX.Element {
       if (item.event.type === 'thread.message-upserted') {
         pendingUserMessagesRef.current.delete(item.event.message.id)
       }
-      setThread((current) =>
-        applyOrchestrationEvent(
-          current ?? createEmptyThread(item.event.threadId, item.event.createdAt),
-          item.event
-        )
-      )
+      const currentThread =
+        threadRef.current ?? createEmptyThread(item.event.threadId, item.event.createdAt)
+      const nextThread = applyOrchestrationEvent(currentThread, item.event)
+      threadRef.current = nextThread
+      setThread(nextThread)
+      if (snapshotMergeClearsPendingTurnStart(nextThread)) {
+        setIsPendingThinking(false)
+      }
     })
 
     return unsubscribe
@@ -1232,12 +1240,14 @@ export function HomePage(): React.JSX.Element {
                   />
                 </div>
               ) : (
-                <TranscriptList
-                  items={transcriptItems}
-                  showPendingThinking={showPendingThinking}
-                  turnInProgress={turnInProgress}
-                  providerName={thread?.session?.providerName ?? null}
-                  expandedToolIds={expandedToolIds}
+              <TranscriptList
+                items={transcriptItems}
+                showPendingThinking={showPendingThinking}
+                turnInProgress={turnInProgress}
+                activeTurnId={activeTurnId ?? thread?.latestTurn?.id ?? null}
+                latestTurnId={thread?.latestTurn?.id ?? null}
+                providerName={thread?.session?.providerName ?? null}
+                expandedToolIds={expandedToolIds}
                   submittingApprovals={submittingApprovals}
                   checkpointByAssistantMessageId={checkpointByAssistantMessageId}
                   onToggleTool={toggleToolExpanded}

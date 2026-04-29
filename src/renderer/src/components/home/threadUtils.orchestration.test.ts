@@ -5,6 +5,7 @@ import {
   eventClearsPendingTurnWait,
   groupTranscriptItems,
   isOrchestrationModelTurnInProgress,
+  mergePendingUserMessages,
   shouldShowTranscriptEndThinkingRow,
   snapshotMergeClearsPendingTurnStart
 } from './threadUtils'
@@ -156,6 +157,46 @@ describe('shouldShowTranscriptEndThinkingRow', () => {
     }
     const show = shouldShowTranscriptEndThinkingRow(thread, {
       isPendingTurnStart: false,
+      hasActiveThinkingActivity: false
+    })
+    expect(show).toBe(true)
+  })
+
+  it('shows tail when a historical assistant message is incorrectly still marked streaming', () => {
+    const thread = {
+      ...createEmptyThread('th', t0),
+      session: {
+        threadId: 'th',
+        status: 'running' as const,
+        providerName: 'opencode' as const,
+        runtimeMode: 'auto-accept-edits' as const,
+        interactionMode: 'default' as const,
+        activeTurnId: 'turn-2',
+        activePlanId: null,
+        lastError: null,
+        updatedAt: t0
+      },
+      latestTurn: {
+        id: 'turn-2',
+        status: 'running' as const,
+        startedAt: t0,
+        completedAt: null
+      },
+      messages: [
+        {
+          id: 'assistant:turn-1',
+          role: 'assistant' as const,
+          text: 'earlier reply',
+          turnId: 'turn-1',
+          streaming: true,
+          sequence: 1,
+          createdAt: t0,
+          updatedAt: t0
+        }
+      ]
+    }
+    const show = shouldShowTranscriptEndThinkingRow(thread, {
+      isPendingTurnStart: true,
       hasActiveThinkingActivity: false
     })
     expect(show).toBe(true)
@@ -332,6 +373,64 @@ describe('pending-turn snapshot & events', () => {
         }
       })
     ).toBe(true)
+  })
+
+  it('merged snapshot keeps pending wait when a follow-up user message is still optimistic', () => {
+    const serverThread = {
+      ...createEmptyThread('th', t0),
+      session: {
+        threadId: 'th',
+        status: 'running' as const,
+        providerName: 'opencode' as const,
+        runtimeMode: 'auto-accept-edits' as const,
+        interactionMode: 'default' as const,
+        activeTurnId: 'turn-2',
+        activePlanId: null,
+        lastError: null,
+        updatedAt: t0
+      },
+      latestTurn: {
+        id: 'turn-2',
+        status: 'running' as const,
+        startedAt: t0,
+        completedAt: null
+      },
+      messages: [
+        {
+          id: 'assistant:1',
+          role: 'assistant' as const,
+          text: 'first reply',
+          turnId: 'turn-1',
+          streaming: false,
+          sequence: 1,
+          createdAt: t0,
+          updatedAt: t0
+        }
+      ]
+    }
+
+    expect(snapshotMergeClearsPendingTurnStart(serverThread)).toBe(true)
+
+    const mergedThread = mergePendingUserMessages(
+      serverThread,
+      new Map([
+        [
+          'user:2',
+          {
+            id: 'user:2',
+            role: 'user' as const,
+            text: 'follow-up',
+            turnId: null,
+            streaming: false,
+            sequence: 1.5,
+            createdAt: t0,
+            updatedAt: t0
+          }
+        ]
+      ])
+    )
+
+    expect(snapshotMergeClearsPendingTurnStart(mergedThread)).toBe(false)
   })
 })
 

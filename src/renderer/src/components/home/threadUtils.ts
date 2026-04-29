@@ -286,6 +286,14 @@ export function threadHasInFlightWorkIndicator(thread: OrchestrationThread | nul
   return false
 }
 
+function currentInFlightTurnId(thread: OrchestrationThread | null): string | null {
+  if (!thread) return null
+  return (
+    thread.session?.activeTurnId ??
+    (thread.latestTurn?.status === 'running' ? thread.latestTurn.id : null)
+  )
+}
+
 /**
  * A model turn is still in flight (waiting for the next model chunk, tool, or end of turn).
  * - Session can be `ready` with `activeTurnId` set between sub-steps.
@@ -348,8 +356,17 @@ export function shouldShowTranscriptEndThinkingRow(
 ): boolean {
   if (input.hasActiveThinkingActivity) return false
   if (thread) {
+    const activeTurnId = currentInFlightTurnId(thread)
     if (thread.activities.some(isPendingPrompt)) return false
-    if (thread.messages.some((m) => m.role === 'assistant' && m.streaming)) {
+    if (
+      thread.messages.some(
+        (message) =>
+          activeTurnId !== null &&
+          message.role === 'assistant' &&
+          message.streaming &&
+          message.turnId === activeTurnId
+      )
+    ) {
       return false
     }
     if (threadHasInFlightWorkIndicator(thread)) {

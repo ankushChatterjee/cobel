@@ -285,6 +285,37 @@ describe('ProviderRuntimeIngestion', () => {
     ])
   })
 
+  it('force-closes any streaming assistant messages for the completed turn', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    engine.upsertMessage(
+      {
+        id: 'assistant:stale-open',
+        role: 'assistant',
+        text: 'OpenCode reply',
+        turnId: 'turn-1',
+        streaming: true,
+        createdAt,
+        updatedAt: createdAt
+      },
+      'thread-1'
+    )
+
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').messages).toEqual([
+      expect.objectContaining({
+        id: 'assistant:stale-open',
+        streaming: false
+      })
+    ])
+  })
+
   it('uses final assistant item snapshots to close streamed messages without duplicating text', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
@@ -958,6 +989,40 @@ describe('ProviderRuntimeIngestion', () => {
         kind: 'task.completed',
         resolved: true,
         payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+  })
+
+  it('marks newly seen late reasoning text deltas for an already completed turn as resolved', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        itemId: 'late-reasoning-delta',
+        payload: { streamKind: 'reasoning_text', delta: 'post-complete reasoning' }
+      })
+    )
+    await ingestion.drain()
+
+    expect(
+      engine
+        .getThread('thread-1')
+        .activities.find((activity) => activity.id === 'thinking:late-reasoning-delta')
+    ).toEqual(
+      expect.objectContaining({
+        kind: 'task.completed',
+        resolved: true,
+        payload: expect.objectContaining({
+          status: 'completed',
+          reasoningText: 'post-complete reasoning'
+        })
       })
     )
   })

@@ -75,6 +75,7 @@ interface OpenCodeSessionContext {
   readonly pendingQuestions: Map<string, QuestionRequest>
   readonly messageRoleById: Map<string, 'user' | 'assistant'>
   readonly partById: Map<string, Part>
+  readonly partTurnIdById: Map<string, string>
   readonly emittedTextByPartId: Map<string, string>
   readonly completedAssistantPartIds: Set<string>
   activeTurnId: string | undefined
@@ -598,6 +599,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       pendingQuestions: new Map(),
       messageRoleById: new Map(),
       partById: new Map(),
+      partTurnIdById: new Map(),
       emittedTextByPartId: new Map(),
       completedAssistantPartIds: new Set(),
       activeTurnId: undefined,
@@ -913,7 +915,12 @@ export class OpenCodeAdapter implements ProviderAdapter {
         if (info.role === 'assistant') {
           for (const part of context.partById.values()) {
             if (part.messageID !== info.id) continue
-            await this.emitAssistantTextDelta(context, part, turnId, event)
+            await this.emitAssistantTextDelta(
+              context,
+              part,
+              this.resolveTurnIdForPart(context, part.id, turnId),
+              event
+            )
           }
         }
         break
@@ -928,6 +935,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         const existingPart = context.partById.get(partID)
         if (!existingPart) break
         if (messageRoleForPart(context, existingPart) !== 'assistant') break
+        const partTurnId = this.resolveTurnIdForPart(context, partID, turnId)
         const streamKind = resolveTextStreamKind(existingPart)
         const delta = (event.properties.delta as string) ?? ''
         if (!delta) break
@@ -942,7 +950,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         this.emit({
           ...buildEventBase({
             threadId: context.session.threadId,
-            turnId,
+            turnId: partTurnId,
             itemId: partID,
             raw: event
           }),
@@ -954,9 +962,10 @@ export class OpenCodeAdapter implements ProviderAdapter {
       case 'message.part.updated': {
         const part = event.properties.part as Part
         context.partById.set(part.id, part)
+        const partTurnId = this.resolveTurnIdForPart(context, part.id, turnId)
         const messageRole = messageRoleForPart(context, part)
         if (messageRole === 'assistant') {
-          await this.emitAssistantTextDelta(context, part, turnId, event)
+          await this.emitAssistantTextDelta(context, part, partTurnId, event)
         }
         if (part.type === 'tool') {
           const itemType = toToolLifecycleItemType(part.tool)
@@ -991,7 +1000,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
           this.emit({
             ...buildEventBase({
               threadId: context.session.threadId,
-              turnId,
+              turnId: partTurnId,
               itemId: part.callID,
               createdAt: toolStateCreatedAt(part),
               raw: event
@@ -1237,6 +1246,18 @@ export class OpenCodeAdapter implements ProviderAdapter {
         }
       })
     }
+  }
+
+  private resolveTurnIdForPart(
+    context: OpenCodeSessionContext,
+    partId: string,
+    currentTurnId: string | undefined
+  ): string | undefined {
+    if (currentTurnId) {
+      context.partTurnIdById.set(partId, currentTurnId)
+      return currentTurnId
+    }
+    return context.partTurnIdById.get(partId)
   }
 }
 

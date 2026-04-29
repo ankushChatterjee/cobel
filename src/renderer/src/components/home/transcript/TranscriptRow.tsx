@@ -9,6 +9,9 @@ import { SessionErrorBanner } from './SessionErrorBanner'
 
 export const TranscriptRow = memo(function TranscriptRow({
   item,
+  activeTurnId,
+  turnInProgress,
+  latestTurnId,
   submittingApprovals,
   checkpointByAssistantMessageId,
   onApprove,
@@ -18,6 +21,9 @@ export const TranscriptRow = memo(function TranscriptRow({
   onRevert
 }: {
   item: TranscriptItem
+  activeTurnId: string | null
+  turnInProgress: boolean
+  latestTurnId: string | null
   submittingApprovals: Map<string, ApprovalDecision>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
   onApprove: OnApprove
@@ -53,7 +59,16 @@ export const TranscriptRow = memo(function TranscriptRow({
   if (activity.kind === 'approval.resolved') {
     return null
   }
-  if (isThinkingActivity(activity)) return <ThinkingRow activities={[activity]} />
+  if (isThinkingActivity(activity)) {
+    return (
+      <ThinkingRow
+        activities={[activity]}
+        activeTurnId={activeTurnId}
+        turnInProgress={turnInProgress}
+        latestTurnId={latestTurnId}
+      />
+    )
+  }
   if (isRuntimeError(activity)) {
     return <SessionErrorBanner message={activity.summary} />
   }

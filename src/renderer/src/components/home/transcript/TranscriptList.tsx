@@ -11,6 +11,8 @@ export const TranscriptList = memo(function TranscriptList({
   items,
   showPendingThinking,
   turnInProgress,
+  activeTurnId,
+  latestTurnId,
   providerName,
   expandedToolIds,
   submittingApprovals,
@@ -25,6 +27,8 @@ export const TranscriptList = memo(function TranscriptList({
   items: TranscriptItem[]
   showPendingThinking: boolean
   turnInProgress: boolean
+  activeTurnId: string | null
+  latestTurnId: string | null
   providerName: ProviderId | null
   expandedToolIds: Set<string>
   submittingApprovals: Map<string, ApprovalDecision>
@@ -46,6 +50,9 @@ export const TranscriptList = memo(function TranscriptList({
             <TranscriptRow
               key={group.item.id}
               item={group.item}
+              activeTurnId={activeTurnId}
+              turnInProgress={turnInProgress}
+              latestTurnId={latestTurnId}
               submittingApprovals={submittingApprovals}
               checkpointByAssistantMessageId={checkpointByAssistantMessageId}
               onApprove={onApprove}
@@ -61,6 +68,9 @@ export const TranscriptList = memo(function TranscriptList({
             <ThinkingRow
               key={group.id}
               activities={group.activities.map((item) => item.activity)}
+              activeTurnId={activeTurnId}
+              turnInProgress={turnInProgress}
+              latestTurnId={latestTurnId}
             />
           )
         }

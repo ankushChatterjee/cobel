@@ -556,6 +556,7 @@ export class ProviderRuntimeIngestion {
       .getThread(event.threadId)
       .activities.find((activity) => activity.id === id)
     if (existing?.resolved === true) return
+    const completedTurnStatus = this.completedTurnToolStatus(event)
 
     const prevText = readPayloadString(existing?.payload, 'reasoningText') ?? ''
     const merged = `${prevText}${event.payload.delta}`
@@ -566,12 +567,17 @@ export class ProviderRuntimeIngestion {
 
     const existingKind = existing?.kind
     const nextKind: OrchestrationThreadActivity['kind'] =
-      existingKind === 'task.started' || existingKind === 'task.progress'
-        ? 'task.progress'
-        : 'task.started'
+      completedTurnStatus !== undefined
+        ? 'task.completed'
+        : existingKind === 'task.started' || existingKind === 'task.progress'
+          ? 'task.progress'
+          : 'task.started'
 
     const itemType = readPayloadString(existing?.payload, 'itemType') ?? 'reasoning'
-    const status = readPayloadString(existing?.payload, 'status') ?? 'inProgress'
+    const status =
+      completedTurnStatus !== undefined
+        ? 'completed'
+        : (readPayloadString(existing?.payload, 'status') ?? 'inProgress')
     const basePayload =
       typeof existing?.payload === 'object' && existing.payload !== null
         ? (existing.payload as Record<string, unknown>)
@@ -590,7 +596,7 @@ export class ProviderRuntimeIngestion {
           reasoningText: nextText
         },
         turnId: event.turnId ?? existing?.turnId ?? null,
-        resolved: false,
+        resolved: completedTurnStatus !== undefined,
         createdAt: event.createdAt
       },
       event.threadId
@@ -813,9 +819,28 @@ export class ProviderRuntimeIngestion {
   private finalizeActivitiesForTurn(
     event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
   ): void {
+    this.resolvePendingAssistantMessagesForTurn(event)
     this.resolvePendingThinkingForTurn(event)
     this.resolvePendingToolsForTurn(event)
     this.resolvePendingPromptsForTurn(event)
+  }
+
+  private resolvePendingAssistantMessagesForTurn(
+    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
+  ): void {
+    const thread = this.engine.getThread(event.threadId)
+    for (const message of thread.messages) {
+      if (message.role !== 'assistant' || message.streaming !== true) continue
+      if (message.turnId !== event.turnId) continue
+      this.engine.upsertMessage(
+        {
+          ...message,
+          streaming: false,
+          updatedAt: event.createdAt
+        },
+        event.threadId
+      )
+    }
   }
 
   private resolvePendingThinkingForTurn(

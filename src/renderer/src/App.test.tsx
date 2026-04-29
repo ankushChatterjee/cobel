@@ -185,6 +185,152 @@ describe('renderer app', () => {
     window.agentApi.subscribeThread = originalSubscribeThread
   })
 
+  it('keeps Exploring visible when a late previous-turn activity arrives during a follow-up send', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    let threadListener: ((item: OrchestrationThreadStreamItem) => void) | null = null
+
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      threadListener = listener
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            messages: [
+              {
+                id: 'assistant:turn-1',
+                role: 'assistant',
+                text: 'first reply',
+                turnId: 'turn-1',
+                streaming: false,
+                sequence: 1,
+                createdAt: '2026-04-19T00:00:00.000Z',
+                updatedAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            session: {
+              threadId: _input.threadId,
+              status: 'ready',
+              providerName: 'opencode',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: null,
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:01.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'completed',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: '2026-04-19T00:00:01.000Z'
+            }
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    const composer = await screen.findByRole('textbox', { name: /ask codex/i })
+    await user.type(composer, 'follow-up')
+    await user.click(screen.getByRole('button', { name: /send/i }))
+
+    expect(screen.getByLabelText('Exploring')).toBeInTheDocument()
+
+    await act(async () => {
+      threadListener?.({
+        kind: 'event',
+        event: {
+          sequence: 100,
+          type: 'thread.activity-upserted',
+          threadId: 'local:main',
+          activity: {
+            id: 'tool:turn-1-late',
+            kind: 'tool.completed',
+            tone: 'tool',
+            summary: 'late previous turn activity',
+            payload: {
+              itemType: 'command_execution',
+              status: 'completed',
+              title: 'terminal'
+            },
+            turnId: 'turn-1',
+            resolved: true,
+            createdAt: '2026-04-19T00:00:02.000Z'
+          },
+          createdAt: '2026-04-19T00:00:02.000Z'
+        }
+      })
+    })
+
+    expect(screen.getByLabelText('Exploring')).toBeInTheDocument()
+  })
+
+  it('renders historical reasoning blocks as complete when no turn is active', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            activities: [
+              {
+                id: 'thinking:stale',
+                kind: 'task.started',
+                tone: 'thinking',
+                summary: 'Thinking',
+                turnId: 'turn-1',
+                resolved: false,
+                createdAt: '2026-04-19T00:00:00.000Z',
+                payload: {
+                  itemType: 'reasoning',
+                  status: 'inProgress',
+                  reasoningText: 'stale reasoning'
+                }
+              }
+            ],
+            session: {
+              threadId: _input.threadId,
+              status: 'ready',
+              providerName: 'opencode',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: null,
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:01.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'completed',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: '2026-04-19T00:00:01.000Z'
+            }
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    expect(await screen.findByLabelText('Model reasoning')).toBeInTheDocument()
+    expect(screen.queryByText('thinking…')).not.toBeInTheDocument()
+    expect(screen.getByText('Reasoning')).toBeInTheDocument()
+  })
+
   it('reuses the active plan tab when sending plan feedback', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
