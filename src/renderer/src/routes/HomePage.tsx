@@ -217,6 +217,10 @@ export function HomePage(): React.JSX.Element {
       }),
     [thread, isPendingThinking, hasActiveThinkingActivity]
   )
+  const workspaceDiffRefreshKey = useMemo(
+    () => `${workspaceDiffVersion}:${thread?.updatedAt ?? 'no-thread'}`,
+    [thread?.updatedAt, workspaceDiffVersion]
+  )
 
   useEffect(() => {
     threadRef.current = thread
@@ -1206,7 +1210,7 @@ export function HomePage(): React.JSX.Element {
           <div className="header-actions">
             <FloatingDiffPill
               workspacePath={activeProject?.path ?? thread?.cwd ?? null}
-              workspaceDiffVersion={workspaceDiffVersion}
+              workspaceDiffVersion={workspaceDiffRefreshKey}
               open={activeSidebarState?.open === true && resolvedSidebarTabId === 'review'}
               onToggle={() =>
                 activeSidebarState?.open === true && resolvedSidebarTabId === 'review'
@@ -1338,6 +1342,7 @@ export function HomePage(): React.JSX.Element {
                   selectedTurnId={selectedDiffTurnId}
                   selectedFilePath={selectedDiffFilePath}
                   workspaceDiffVersion={workspaceDiffVersion}
+                  workspaceDiffRefreshKey={workspaceDiffRefreshKey}
                   onModeChange={setDiffPanelMode}
                   onDiffStyleChange={setDiffStyleMode}
                   onWrapLinesChange={setDiffWrapLines}

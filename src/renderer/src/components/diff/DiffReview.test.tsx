@@ -146,6 +146,7 @@ function DiffReviewHarness({
       selectedTurnId={selectedTurnId}
       selectedFilePath={selectedFilePath}
       workspaceDiffVersion={0}
+      workspaceDiffRefreshKey={0}
       onModeChange={setMode}
       onDiffStyleChange={setDiffStyle}
       onWrapLinesChange={setWrapLines}

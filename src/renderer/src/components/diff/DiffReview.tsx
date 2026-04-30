@@ -44,7 +44,7 @@ interface ChangedFilePillsProps {
 
 interface FloatingDiffPillProps {
   workspacePath: string | null
-  workspaceDiffVersion: number
+  workspaceDiffVersion: string | number
   open: boolean
   onToggle: () => void
 }
@@ -61,6 +61,7 @@ interface DiffReviewSidebarProps {
   selectedTurnId: string | null
   selectedFilePath: string | null
   workspaceDiffVersion: number
+  workspaceDiffRefreshKey: string | number
   onModeChange: (mode: DiffPanelMode) => void
   onDiffStyleChange: (style: DiffStyleMode) => void
   onWrapLinesChange: (wrap: boolean) => void
@@ -249,6 +250,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   selectedTurnId,
   selectedFilePath,
   workspaceDiffVersion,
+  workspaceDiffRefreshKey,
   onModeChange,
   onDiffStyleChange,
   onWrapLinesChange,
@@ -286,7 +288,7 @@ export const DiffReviewSidebar = memo(function DiffReviewSidebar({
   const workspaceDiff = useWorkspaceDiff(
     workspacePath,
     open && mode === 'full',
-    workspaceDiffVersion
+    workspaceDiffRefreshKey
   )
   const headerCopy =
     mode === 'turn' && selectedTurn
