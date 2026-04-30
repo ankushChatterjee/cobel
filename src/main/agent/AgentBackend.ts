@@ -220,6 +220,7 @@ export class AgentBackend {
           providerName: input.provider,
           runtimeMode: input.runtimeMode,
           interactionMode: input.interactionMode,
+          model: sanitizeOptionalString(input.model),
           effort: sanitizeOptionalEffort(input.effort),
           activeTurnId: null,
           activePlanId: sanitizeOptionalString(input.targetPlanId) ?? null,

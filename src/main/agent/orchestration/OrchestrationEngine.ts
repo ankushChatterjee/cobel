@@ -191,6 +191,7 @@ export class OrchestrationEngine {
     providerName: OrchestrationSession['providerName']
     runtimeMode: RuntimeMode
     interactionMode: InteractionMode
+    model?: OrchestrationSession['model']
     effort?: OrchestrationSession['effort']
     activeTurnId: string | null
     activePlanId: string | null
@@ -205,6 +206,7 @@ export class OrchestrationEngine {
       providerName: input.providerName,
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
+      model: input.model,
       effort: input.effort,
       activeTurnId: input.activeTurnId,
       activePlanId: input.activePlanId,

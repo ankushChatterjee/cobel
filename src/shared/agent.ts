@@ -307,6 +307,7 @@ export interface OrchestrationSession {
   providerName: ProviderId | null
   runtimeMode: RuntimeMode
   interactionMode: InteractionMode
+  model?: string
   effort?: ReasoningEffort
   activeTurnId: string | null
   activePlanId: string | null

@@ -709,11 +709,15 @@ export class OpenCodeAdapter implements ProviderAdapter {
         sessionID: sid,
         model: { providerID: parsed.providerID, modelID: parsed.modelID },
         parts: [{ type: 'text', text: prompt }],
-        format: {
-          type: 'json_schema',
-          schema: THREAD_TITLE_OUTPUT_SCHEMA,
-          retryCount: 2
-        }
+        ...(input.useStructuredOutput
+          ? {
+              format: {
+                type: 'json_schema' as const,
+                schema: THREAD_TITLE_OUTPUT_SCHEMA,
+                retryCount: 2
+              }
+            }
+          : {})
       })
       await client.session.delete({ sessionID: sid }).catch(() => undefined)
       const structured = (result.data?.info as { structured?: unknown })?.structured

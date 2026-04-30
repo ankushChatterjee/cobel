@@ -10,7 +10,9 @@ describe('ProviderRuntimeIngestion', () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
 
-    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({ type: 'turn.started', turnId: 'turn-1', payload: { model: 'gpt-5.4' } })
+    )
     ingestion.enqueue(
       event({
         type: 'content.delta',
@@ -55,6 +57,7 @@ describe('ProviderRuntimeIngestion', () => {
       ])
     )
     expect(thread.session?.status).toBe('ready')
+    expect(thread.session?.model).toBe('gpt-5.4')
   })
 
   it('accumulates reasoning_text on the thinking activity and keeps it when the reasoning item completes', async () => {

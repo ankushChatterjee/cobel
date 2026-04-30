@@ -191,6 +191,12 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     sql: `
       ALTER TABLE projection_thread_sessions ADD COLUMN active_plan_id TEXT;
     `
+  },
+  {
+    name: '006_session_model',
+    sql: `
+      ALTER TABLE projection_thread_sessions ADD COLUMN model TEXT;
+    `
   }
 ]
 

@@ -53,6 +53,7 @@ interface SessionRow {
   provider_name: string
   runtime_mode: string
   interaction_mode: string
+  model: string | null
   effort: string | null
   active_turn_id: string | null
   active_plan_id: string | null
@@ -273,6 +274,7 @@ function sessionRowToSession(row: SessionRow): OrchestrationSession {
     providerName: (row.provider_name as ProviderId) ?? null,
     runtimeMode: row.runtime_mode as OrchestrationSession['runtimeMode'],
     interactionMode: row.interaction_mode as OrchestrationSession['interactionMode'],
+    model: row.model ?? undefined,
     effort: (row.effort as OrchestrationSession['effort']) ?? undefined,
     activeTurnId: row.active_turn_id ?? null,
     activePlanId: row.active_plan_id ?? null,

@@ -27,6 +27,7 @@ describe('AgentBackend', () => {
       provider: 'codex',
       input: 'Implement the test path',
       cwd: '/tmp/project',
+      model: 'gpt-5.4',
       runtimeMode: 'auto-accept-edits',
       interactionMode: 'default',
       createdAt: '2026-04-19T00:00:00.000Z'
@@ -42,6 +43,7 @@ describe('AgentBackend', () => {
     expect(thread.activities.some((activity) => activity.kind === 'tool.completed')).toBe(true)
     expect(thread.activities.some((activity) => activity.payload?.output)).toBe(true)
     expect(thread.session?.status).toBe('ready')
+    expect(thread.session?.model).toBe('gpt-5.4')
     expect(streamItems[0]).toEqual(expect.objectContaining({ kind: 'snapshot' }))
     expect(streamItems).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: 'event' })])

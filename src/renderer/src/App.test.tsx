@@ -481,6 +481,54 @@ describe('renderer app', () => {
     })
   })
 
+  it('restores the selected model from persisted thread session state', async () => {
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.listModelCatalog = vi.fn(async (): Promise<ModelCatalog> => ({
+      providers: [
+        { id: 'codex', name: 'Codex', status: 'available', detail: 'ok' },
+        { id: 'opencode', name: 'OpenCode', status: 'available', detail: 'ok' }
+      ],
+      modelsByProvider: {
+        codex: [{ id: 'gpt-5.4-mini', providerId: 'codex', isDefault: true }],
+        opencode: [{ id: 'anthropic/claude-sonnet-4', providerId: 'opencode', isDefault: true }]
+      }
+    }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            session: {
+              threadId: _input.threadId,
+              status: 'ready',
+              providerName: 'opencode',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              model: 'anthropic/claude-sonnet-4',
+              activeTurnId: null,
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:01.000Z'
+            }
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await userEvent.click(openFolderButtons[0])
+
+    const modelSelect = (await screen.findByLabelText(/model/i)) as HTMLSelectElement
+    await waitFor(() => {
+      expect(modelSelect.value).toBe('anthropic/claude-sonnet-4')
+    })
+  })
+
   it('opens the model selector with Cmd+Shift+M and supports keyboard selection', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))

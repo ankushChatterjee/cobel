@@ -363,16 +363,20 @@ export function HomePage(): React.JSX.Element {
   useEffect(() => {
     if (!activeThreadId) return
     const preferredModel = threadComposerPreferences[activeThreadId]?.model
+    const sessionModel =
+      thread?.id === activeThreadId ? (thread.session?.model ?? undefined) : undefined
     if (models.length === 0) {
-      setModel(preferredModel ?? '')
+      setModel(preferredModel ?? sessionModel ?? '')
       return
     }
     const resolvedModel =
       preferredModel && models.some((candidate) => candidate.id === preferredModel)
         ? preferredModel
+        : sessionModel && models.some((candidate) => candidate.id === sessionModel)
+          ? sessionModel
         : pickDefaultModel(models)
     setModel(resolvedModel)
-  }, [activeThreadId, models, threadComposerPreferences])
+  }, [activeThreadId, models, thread, threadComposerPreferences])
 
   const activeModelInfo = useMemo(
     () => models.find((candidate) => candidate.id === model) ?? null,

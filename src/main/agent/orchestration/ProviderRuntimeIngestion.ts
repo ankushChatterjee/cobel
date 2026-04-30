@@ -90,6 +90,7 @@ export class ProviderRuntimeIngestion {
             this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
           interactionMode:
             this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
+          model: this.engine.getThread(event.threadId).session?.model,
           effort: this.engine.getThread(event.threadId).session?.effort,
           activeTurnId:
             event.payload.state === 'running'
@@ -108,7 +109,9 @@ export class ProviderRuntimeIngestion {
         return
 
       case 'turn.started':
+        const currentModel = this.engine.getThread(event.threadId).session?.model
         const currentEffort = this.engine.getThread(event.threadId).session?.effort
+        const nextModel = typeof event.payload.model === 'string' ? event.payload.model : currentModel
         const nextEffort = isReasoningEffort(event.payload.effort)
           ? event.payload.effort
           : currentEffort
@@ -126,6 +129,7 @@ export class ProviderRuntimeIngestion {
             this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
           interactionMode:
             this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
+          model: nextModel,
           effort: nextEffort,
           activeTurnId: event.turnId ?? null,
           activePlanId: this.engine.getThread(event.threadId).session?.activePlanId ?? null,
@@ -183,6 +187,7 @@ export class ProviderRuntimeIngestion {
             this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
           interactionMode:
             this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
+          model: this.engine.getThread(event.threadId).session?.model,
           effort: this.engine.getThread(event.threadId).session?.effort,
           activeTurnId: event.turnId ?? null,
           activePlanId: this.engine.getThread(event.threadId).session?.activePlanId ?? null,
@@ -277,6 +282,7 @@ export class ProviderRuntimeIngestion {
               this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
             interactionMode:
               this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
+            model: this.engine.getThread(event.threadId).session?.model,
             effort: this.engine.getThread(event.threadId).session?.effort,
             activeTurnId: null,
             activePlanId: null,
@@ -775,6 +781,7 @@ export class ProviderRuntimeIngestion {
       providerName: event.provider,
       runtimeMode: thread.session?.runtimeMode ?? 'auto-accept-edits',
       interactionMode: thread.session?.interactionMode ?? 'default',
+      model: thread.session?.model,
       effort: thread.session?.effort,
       activeTurnId: null,
       activePlanId: null,
