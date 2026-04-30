@@ -463,6 +463,7 @@ export class ProviderRuntimeIngestion {
       'markdown'
     )
     if (!text) return
+    this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
     const state = this.getAssistantState(event)
     state.buffer += text
     this.flushAssistant(event, {
@@ -514,8 +515,8 @@ export class ProviderRuntimeIngestion {
   }
 
   /**
-   * Stops the reasoning "spinner" in the UI once another stream (assistant, plan, tool output)
-   * or non-reasoning item begins for the same turn, even if the reasoning item has not completed yet.
+   * Stops reasoning spinners once another stream or non-reasoning item begins. Some providers omit
+   * turn ids on reasoning updates, so unassigned reasoning is treated as belonging to the active turn.
    */
   private resolveReasoningThinkingForTurn(
     threadId: string,
@@ -527,7 +528,7 @@ export class ProviderRuntimeIngestion {
     if (!effectiveTurnId) return
 
     for (const activity of thread.activities) {
-      if (activity.turnId !== effectiveTurnId) continue
+      if (activity.turnId && activity.turnId !== effectiveTurnId) continue
       if (!activity.id.startsWith('thinking:')) continue
       if (activity.resolved === true) continue
       if (readPayloadString(activity.payload, 'itemType') !== 'reasoning') continue
@@ -880,7 +881,6 @@ export class ProviderRuntimeIngestion {
       if (!activity.kind.startsWith('tool.')) continue
       if (!activityBelongsToTurn(activity, event.turnId)) continue
       const currentStatus = readPayloadString(activity.payload, 'status')
-      if (activity.kind === 'tool.completed' && isTerminalToolStatus(currentStatus)) continue
       this.engine.upsertActivity(
         {
           ...activity,

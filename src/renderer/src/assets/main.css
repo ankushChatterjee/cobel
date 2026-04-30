@@ -1807,6 +1807,12 @@
   color: var(--accent-primary);
 }
 
+.thinking-row-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .thinking-row.has-reasoning {
   display: flex;
   flex-direction: column;
@@ -1952,6 +1958,8 @@
 }
 
 .thinking-spinner {
+  display: inline-block;
+  flex-shrink: 0;
   width: 9px;
   height: 9px;
   border: 1.5px solid var(--border-medium);

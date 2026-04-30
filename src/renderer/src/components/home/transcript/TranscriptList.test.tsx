@@ -55,6 +55,8 @@ function renderTranscript(items: TranscriptItem[], turnInProgress: boolean): voi
       items={items}
       showPendingThinking={false}
       turnInProgress={turnInProgress}
+      activeTurnId={turnInProgress ? 'turn-1' : null}
+      latestTurnId="turn-1"
       providerName="codex"
       expandedToolIds={new Set()}
       submittingApprovals={new Map()}

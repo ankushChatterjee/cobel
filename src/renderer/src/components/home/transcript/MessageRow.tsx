@@ -51,7 +51,7 @@ export const ThinkingRow = memo(function ThinkingRow({
     )
   const reasoningText = combinedReasoningText(activities)
   const hasReasoningBody = Boolean(reasoningText && reasoningText.trim().length > 0)
-  const statusLabel = isComplete ? 'thought' : 'thinking…'
+  const statusLabel = isComplete ? 'thought' : 'Thinking'
   const contentId = useId()
   const [reasoningExpanded, setReasoningExpanded] = useState(() => !isComplete)
   const reasoningBodyRef = useRef<HTMLDivElement | null>(null)
