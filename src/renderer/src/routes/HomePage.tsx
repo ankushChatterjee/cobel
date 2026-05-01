@@ -123,6 +123,7 @@ export function HomePage(): React.JSX.Element {
   const conversationRef = useRef<HTMLElement | null>(null)
   const transcriptStackRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const todoFloatingUiRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRafRef = useRef(0)
   /** Ignore `onScroll` while we adjust scroll position so smooth/CSS scroll does not clear stick-to-bottom. */
   const suppressConversationScrollRef = useRef(false)
@@ -189,7 +190,8 @@ export function HomePage(): React.JSX.Element {
   }, [providerSummaries, selectedProvider])
   const sessionStatus = thread?.session?.status ?? 'idle'
   const activeTurnId = thread?.session?.activeTurnId
-  const isRunning = sessionStatus === 'starting' || sessionStatus === 'running'
+  const isBusy = sessionStatus === 'starting' || sessionStatus === 'running'
+  const isRunning = sessionStatus === 'running'
   const turnInProgress = useMemo(() => isOrchestrationModelTurnInProgress(thread), [thread])
   const activeSidebarState = activeSidebarScopeKey
     ? threadSidebarState[activeSidebarScopeKey]
@@ -650,9 +652,35 @@ export function HomePage(): React.JSX.Element {
     setTodoPanelOpen(false)
   }, [activeThreadId])
 
+  useEffect(() => {
+    if (visibleTodoLists.length > 0) return
+    setTodoPanelOpen(false)
+  }, [visibleTodoLists.length])
+
+  useEffect(() => {
+    if (!todoPanelOpen) return
+
+    const handlePointerDown = (event: globalThis.PointerEvent): void => {
+      if (todoFloatingUiRef.current?.contains(event.target as Node)) return
+      setTodoPanelOpen(false)
+    }
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      setTodoPanelOpen(false)
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [todoPanelOpen])
+
   const sendPrompt = useCallback(
     async (input: string): Promise<boolean> => {
-      if (!input || isRunning) return false
+      if (!input || isBusy) return false
       if (!activeProject || !activeThreadId) {
         setError('Open a project before starting a Codex chat.')
         return false
@@ -717,23 +745,13 @@ export function HomePage(): React.JSX.Element {
       activeSidebarState?.activeTabId,
       activeThreadId,
       effort,
+      isBusy,
       interactionMode,
-      isRunning,
       model,
       runtimeMode,
       selectedProvider
     ]
   )
-
-  const stopSession = useCallback(async (): Promise<void> => {
-    if (!activeThreadId) return
-    setError(null)
-    try {
-      await window.agentApi.stopSession({ threadId: activeThreadId })
-    } catch (stopError) {
-      setError(stopError instanceof Error ? stopError.message : String(stopError))
-    }
-  }, [activeThreadId])
 
   const interruptTurn = useCallback(async (): Promise<void> => {
     if (!activeThreadId) return
@@ -1295,7 +1313,7 @@ export function HomePage(): React.JSX.Element {
           {activeProject ? (
             <div className="composer-wrap">
               <div className="composer-stack">
-                <div className="composer-floating-ui">
+                <div ref={todoFloatingUiRef} className="composer-floating-ui">
                   <FloatingTodoPanel todoLists={visibleTodoLists} open={todoPanelOpen} />
                   <FloatingTodoPill
                     todoLists={visibleTodoLists}
@@ -1306,6 +1324,7 @@ export function HomePage(): React.JSX.Element {
                 <ChatComposer
                   key={composerResetToken}
                   enabled={Boolean(activeProject)}
+                  isBusy={isBusy}
                   isRunning={isRunning}
                   interactionMode={interactionMode}
                   runtimeMode={runtimeMode}
@@ -1321,7 +1340,6 @@ export function HomePage(): React.JSX.Element {
                   onEffortChange={handleEffortChange}
                   onSubmitPrompt={sendPrompt}
                   onInterrupt={interruptTurn}
-                  onStop={stopSession}
                 />
               </div>
             </div>
@@ -1395,7 +1413,7 @@ export function HomePage(): React.JSX.Element {
             return plan ? (
               <PlanSidebarPanel
                 plan={plan}
-                disabled={isRunning}
+                disabled={isBusy}
                 onImplement={() => void implementProposedPlan(plan)}
               />
             ) : null

@@ -462,7 +462,7 @@ export class ProviderRuntimeIngestion {
     const items = normalizeTodoItems(event.payload.items)
     if (items.length === 0) return
     const todoList: OrchestrationTodoList = {
-      id: todoListId(event.threadId, turnId, event.payload.source, event.itemId),
+      id: todoListId(event.threadId, turnId, event.payload.source),
       turnId,
       source: event.payload.source,
       title: event.payload.title,
@@ -782,16 +782,18 @@ export class ProviderRuntimeIngestion {
   private closeActiveTurn(event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>): void {
     const thread = this.engine.getThread(event.threadId)
     const activeTurnId = thread.session?.activeTurnId
+    const completedTurnId = event.turnId ?? event.eventId
 
     this.completedTurns.set(
-      this.turnCompletionKey(event.threadId, event.turnId ?? event.eventId),
+      this.turnCompletionKey(event.threadId, completedTurnId),
       toolStatusForTurnCompletion(event.payload.state)
     )
     this.finalizeActivitiesForTurn(event)
+    this.engine.clearTodoListsForTurn(event.threadId, completedTurnId, event.createdAt)
     if (activeTurnId && event.turnId && activeTurnId !== event.turnId) return
 
     this.engine.setLatestTurn(event.threadId, {
-      id: event.turnId ?? event.eventId,
+      id: completedTurnId,
       status: event.payload.state,
       startedAt: thread.latestTurn?.startedAt ?? event.createdAt,
       completedAt: event.createdAt
@@ -841,6 +843,7 @@ export class ProviderRuntimeIngestion {
       toolStatusForTurnCompletion(state)
     )
     this.finalizeActivitiesForTurn(cleanupEvent)
+    this.engine.clearTodoListsForTurn(event.threadId, activeTurnId, event.createdAt)
     this.engine.setLatestTurn(event.threadId, {
       id: activeTurnId,
       status: state,
@@ -989,12 +992,9 @@ function assistantSegmentMessageId(baseKey: string, segmentIndex: number): strin
 function todoListId(
   threadId: string,
   turnId: string,
-  source: OrchestrationTodoList['source'],
-  itemId?: string
+  source: OrchestrationTodoList['source']
 ): string {
-  return itemId
-    ? `todo:${threadId}:turn:${turnId}:${source}:${itemId}`
-    : `todo:${threadId}:turn:${turnId}:${source}`
+  return `todo:${threadId}:turn:${turnId}:${source}`
 }
 
 function normalizeTodoItems(

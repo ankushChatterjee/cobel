@@ -1511,6 +1511,87 @@ describe('ProviderRuntimeIngestion', () => {
       })
     ])
   })
+
+  it('replaces same-turn todo snapshots instead of accumulating separate lists', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(
+      event({
+        type: 'todo.updated',
+        turnId: 'turn-1',
+        itemId: 'todo-call-1',
+        payload: {
+          source: 'todo',
+          title: 'Todos',
+          items: [
+            { id: 'todo-1', text: 'Wire persistence', status: 'pending' },
+            { id: 'todo-2', text: 'Render the pill', status: 'pending' }
+          ]
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'todo.updated',
+        turnId: 'turn-1',
+        itemId: 'todo-call-2',
+        payload: {
+          source: 'todo',
+          title: 'Todos',
+          items: [
+            { id: 'todo-1', text: 'Wire persistence', status: 'completed' },
+            { id: 'todo-2', text: 'Render the pill', status: 'in_progress' }
+          ]
+        }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').todoLists).toEqual([
+      expect.objectContaining({
+        id: 'todo:thread-1:turn:turn-1:todo',
+        turnId: 'turn-1',
+        source: 'todo',
+        items: [
+          expect.objectContaining({ id: 'todo-1', text: 'Wire persistence', status: 'completed' }),
+          expect.objectContaining({ id: 'todo-2', text: 'Render the pill', status: 'in_progress' })
+        ]
+      })
+    ])
+  })
+
+  it('clears todo lists entirely when the turn completes', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(
+      event({
+        type: 'turn.started',
+        turnId: 'turn-1',
+        payload: {}
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'todo.updated',
+        turnId: 'turn-1',
+        payload: {
+          source: 'todo',
+          title: 'Todos',
+          items: [{ id: 'todo-1', text: 'Wire persistence', status: 'in_progress' }]
+        }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').todoLists).toHaveLength(1)
+
+    ingestion.enqueue(event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } }))
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').todoLists).toEqual([])
+  })
 })
 
 function event<T extends ProviderRuntimeEvent['type']>(

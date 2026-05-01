@@ -333,13 +333,13 @@ export function todoItemsFromOpenCodeToolPart(
   if (part.tool.toLowerCase() !== 'todowrite') return []
 
   const sources: unknown[] = []
-  if ('input' in part.state) sources.push(part.state.input)
-  if ('metadata' in part.state) sources.push(part.state.metadata)
-  sources.push(part.metadata)
   if ('output' in part.state && typeof part.state.output === 'string') {
     const parsed = tryParseJson(part.state.output)
     if (parsed !== null) sources.push(parsed)
   }
+  if ('metadata' in part.state) sources.push(part.state.metadata)
+  sources.push(part.metadata)
+  if ('input' in part.state) sources.push(part.state.input)
 
   for (const source of sources) {
     const items = readTodoItems(source)
@@ -433,9 +433,11 @@ function tryParseJson(text: string): unknown | null {
   }
 }
 
-function toolLifecycleTitle(part: Extract<Part, { type: 'tool' }>): string {
+export function toolLifecycleTitle(part: Extract<Part, { type: 'tool' }>): string {
   const st = part.state
   const toolLower = part.tool.toLowerCase()
+
+  if (toolLower === 'todowrite') return 'Editing todos'
 
   if ('title' in st && typeof st.title === 'string' && st.title.trim()) {
     const t = st.title.trim()

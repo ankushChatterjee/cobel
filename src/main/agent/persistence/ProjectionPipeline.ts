@@ -88,6 +88,9 @@ export class ProjectionPipeline {
       case 'thread.todo-list-upserted':
         this.applyTodoListUpserted(e)
         break
+      case 'thread.todo-lists-cleared':
+        this.applyTodoListsCleared(e)
+        break
       case 'thread.latest-turn-set':
         this.applyLatestTurnSet(e)
         break
@@ -347,6 +350,17 @@ export class ProjectionPipeline {
         created_at: str(todoList['createdAt']) ?? e.occurredAt,
         updated_at: str(todoList['updatedAt']) ?? e.occurredAt
       })
+    this.db
+      .prepare(`UPDATE projection_threads SET updated_at = ? WHERE thread_id = ?`)
+      .run(e.occurredAt, e.streamId)
+  }
+
+  private applyTodoListsCleared(e: KnownEvent): void {
+    const turnId = str(e.payload['turnId'])
+    if (!turnId) return
+    this.db
+      .prepare(`DELETE FROM projection_thread_todo_lists WHERE thread_id = ? AND turn_id = ?`)
+      .run(e.streamId, turnId)
     this.db
       .prepare(`UPDATE projection_threads SET updated_at = ? WHERE thread_id = ?`)
       .run(e.occurredAt, e.streamId)

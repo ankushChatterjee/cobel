@@ -293,6 +293,17 @@ export class OrchestrationEngine {
     })
   }
 
+  clearTodoListsForTurn(threadId: string, turnId: string, createdAt = nowIso()): void {
+    this.ensureThread({ threadId })
+    this.apply({
+      sequence: this.nextSequence(),
+      type: 'thread.todo-lists-cleared',
+      threadId,
+      turnId,
+      createdAt
+    })
+  }
+
   setLatestTurn(threadId: string, latestTurn: OrchestrationLatestTurn | null): void {
     this.ensureThread({ threadId })
     this.apply({
@@ -638,6 +649,8 @@ function buildEventPayload(
   if ('message' in event) base['message'] = event.message
   if ('activity' in event) base['activity'] = event.activity
   if ('proposedPlan' in event) base['proposedPlan'] = event.proposedPlan
+  if ('todoList' in event) base['todoList'] = event.todoList
+  if ('turnId' in event) base['turnId'] = event.turnId
   if ('latestTurn' in event) base['latestTurn'] = event.latestTurn
   if ('checkpoint' in event) base['checkpoint'] = event.checkpoint
   if ('turnCount' in event) base['turnCount'] = event.turnCount

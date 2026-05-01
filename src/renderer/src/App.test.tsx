@@ -109,8 +109,13 @@ describe('renderer app', () => {
   it('renders the floating todo pill and panel for the latest thread checklist', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    let threadListener: ((item: OrchestrationThreadStreamItem) => void) | null = null
+    let subscribedThreadId = ''
+    const originalSubscribeThread = window.agentApi.subscribeThread
 
     window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      subscribedThreadId = _input.threadId
+      threadListener = listener
       listener({
         kind: 'snapshot',
         snapshot: {
@@ -140,11 +145,22 @@ describe('renderer app', () => {
                 updatedAt: '2026-04-19T00:00:01.000Z'
               }
             ],
+            session: {
+              threadId: _input.threadId,
+              status: 'running',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: 'turn-1',
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:00.000Z'
+            },
             latestTurn: {
               id: 'turn-1',
-              status: 'completed',
+              status: 'running',
               startedAt: '2026-04-19T00:00:00.000Z',
-              completedAt: '2026-04-19T00:00:02.000Z'
+              completedAt: null
             }
           })
         }
@@ -167,6 +183,69 @@ describe('renderer app', () => {
     expect(screen.getByText('Add persistence')).toBeInTheDocument()
     expect(screen.getByText('Render panel')).toBeInTheDocument()
     expect(screen.getByText('Add tests')).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: /todo list/i })).not.toBeInTheDocument()
+    })
+
+    await user.click(await screen.findByRole('button', { name: /open todo list/i }))
+    expect(await screen.findByRole('region', { name: /todo list/i })).toBeInTheDocument()
+
+    fireEvent.pointerDown(document.body)
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: /todo list/i })).not.toBeInTheDocument()
+    })
+
+    act(() => {
+      threadListener?.({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 2,
+          thread: createTestThread({
+            id: subscribedThreadId,
+            todoLists: [
+              {
+                id: 'todo:turn-1:plan',
+                turnId: 'turn-1',
+                source: 'plan',
+                title: 'Plan',
+                items: [
+                  { id: 'todo-1', text: 'Add persistence', status: 'completed', order: 0 },
+                  { id: 'todo-2', text: 'Render panel', status: 'completed', order: 1 }
+                ],
+                createdAt: '2026-04-19T00:00:00.000Z',
+                updatedAt: '2026-04-19T00:00:02.000Z'
+              }
+            ],
+            session: {
+              threadId: subscribedThreadId,
+              status: 'ready',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: null,
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:02.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'completed',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: '2026-04-19T00:00:02.000Z'
+            }
+          })
+        }
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /open todo list/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('region', { name: /todo list/i })).not.toBeInTheDocument()
+    })
+
+    window.agentApi.subscribeThread = originalSubscribeThread
   })
 
   it('dispatches a turn command from the composer', async () => {
@@ -246,6 +325,143 @@ describe('renderer app', () => {
     expect(screen.getByLabelText('Exploring')).toBeInTheDocument()
     expect(screen.getByText('Exploring')).toBeInTheDocument()
     window.agentApi.subscribeThread = originalSubscribeThread
+  })
+
+  it('turns the composer send button into a stop button while a turn is streaming', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            session: {
+              threadId: _input.threadId,
+              status: 'running',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: 'turn-1',
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:00.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'running',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: null
+            },
+            messages: [
+              {
+                id: 'assistant:turn-1',
+                role: 'assistant',
+                text: 'Streaming response',
+                turnId: 'turn-1',
+                streaming: true,
+                sequence: 1,
+                createdAt: '2026-04-19T00:00:00.000Z',
+                updatedAt: '2026-04-19T00:00:01.000Z'
+              }
+            ]
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    const stopButton = await screen.findByRole('button', { name: /^stop$/i })
+    expect(stopButton).toBeEnabled()
+    expect(stopButton).toHaveAttribute('title', 'Stop')
+    expect(stopButton).toHaveClass('streaming')
+    expect(screen.queryByRole('button', { name: /^send$/i })).not.toBeInTheDocument()
+
+    await user.click(stopButton)
+
+    expect(window.agentApi.interruptTurn).toHaveBeenCalledWith({
+      threadId: expect.any(String),
+      turnId: 'turn-1'
+    })
+    expect(window.agentApi.stopSession).not.toHaveBeenCalled()
+  })
+
+  it('keeps the composer as send during ready-state orchestration gaps', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            session: {
+              threadId: _input.threadId,
+              status: 'ready',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: 'turn-1',
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:00.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'running',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: null
+            },
+            activities: [
+              {
+                id: 'thinking:turn-1',
+                kind: 'task.progress',
+                tone: 'info',
+                summary: 'Reasoning',
+                payload: { itemType: 'reasoning', status: 'inProgress' },
+                turnId: 'turn-1',
+                resolved: false,
+                createdAt: '2026-04-19T00:00:00.000Z'
+              }
+            ]
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    const composer = await screen.findByRole('textbox', { name: /ask codex/i })
+    await user.type(composer, 'Follow up after tooling')
+
+    const sendButton = screen.getByRole('button', { name: /^send$/i })
+    expect(sendButton).toBeEnabled()
+    expect(sendButton).toHaveAttribute('title', 'Send (↵)')
+    expect(sendButton).not.toHaveClass('streaming')
+    expect(screen.queryByRole('button', { name: /^stop$/i })).not.toBeInTheDocument()
+
+    await user.click(sendButton)
+
+    expect(window.agentApi.dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'thread.turn.start',
+        input: 'Follow up after tooling'
+      })
+    )
+    expect(window.agentApi.interruptTurn).not.toHaveBeenCalled()
   })
 
   it('keeps Exploring visible when a late previous-turn activity arrives during a follow-up send', async () => {

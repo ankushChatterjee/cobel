@@ -483,8 +483,7 @@
 
 .chat-header,
 .composer-footer,
-.header-actions,
-.run-controls {
+.header-actions {
   display: flex;
   align-items: center;
 }
@@ -2589,13 +2588,13 @@
   gap: 7px;
   min-height: 32px;
   padding: 0 14px;
-  border: 1px solid rgba(143, 190, 159, 0.22);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 10%, var(--border-medium));
   border-radius: 999px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
-    rgba(143, 190, 159, 0.09);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.008)),
+    rgba(17, 20, 18, 0.94);
   box-shadow:
-    0 12px 28px rgba(0, 0, 0, 0.24),
+    0 10px 22px rgba(0, 0, 0, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
   cursor: pointer;
@@ -2610,14 +2609,17 @@
 
 .floating-todo-pill:hover {
   transform: translateY(-1px);
-  border-color: rgba(143, 190, 159, 0.34);
+  border-color: color-mix(in srgb, var(--accent-primary) 16%, var(--border-strong));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+    color-mix(in srgb, var(--accent-primary) 4%, rgba(17, 20, 18, 0.95));
 }
 
 .floating-todo-pill.active {
-  border-color: rgba(143, 190, 159, 0.42);
+  border-color: color-mix(in srgb, var(--accent-primary) 22%, var(--border-strong));
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01)),
-    rgba(143, 190, 159, 0.12);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+    color-mix(in srgb, var(--accent-primary) 6%, rgba(17, 20, 18, 0.96));
 }
 
 .floating-todo-pill-separator {
@@ -2628,13 +2630,40 @@
   width: min(100%, 520px);
   max-height: min(46vh, 360px);
   overflow: auto;
-  border: 1px solid rgba(143, 190, 159, 0.22);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent-primary) 18%, var(--border-strong)) transparent;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 10%, var(--border-medium));
   border-radius: 18px;
-  background: rgba(17, 20, 18, 0.96);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.006)),
+    radial-gradient(circle at top, color-mix(in srgb, var(--accent-primary) 5%, transparent), transparent 62%),
+    rgba(18, 19, 19, 0.97);
   box-shadow:
-    0 24px 54px rgba(0, 0, 0, 0.34),
+    0 20px 40px rgba(0, 0, 0, 0.3),
     inset 0 1px 0 rgba(255, 255, 255, 0.03);
   backdrop-filter: blur(14px);
+}
+
+.floating-todo-panel::-webkit-scrollbar {
+  width: 12px;
+}
+
+.floating-todo-panel::-webkit-scrollbar-track {
+  margin: 8px 2px 8px 0;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.floating-todo-panel::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: padding-box
+    color-mix(in srgb, var(--accent-primary) 16%, rgba(255, 255, 255, 0.14));
+}
+
+.floating-todo-panel::-webkit-scrollbar-thumb:hover {
+  background: padding-box
+    color-mix(in srgb, var(--accent-primary) 24%, rgba(255, 255, 255, 0.18));
 }
 
 .floating-todo-panel-header {
@@ -2643,15 +2672,15 @@
   justify-content: space-between;
   gap: 12px;
   padding: 14px 16px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 78%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-primary) 8%, var(--border-subtle));
 }
 
 .floating-todo-panel-header h2 {
   margin: 0;
-  color: #8fbe9f;
+  color: color-mix(in srgb, var(--accent-primary) 34%, white);
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: lowercase;
 }
 
@@ -2684,12 +2713,23 @@
   height: 8px;
   margin-top: 6px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 72%, white 28%);
+  background: color-mix(in srgb, var(--accent-primary) 54%, white 18%);
   flex: 0 0 auto;
 }
 
+.floating-todo-item-marker.is-spinner {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border: 1.5px solid rgba(255, 255, 255, 0.14);
+  border-top-color: color-mix(in srgb, var(--accent-primary) 52%, white 10%);
+  border-right-color: color-mix(in srgb, var(--accent-primary) 32%, rgba(255, 255, 255, 0.1));
+  background: transparent;
+  animation: floating-todo-spinner 0.9s linear infinite;
+}
+
 .floating-todo-item.status-in_progress .floating-todo-item-marker {
-  background: color-mix(in srgb, #e6b35a 80%, white 20%);
+  background: transparent;
 }
 
 .floating-todo-item.status-completed .floating-todo-item-marker {
@@ -2700,6 +2740,16 @@
   color: var(--text-muted);
   text-decoration: line-through;
   text-decoration-thickness: 1.5px;
+}
+
+@keyframes floating-todo-spinner {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .header-diff-pill {
@@ -3260,35 +3310,9 @@
   flex-shrink: 0;
 }
 
-.run-controls {
-  display: flex;
-  gap: 4px;
-}
-
-.run-controls button {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition:
-    border-color 0.15s,
-    color 0.15s,
-    background 0.15s;
-}
-
-.run-controls button:hover {
-  border-color: var(--border-medium);
-  color: var(--text-secondary);
-  background: var(--surface-hover);
-}
-
 /* Send button */
 .send-button {
+  position: relative;
   display: grid;
   place-items: center;
   width: 32px;
@@ -3306,6 +3330,40 @@
     color 0.15s ease,
     opacity 0.15s ease,
     transform 0.12s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.send-button svg {
+  position: relative;
+  z-index: 1;
+}
+
+.send-button.streaming::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle, transparent 58%, rgba(12, 10, 8, 0.84) 61%),
+    conic-gradient(
+      from 0deg,
+      rgba(255, 214, 165, 0),
+      rgba(255, 214, 165, 0.18),
+      rgba(232, 98, 26, 0.52),
+      rgba(255, 214, 165, 0.12),
+      rgba(255, 214, 165, 0)
+    );
+  opacity: 0.74;
+  pointer-events: none;
+  animation: send-button-stream-ring 1.9s linear infinite;
+}
+
+.send-button.streaming::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background: inherit;
+  pointer-events: none;
 }
 
 .send-button:hover:not(:disabled) {
@@ -3340,6 +3398,18 @@
 .send-button:disabled {
   cursor: not-allowed;
   opacity: 0.22;
+}
+
+@keyframes send-button-stream-ring {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .send-button.streaming::before {
+    animation: none;
+  }
 }
 
 /* ── Diff preview and sidebar ────────────────────────────── */

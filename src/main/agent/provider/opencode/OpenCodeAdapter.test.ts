@@ -38,7 +38,7 @@ vi.mock('./opencodeRuntime', () => ({
   toOpenCodeQuestionAnswers: vi.fn()
 }))
 
-import { OpenCodeAdapter, todoItemsFromOpenCodeToolPart } from './OpenCodeAdapter'
+import { OpenCodeAdapter, todoItemsFromOpenCodeToolPart, toolLifecycleTitle } from './OpenCodeAdapter'
 
 describe('OpenCodeAdapter.generateThreadTitle', () => {
   beforeEach(() => {
@@ -125,5 +125,51 @@ describe('todoItemsFromOpenCodeToolPart', () => {
       { id: 'todo-2', text: 'Render composer pill', status: 'in_progress' },
       { id: 'todo-3', text: 'Add tests', status: 'pending' }
     ])
+  })
+
+  it('prefers completed output state over stale input snapshots', () => {
+    expect(
+      todoItemsFromOpenCodeToolPart({
+        id: 'part-1',
+        callID: 'call-1',
+        messageID: 'message-1',
+        tool: 'TodoWrite',
+        metadata: {},
+        state: {
+          status: 'completed',
+          title: 'TodoWrite',
+          input: {
+            todos: [{ id: 'todo-1', content: 'Add persistence model', status: 'pending' }]
+          },
+          output: JSON.stringify({
+            todos: [{ id: 'todo-1', content: 'Add persistence model', status: 'completed' }]
+          }),
+          metadata: {}
+        }
+      } as never)
+    ).toEqual([{ id: 'todo-1', text: 'Add persistence model', status: 'completed' }])
+  })
+})
+
+describe('toolLifecycleTitle', () => {
+  it('renders todowrite as Editing todos instead of the raw tool title', () => {
+    expect(
+      toolLifecycleTitle({
+        id: 'part-1',
+        callID: 'call-1',
+        messageID: 'message-1',
+        type: 'tool',
+        tool: 'TodoWrite',
+        metadata: {},
+        state: {
+          status: 'running',
+          title: 'Edited todowrite',
+          input: {
+            todos: [{ id: 'todo-1', content: 'Wire persistence', status: 'in_progress' }]
+          },
+          metadata: {}
+        }
+      } as never)
+    ).toBe('Editing todos')
   })
 })

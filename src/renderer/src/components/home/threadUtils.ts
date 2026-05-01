@@ -485,8 +485,12 @@ export function findLatestTodoList(
 
 export function visibleTodoListsForThread(thread: OrchestrationThread | null): OrchestrationTodoList[] {
   if (!thread) return []
+  const activeTurnId =
+    thread.session?.activeTurnId ??
+    (thread.latestTurn?.status === 'running' ? thread.latestTurn.id : null)
+  if (!activeTurnId) return []
   const todoLists = thread.todoLists ?? []
-  const latestTodoList = findLatestTodoList(todoLists, thread.latestTurn?.id ?? null)
+  const latestTodoList = findLatestTodoList(todoLists, activeTurnId)
   if (!latestTodoList) return []
   return todoLists.filter((todoList) => todoList.turnId === latestTodoList.turnId)
 }

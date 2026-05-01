@@ -35,6 +35,12 @@ export function applyOrchestrationEvent(
         todoLists: upsertById(thread.todoLists ?? [], event.todoList),
         updatedAt: event.createdAt
       }
+    case 'thread.todo-lists-cleared':
+      return {
+        ...thread,
+        todoLists: (thread.todoLists ?? []).filter((todoList) => todoList.turnId !== event.turnId),
+        updatedAt: event.createdAt
+      }
     case 'thread.latest-turn-set':
       return { ...thread, latestTurn: event.latestTurn, updatedAt: event.createdAt }
     case 'thread.turn-diff-completed':

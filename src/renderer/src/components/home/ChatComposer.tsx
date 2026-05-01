@@ -15,7 +15,6 @@ import {
   Check,
   ChevronDown,
   Map as MapIcon,
-  RotateCcw,
   Search,
   Square,
   Zap
@@ -739,6 +738,7 @@ export function ProviderModelPicker({
 
 export const ChatComposer = memo(function ChatComposer({
   enabled,
+  isBusy,
   isRunning,
   interactionMode,
   runtimeMode,
@@ -753,10 +753,10 @@ export const ChatComposer = memo(function ChatComposer({
   onModelChange,
   onEffortChange,
   onSubmitPrompt,
-  onInterrupt,
-  onStop
+  onInterrupt
 }: {
   enabled: boolean
+  isBusy: boolean
   isRunning: boolean
   interactionMode: InteractionMode
   runtimeMode: RuntimeMode
@@ -772,7 +772,6 @@ export const ChatComposer = memo(function ChatComposer({
   onEffortChange: (effort: ReasoningEffort) => void
   onSubmitPrompt: (input: string) => Promise<boolean>
   onInterrupt: () => void
-  onStop: () => void
 }): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -812,13 +811,19 @@ export const ChatComposer = memo(function ChatComposer({
     async (event: FormEvent<HTMLFormElement>): Promise<void> => {
       event.preventDefault()
       const input = prompt.trim()
-      if (!input || isRunning) return
+      if (!input || isBusy) return
       setPrompt('')
       const accepted = await onSubmitPrompt(input)
       if (!accepted) setPrompt(input)
     },
-    [isRunning, onSubmitPrompt, prompt]
+    [isBusy, onSubmitPrompt, prompt]
   )
+
+  const handlePrimaryAction = useCallback((): void => {
+    if (isRunning) {
+      onInterrupt()
+    }
+  }, [isRunning, onInterrupt])
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -893,23 +898,20 @@ export const ChatComposer = memo(function ChatComposer({
           title={effortTitle}
         />
         <div className="composer-footer-trail">
-          {isRunning ? (
-            <div className="run-controls">
-              <button type="button" onClick={onInterrupt} title="Interrupt">
-                <RotateCcw size={10} strokeWidth={2} />
-              </button>
-              <button type="button" onClick={onStop} title="Stop">
-                <Square size={10} strokeWidth={2} />
-              </button>
-            </div>
-          ) : null}
           <button
-            type="submit"
-            className="send-button"
-            disabled={!enabled || !prompt.trim() || isRunning}
-            title="Send (↵)"
+            type={isRunning ? 'button' : 'submit'}
+            className={`send-button${isRunning ? ' streaming' : ''}`}
+            disabled={!enabled || (!isRunning && (isBusy || !prompt.trim()))}
+            title={isRunning ? 'Stop' : 'Send (↵)'}
+            aria-label={isRunning ? 'Stop' : 'Send'}
+            aria-busy={isRunning}
+            onClick={handlePrimaryAction}
           >
-            <ArrowUp size={14} strokeWidth={3} />
+            {isRunning ? (
+              <Square size={12} strokeWidth={2.4} fill="currentColor" aria-hidden="true" />
+            ) : (
+              <ArrowUp size={14} strokeWidth={3} aria-hidden="true" />
+            )}
           </button>
         </div>
       </div>

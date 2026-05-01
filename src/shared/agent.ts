@@ -422,6 +422,13 @@ export type OrchestrationEvent =
     })
   | (OrchestrationEventMeta & {
       sequence: number
+      type: 'thread.todo-lists-cleared'
+      threadId: string
+      turnId: string
+      createdAt: string
+    })
+  | (OrchestrationEventMeta & {
+      sequence: number
       type: 'thread.latest-turn-set'
       threadId: string
       latestTurn: OrchestrationLatestTurn | null

@@ -158,5 +158,30 @@ describe('ProjectionPipeline', () => {
         items: [expect.objectContaining({ text: 'Persist checklist data', status: 'completed' })]
       })
     ])
+
+    const clearedAt = now()
+    const clearSeq = eventStore.append({
+      eventId: 'todo-list-clear-1',
+      aggregateKind: 'thread',
+      streamId: 'thread-todo',
+      streamVersion: 3,
+      eventType: 'thread.todo-lists-cleared',
+      occurredAt: clearedAt,
+      actorKind: 'system',
+      payload: { turnId: 'turn-1' }
+    })
+    projections.apply({
+      sequence: clearSeq,
+      eventId: 'todo-list-clear-1',
+      aggregateKind: 'thread',
+      streamId: 'thread-todo',
+      streamVersion: 3,
+      eventType: 'thread.todo-lists-cleared',
+      occurredAt: clearedAt,
+      actorKind: 'system',
+      payload: { turnId: 'turn-1' }
+    })
+
+    expect(snapshots.getThreadDetail('thread-todo')?.todoLists).toEqual([])
   })
 })

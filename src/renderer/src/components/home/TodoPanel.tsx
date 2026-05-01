@@ -93,7 +93,10 @@ export function FloatingTodoPanel({
       <ul className="floating-todo-items">
         {items.map((item) => (
           <li key={item.key} className={`floating-todo-item status-${item.status}`}>
-            <span className="floating-todo-item-marker" aria-hidden="true" />
+            <span
+              className={`floating-todo-item-marker${item.status === 'in_progress' ? ' is-spinner' : ''}`}
+              aria-hidden="true"
+            />
             <span className="floating-todo-item-text">{item.text}</span>
           </li>
         ))}
