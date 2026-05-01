@@ -102,4 +102,61 @@ describe('ProjectionPipeline', () => {
     expect(detail?.session?.model).toBe('gpt-5.4')
     expect(detail?.session?.effort).toBe('high')
   })
+
+  it('persists and reloads thread todo lists', () => {
+    const n = now()
+    const ts = eventStore.append({ eventId: 'todo-thread', aggregateKind: 'thread', streamId: 'thread-todo', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-todo', projectId: 'proj-1', title: 'Todo test' } })
+    projections.apply({ sequence: ts, eventId: 'todo-thread', aggregateKind: 'thread', streamId: 'thread-todo', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-todo', projectId: 'proj-1', title: 'Todo test' } })
+
+    const ls = eventStore.append({
+      eventId: 'todo-list-1',
+      aggregateKind: 'thread',
+      streamId: 'thread-todo',
+      streamVersion: 2,
+      eventType: 'thread.todo-list-upserted',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: {
+        todoList: {
+          id: 'todo:thread-todo:turn:turn-1:todo',
+          turnId: 'turn-1',
+          source: 'todo',
+          title: 'Todos',
+          items: [{ id: 'todo-1', text: 'Persist checklist data', status: 'completed', order: 0 }],
+          createdAt: n,
+          updatedAt: n
+        }
+      }
+    })
+    projections.apply({
+      sequence: ls,
+      eventId: 'todo-list-1',
+      aggregateKind: 'thread',
+      streamId: 'thread-todo',
+      streamVersion: 2,
+      eventType: 'thread.todo-list-upserted',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: {
+        todoList: {
+          id: 'todo:thread-todo:turn:turn-1:todo',
+          turnId: 'turn-1',
+          source: 'todo',
+          title: 'Todos',
+          items: [{ id: 'todo-1', text: 'Persist checklist data', status: 'completed', order: 0 }],
+          createdAt: n,
+          updatedAt: n
+        }
+      }
+    })
+
+    const detail = snapshots.getThreadDetail('thread-todo')
+    expect(detail?.todoLists).toEqual([
+      expect.objectContaining({
+        source: 'todo',
+        title: 'Todos',
+        items: [expect.objectContaining({ text: 'Persist checklist data', status: 'completed' })]
+      })
+    ])
+  })
 })

@@ -213,4 +213,48 @@ describe('mapProviderEvent', () => {
       })
     )
   })
+
+  it('maps turn/plan/updated notifications into normalized checklist updates', () => {
+    expect(
+      mapProviderEvent({
+        ...baseEvent,
+        id: 'event-plan-updated',
+        method: 'turn/plan/updated',
+        turnId: 'turn-plan-1',
+        payload: {
+          turnId: 'turn-plan-1',
+          explanation: 'Working through the rollout.',
+          plan: [
+            { step: 'Add the shared data model', status: 'completed' },
+            { step: 'Render the checklist UI', status: 'inProgress' },
+            { step: 'Verify persistence and tests', status: 'pending' }
+          ]
+        }
+      })
+    ).toEqual(
+      expect.objectContaining({
+        type: 'todo.updated',
+        turnId: 'turn-plan-1',
+        payload: {
+          source: 'plan',
+          title: 'Plan',
+          explanation: 'Working through the rollout.',
+          items: [
+            {
+              text: 'Add the shared data model',
+              status: 'completed'
+            },
+            {
+              text: 'Render the checklist UI',
+              status: 'in_progress'
+            },
+            {
+              text: 'Verify persistence and tests',
+              status: 'pending'
+            }
+          ]
+        }
+      })
+    )
+  })
 })

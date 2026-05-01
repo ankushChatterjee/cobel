@@ -38,6 +38,7 @@ export function createTestThread(
     messages: [],
     activities: [],
     proposedPlans: [],
+    todoLists: [],
     session: null,
     latestTurn: null,
     checkpoints: [],

@@ -2,6 +2,8 @@ import type {
   CanonicalItemType,
   OrchestrationMessage,
   OrchestrationProposedPlan,
+  OrchestrationTodo,
+  OrchestrationTodoList,
   ReasoningEffort,
   OrchestrationThreadActivity,
   ProviderRuntimeEvent,
@@ -146,6 +148,10 @@ export class ProviderRuntimeIngestion {
 
       case 'content.delta':
         this.ingestContentDelta(event)
+        return
+
+      case 'todo.updated':
+        this.ingestTodoUpdate(event)
         return
 
       case 'item.started':
@@ -447,6 +453,25 @@ export class ProviderRuntimeIngestion {
     )
     if (!text) return
     this.finalizePlan(event, text)
+  }
+
+  private ingestTodoUpdate(
+    event: Extract<ProviderRuntimeEvent, { type: 'todo.updated' }>
+  ): void {
+    const turnId = event.turnId ?? event.eventId
+    const items = normalizeTodoItems(event.payload.items)
+    if (items.length === 0) return
+    const todoList: OrchestrationTodoList = {
+      id: todoListId(event.threadId, turnId, event.payload.source, event.itemId),
+      turnId,
+      source: event.payload.source,
+      title: event.payload.title,
+      explanation: event.payload.explanation,
+      items,
+      createdAt: event.createdAt,
+      updatedAt: event.createdAt
+    }
+    this.engine.upsertTodoList(todoList, event.threadId)
   }
 
   private ingestAssistantItem(
@@ -959,6 +984,34 @@ function assistantSegmentMessageId(baseKey: string, segmentIndex: number): strin
   return segmentIndex === 0
     ? `assistant:${baseKey}`
     : `assistant:${baseKey}:segment:${segmentIndex}`
+}
+
+function todoListId(
+  threadId: string,
+  turnId: string,
+  source: OrchestrationTodoList['source'],
+  itemId?: string
+): string {
+  return itemId
+    ? `todo:${threadId}:turn:${turnId}:${source}:${itemId}`
+    : `todo:${threadId}:turn:${turnId}:${source}`
+}
+
+function normalizeTodoItems(
+  items: Array<{ id?: string; text: string; status: 'pending' | 'in_progress' | 'completed' }>
+): OrchestrationTodo[] {
+  return items
+    .map((item, index) => {
+      const text = item.text.trim()
+      if (!text) return null
+      return {
+        id: item.id?.trim() || `todo-item:${index}:${text.toLowerCase()}`,
+        text,
+        status: item.status,
+        order: index
+      }
+    })
+    .filter((item): item is OrchestrationTodo => item !== null)
 }
 
 function mapSessionStatus(

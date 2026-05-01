@@ -323,6 +323,116 @@ function fileReadPreviewFromOpenCodeReadTool(part: Extract<Part, { type: 'tool' 
   return { path: path || '(file)', content, resourceType, truncated }
 }
 
+export function todoItemsFromOpenCodeToolPart(
+  part: Extract<Part, { type: 'tool' }>
+): Array<{
+  id?: string
+  text: string
+  status: 'pending' | 'in_progress' | 'completed'
+}> {
+  if (part.tool.toLowerCase() !== 'todowrite') return []
+
+  const sources: unknown[] = []
+  if ('input' in part.state) sources.push(part.state.input)
+  if ('metadata' in part.state) sources.push(part.state.metadata)
+  sources.push(part.metadata)
+  if ('output' in part.state && typeof part.state.output === 'string') {
+    const parsed = tryParseJson(part.state.output)
+    if (parsed !== null) sources.push(parsed)
+  }
+
+  for (const source of sources) {
+    const items = readTodoItems(source)
+    if (items.length > 0) return items
+  }
+  return []
+}
+
+function readTodoItems(
+  value: unknown
+): Array<{
+  id?: string
+  text: string
+  status: 'pending' | 'in_progress' | 'completed'
+}> {
+  const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : null
+  if (!record) return []
+  const candidates = [
+    record.todos,
+    record.items,
+    record.steps,
+    record.tasks,
+    record.plan
+  ]
+  for (const candidate of candidates) {
+    const items = readTodoItemsArray(candidate)
+    if (items.length > 0) return items
+  }
+  return []
+}
+
+function readTodoItemsArray(
+  value: unknown
+): Array<{
+  id?: string
+  text: string
+  status: 'pending' | 'in_progress' | 'completed'
+}> {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null
+      const record = entry as Record<string, unknown>
+      const textCandidate = [
+        record.content,
+        record.text,
+        record.step,
+        record.task,
+        record.title
+      ].find((candidate) => typeof candidate === 'string' && candidate.trim().length > 0)
+      if (typeof textCandidate !== 'string') return null
+      return {
+        id: typeof record.id === 'string' ? record.id : undefined,
+        text: textCandidate.trim(),
+        status: normalizeOpenCodeTodoStatus(record.status)
+      }
+    })
+    .filter(
+      (
+        item
+      ): item is {
+        id?: string
+        text: string
+        status: 'pending' | 'in_progress' | 'completed'
+      } => item !== null
+    )
+}
+
+function normalizeOpenCodeTodoStatus(value: unknown): 'pending' | 'in_progress' | 'completed' {
+  if (typeof value !== 'string') return 'pending'
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'completed' || normalized === 'done' || normalized === 'success')
+    return 'completed'
+  if (
+    normalized === 'in_progress' ||
+    normalized === 'inprogress' ||
+    normalized === 'active' ||
+    normalized === 'running' ||
+    normalized === 'current'
+  ) {
+    return 'in_progress'
+  }
+  return 'pending'
+}
+
+function tryParseJson(text: string): unknown | null {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
 function toolLifecycleTitle(part: Extract<Part, { type: 'tool' }>): string {
   const st = part.state
   const toolLower = part.tool.toLowerCase()
@@ -972,6 +1082,24 @@ export class OpenCodeAdapter implements ProviderAdapter {
           await this.emitAssistantTextDelta(context, part, partTurnId, event)
         }
         if (part.type === 'tool') {
+          const todoItems = todoItemsFromOpenCodeToolPart(part)
+          if (todoItems.length > 0) {
+            this.emit({
+              ...buildEventBase({
+                threadId: context.session.threadId,
+                turnId: partTurnId,
+                itemId: part.callID,
+                createdAt: toolStateCreatedAt(part),
+                raw: event
+              }),
+              type: 'todo.updated',
+              payload: {
+                source: 'todo',
+                title: 'Todos',
+                items: todoItems
+              }
+            })
+          }
           const itemType = toToolLifecycleItemType(part.tool)
           const title = toolLifecycleTitle(part)
           const fileReadPreview = fileReadPreviewFromOpenCodeReadTool(part)

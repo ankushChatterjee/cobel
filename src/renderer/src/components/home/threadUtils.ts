@@ -3,6 +3,7 @@ import type {
   OrchestrationEvent,
   OrchestrationMessage,
   OrchestrationProposedPlan,
+  OrchestrationTodoList,
   OrchestrationShellSnapshot,
   ProviderId,
   ThreadShellSummary,
@@ -60,6 +61,7 @@ export function createEmptyThread(
     messages: [],
     activities: [],
     proposedPlans: [],
+    todoLists: [],
     session: null,
     latestTurn: null,
     checkpoints: [],
@@ -250,6 +252,7 @@ export function buildCheckpointByAssistantMessageId(
 
 /** Transcript, assistant output, or terminal session state — visible progress beyond an empty run. */
 export function threadHasTranscriptVisibleProgress(thread: OrchestrationThread): boolean {
+  const todoLists = thread.todoLists ?? []
   const sessionStatus = thread.session?.status
   if (sessionStatus === 'ready' || sessionStatus === 'stopped' || sessionStatus === 'interrupted') {
     return true
@@ -264,6 +267,9 @@ export function threadHasTranscriptVisibleProgress(thread: OrchestrationThread):
     return true
   }
   if (thread.proposedPlans.length > 0) {
+    return true
+  }
+  if (todoLists.some((todoList) => todoList.items.length > 0)) {
     return true
   }
   return false
@@ -318,7 +324,9 @@ export function isOrchestrationModelTurnInProgress(thread: OrchestrationThread |
  * snapshot and hide the thinking row before the model responds.
  */
 export function snapshotMergeClearsPendingTurnStart(thread: OrchestrationThread): boolean {
+  const todoLists = thread.todoLists ?? []
   if (thread.proposedPlans.length > 0) return true
+  if (todoLists.some((todoList) => todoList.items.length > 0)) return true
   if (
     thread.session?.status === 'stopped' ||
     thread.session?.status === 'interrupted' ||
@@ -383,6 +391,7 @@ export function eventClearsPendingTurnWait(event: OrchestrationEvent): boolean {
     case 'thread.activity-upserted':
       return !isHiddenActivity(event.activity)
     case 'thread.proposed-plan-upserted':
+    case 'thread.todo-list-upserted':
       return true
     case 'thread.latest-turn-set':
       return event.latestTurn !== null && event.latestTurn.status !== 'running'
@@ -460,6 +469,40 @@ export function derivePlanTitle(markdown: string): string {
   const heading = lines.find((line) => /^#{1,6}\s+/u.test(line))
   const title = heading ? heading.replace(/^#{1,6}\s+/u, '') : lines[0]
   return title?.trim() || 'Plan'
+}
+
+export function findLatestTodoList(
+  todoLists: OrchestrationTodoList[],
+  latestTurnId: string | null
+): OrchestrationTodoList | null {
+  if (todoLists.length === 0) return null
+  const byTurn =
+    (latestTurnId
+      ? [...todoLists].reverse().find((todoList) => todoList.turnId === latestTurnId)
+      : undefined) ?? null
+  return byTurn ?? todoLists[todoLists.length - 1] ?? null
+}
+
+export function visibleTodoListsForThread(thread: OrchestrationThread | null): OrchestrationTodoList[] {
+  if (!thread) return []
+  const todoLists = thread.todoLists ?? []
+  const latestTodoList = findLatestTodoList(todoLists, thread.latestTurn?.id ?? null)
+  if (!latestTodoList) return []
+  return todoLists.filter((todoList) => todoList.turnId === latestTodoList.turnId)
+}
+
+export function todoProgressForLists(
+  todoLists: OrchestrationTodoList[]
+): { completed: number; total: number } {
+  let completed = 0
+  let total = 0
+  for (const todoList of todoLists) {
+    for (const item of todoList.items) {
+      total += 1
+      if (item.status === 'completed') completed += 1
+    }
+  }
+  return { completed, total }
 }
 
 export function buildPlanImplementationPrompt(planMarkdown: string): string {

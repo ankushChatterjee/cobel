@@ -85,6 +85,9 @@ export class ProjectionPipeline {
       case 'thread.proposed-plan-upserted':
         this.applyProposedPlanUpserted(e)
         break
+      case 'thread.todo-list-upserted':
+        this.applyTodoListUpserted(e)
+        break
       case 'thread.latest-turn-set':
         this.applyLatestTurnSet(e)
         break
@@ -315,6 +318,40 @@ export class ProjectionPipeline {
       })
   }
 
+  private applyTodoListUpserted(e: KnownEvent): void {
+    const todoList = asRecord(e.payload['todoList'])
+    const todoListId = str(todoList['id'])
+    if (!todoListId) return
+    this.db
+      .prepare(
+        `
+        INSERT INTO projection_thread_todo_lists(todo_list_id, thread_id, turn_id, source, title, explanation, items_json, created_at, updated_at)
+        VALUES(@todo_list_id, @thread_id, @turn_id, @source, @title, @explanation, @items_json, @created_at, @updated_at)
+        ON CONFLICT(todo_list_id) DO UPDATE SET
+          turn_id = @turn_id,
+          source = @source,
+          title = @title,
+          explanation = @explanation,
+          items_json = @items_json,
+          updated_at = @updated_at
+      `
+      )
+      .run({
+        todo_list_id: todoListId,
+        thread_id: e.streamId,
+        turn_id: str(todoList['turnId']) ?? '',
+        source: str(todoList['source']) ?? 'todo',
+        title: str(todoList['title']) ?? null,
+        explanation: str(todoList['explanation']) ?? null,
+        items_json: JSON.stringify(Array.isArray(todoList['items']) ? todoList['items'] : []),
+        created_at: str(todoList['createdAt']) ?? e.occurredAt,
+        updated_at: str(todoList['updatedAt']) ?? e.occurredAt
+      })
+    this.db
+      .prepare(`UPDATE projection_threads SET updated_at = ? WHERE thread_id = ?`)
+      .run(e.occurredAt, e.streamId)
+  }
+
   private applyLatestTurnSet(e: KnownEvent): void {
     const latestTurn = e.payload['latestTurn']
     if (!latestTurn || typeof latestTurn !== 'object') {
@@ -421,6 +458,11 @@ export class ProjectionPipeline {
     this.db
       .prepare(
         `DELETE FROM projection_thread_activities WHERE thread_id = ? AND turn_id IS NOT NULL ${notInClause}`
+      )
+      .run(...args)
+    this.db
+      .prepare(
+        `DELETE FROM projection_thread_todo_lists WHERE thread_id = ? AND turn_id IS NOT NULL ${notInClause}`
       )
       .run(...args)
     this.db

@@ -219,7 +219,7 @@ export function mapProviderEvent(event: ProviderEvent): ProviderRuntimeEvent | n
     case 'item/reasoning/summaryTextDelta':
       return contentDelta(base, 'reasoning_summary_text', event)
     case 'turn/plan/updated':
-      return null
+      return planUpdatedEvent(base, event)
     case 'item/plan/delta':
       return contentDelta(base, 'plan_text', event)
     case 'item/commandExecution/outputDelta':
@@ -305,6 +305,43 @@ function contentDelta(
         readString(event.payload, 'textDelta') ??
         readString(event.payload, 'text') ??
         ''
+    }
+  }
+}
+
+function planUpdatedEvent(base: RuntimeEventBase, event: ProviderEvent): ProviderRuntimeEvent | null {
+  const payload = readRecord(event.payload)
+  const rawPlan = payload['plan']
+  if (!Array.isArray(rawPlan)) return null
+  const items = rawPlan
+    .map((entry) => {
+      const record = readRecord(entry)
+      const text = readString(record, 'step')?.trim()
+      if (!text) return null
+      return {
+        id: readString(record, 'id'),
+        text,
+        status: readTodoStatus(readString(record, 'status'))
+      }
+    })
+    .filter(
+      (
+        item
+      ): item is {
+        id?: string
+        text: string
+        status: 'pending' | 'in_progress' | 'completed'
+      } => item !== null
+    )
+  if (items.length === 0) return null
+  return {
+    ...base,
+    type: 'todo.updated',
+    payload: {
+      source: 'plan',
+      title: 'Plan',
+      explanation: readString(payload, 'explanation'),
+      items
     }
   }
 }
@@ -557,6 +594,15 @@ function readItemStatus(
     return 'completed'
   if (status === 'interrupted') return 'failed'
   return 'inProgress'
+}
+
+function readTodoStatus(
+  status: string | undefined
+): 'pending' | 'in_progress' | 'completed' {
+  if (status === 'completed') return 'completed'
+  if (status === 'inProgress' || status === 'in_progress' || status === 'running')
+    return 'in_progress'
+  return 'pending'
 }
 
 function readCompletionState(value: unknown): 'completed' | 'failed' | 'cancelled' | 'interrupted' {

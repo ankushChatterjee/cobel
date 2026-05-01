@@ -197,6 +197,25 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     sql: `
       ALTER TABLE projection_thread_sessions ADD COLUMN model TEXT;
     `
+  },
+  {
+    name: '007_thread_todo_lists',
+    sql: `
+      CREATE TABLE IF NOT EXISTS projection_thread_todo_lists (
+        todo_list_id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        title TEXT,
+        explanation TEXT,
+        items_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_projection_thread_todo_lists_thread_id
+        ON projection_thread_todo_lists(thread_id, updated_at);
+    `
   }
 ]
 

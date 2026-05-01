@@ -8,6 +8,7 @@ import type {
   OrchestrationMessage,
   OrchestrationCheckpointSummary,
   OrchestrationProposedPlan,
+  OrchestrationTodoList,
   OrchestrationSession,
   OrchestrationShellEvent,
   OrchestrationThread,
@@ -83,6 +84,7 @@ export class OrchestrationEngine {
       messages: [],
       activities: [],
       proposedPlans: [],
+      todoLists: [],
       session: null,
       latestTurn: null,
       checkpoints: [],
@@ -116,6 +118,7 @@ export class OrchestrationEngine {
       messages: [],
       activities: [],
       proposedPlans: [],
+      todoLists: [],
       session: null,
       latestTurn: null,
       checkpoints: [],
@@ -279,6 +282,17 @@ export class OrchestrationEngine {
     })
   }
 
+  upsertTodoList(todoList: OrchestrationTodoList, threadId: string): void {
+    this.ensureThread({ threadId })
+    this.apply({
+      sequence: this.nextSequence(),
+      type: 'thread.todo-list-upserted',
+      threadId,
+      todoList,
+      createdAt: todoList.updatedAt
+    })
+  }
+
   setLatestTurn(threadId: string, latestTurn: OrchestrationLatestTurn | null): void {
     this.ensureThread({ threadId })
     this.apply({
@@ -338,6 +352,7 @@ export class OrchestrationEngine {
       messages: [],
       activities: [],
       proposedPlans: [],
+      todoLists: [],
       session: null,
       latestTurn: null,
       checkpoints: [],

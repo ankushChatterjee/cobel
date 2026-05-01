@@ -41,6 +41,7 @@ import { ChatComposer } from '../components/home/ChatComposer'
 import { NoProjectSplash } from '../components/home/NoProjectSplash'
 import { CommitMessageDialog, RevertWarningDialog } from '../components/home/Dialogs'
 import { ProjectSidebar } from '../components/home/ProjectSidebar'
+import { FloatingTodoPanel, FloatingTodoPill } from '../components/home/TodoPanel'
 import { ThreadSidebar, PlanSidebarPanel } from '../components/home/ThreadSidebar'
 import { TranscriptList } from '../components/home/transcript'
 import { SessionErrorBanner } from '../components/home/transcript'
@@ -83,6 +84,7 @@ import {
   shouldShowTranscriptEndThinkingRow,
   snapshotMergeClearsPendingTurnStart,
   threadsForProject,
+  visibleTodoListsForThread,
   upsertById,
   upsertOptimisticUserMessage
 } from '../components/home/threadUtils'
@@ -146,6 +148,7 @@ export function HomePage(): React.JSX.Element {
   const [submittingApprovals, setSubmittingApprovals] = useState<
     Map<string, ApprovalDecision>
   >(() => new Map())
+  const [todoPanelOpen, setTodoPanelOpen] = useState(false)
 
   const activeProject = useMemo(
     () => shell.projects.find((p) => p.id === selection.activeProjectId) ?? null,
@@ -221,6 +224,7 @@ export function HomePage(): React.JSX.Element {
     () => `${workspaceDiffVersion}:${thread?.updatedAt ?? 'no-thread'}`,
     [thread?.updatedAt, workspaceDiffVersion]
   )
+  const visibleTodoLists = useMemo(() => visibleTodoListsForThread(thread), [thread])
 
   useEffect(() => {
     threadRef.current = thread
@@ -347,6 +351,16 @@ export function HomePage(): React.JSX.Element {
     const pref = threadComposerPreferences[activeThreadId]?.provider
     setSelectedProvider(pref === 'opencode' ? 'opencode' : 'codex')
   }, [activeThreadId, providerLocked, lockedProviderId, threadComposerPreferences])
+
+  useEffect(() => {
+    if (providerLocked) return
+    if (models.length > 0) return
+    const fallbackProvider =
+      allCatalogModels.find((candidate) => candidate.providerId === 'codex')?.providerId ??
+      allCatalogModels[0]?.providerId
+    if (!fallbackProvider || fallbackProvider === selectedProvider) return
+    setSelectedProvider(fallbackProvider)
+  }, [allCatalogModels, models.length, providerLocked, selectedProvider])
 
   useEffect(() => {
     if (!activeThreadId) return
@@ -631,6 +645,10 @@ export function HomePage(): React.JSX.Element {
     })
     return () => window.cancelAnimationFrame(frame)
   }, [activeThreadId, scrollConversationToBottomIfStuck])
+
+  useEffect(() => {
+    setTodoPanelOpen(false)
+  }, [activeThreadId])
 
   const sendPrompt = useCallback(
     async (input: string): Promise<boolean> => {
@@ -1277,6 +1295,14 @@ export function HomePage(): React.JSX.Element {
           {activeProject ? (
             <div className="composer-wrap">
               <div className="composer-stack">
+                <div className="composer-floating-ui">
+                  <FloatingTodoPanel todoLists={visibleTodoLists} open={todoPanelOpen} />
+                  <FloatingTodoPill
+                    todoLists={visibleTodoLists}
+                    open={todoPanelOpen}
+                    onToggle={() => setTodoPanelOpen((current) => !current)}
+                  />
+                </div>
                 <ChatComposer
                   key={composerResetToken}
                   enabled={Boolean(activeProject)}

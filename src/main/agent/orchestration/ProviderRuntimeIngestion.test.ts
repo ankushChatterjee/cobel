@@ -1478,6 +1478,39 @@ describe('ProviderRuntimeIngestion', () => {
     )
     expect(thread.activities.some((activity) => activity.id.includes('agent-1'))).toBe(false)
   })
+
+  it('stores normalized todo updates as thread todo lists', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(
+      event({
+        type: 'todo.updated',
+        turnId: 'turn-1',
+        payload: {
+          source: 'todo',
+          title: 'Todos',
+          items: [
+            { id: 'todo-1', text: 'Wire persistence', status: 'completed' },
+            { id: 'todo-2', text: 'Render the pill', status: 'in_progress' }
+          ]
+        }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').todoLists).toEqual([
+      expect.objectContaining({
+        turnId: 'turn-1',
+        source: 'todo',
+        title: 'Todos',
+        items: [
+          expect.objectContaining({ id: 'todo-1', text: 'Wire persistence', status: 'completed' }),
+          expect.objectContaining({ id: 'todo-2', text: 'Render the pill', status: 'in_progress' })
+        ]
+      })
+    ])
+  })
 })
 
 function event<T extends ProviderRuntimeEvent['type']>(

@@ -147,6 +147,19 @@ export type ProviderRuntimeEvent =
       }
     })
   | (RuntimeEventBase & {
+      type: 'todo.updated'
+      payload: {
+        source: 'plan' | 'todo'
+        title?: string
+        explanation?: string
+        items: Array<{
+          id?: string
+          text: string
+          status: 'pending' | 'in_progress' | 'completed'
+        }>
+      }
+    })
+  | (RuntimeEventBase & {
       type: 'item.started' | 'item.updated' | 'item.completed'
       payload: {
         itemType: CanonicalItemType
@@ -235,6 +248,24 @@ export interface OrchestrationProposedPlan {
   turnId: string
   text: string
   status: 'streaming' | 'proposed' | 'accepted' | 'declined'
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OrchestrationTodo {
+  id: string
+  text: string
+  status: 'pending' | 'in_progress' | 'completed'
+  order: number
+}
+
+export interface OrchestrationTodoList {
+  id: string
+  turnId: string
+  source: 'plan' | 'todo'
+  title?: string
+  explanation?: string
+  items: OrchestrationTodo[]
   createdAt: string
   updatedAt: string
 }
@@ -330,6 +361,7 @@ export interface OrchestrationThread {
   messages: OrchestrationMessage[]
   activities: OrchestrationThreadActivity[]
   proposedPlans: OrchestrationProposedPlan[]
+  todoLists: OrchestrationTodoList[]
   session: OrchestrationSession | null
   latestTurn: OrchestrationLatestTurn | null
   checkpoints: OrchestrationCheckpointSummary[]
@@ -379,6 +411,13 @@ export type OrchestrationEvent =
       type: 'thread.proposed-plan-upserted'
       threadId: string
       proposedPlan: OrchestrationProposedPlan
+      createdAt: string
+    })
+  | (OrchestrationEventMeta & {
+      sequence: number
+      type: 'thread.todo-list-upserted'
+      threadId: string
+      todoList: OrchestrationTodoList
       createdAt: string
     })
   | (OrchestrationEventMeta & {

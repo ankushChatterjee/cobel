@@ -106,6 +106,69 @@ describe('renderer app', () => {
     )
   })
 
+  it('renders the floating todo pill and panel for the latest thread checklist', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            todoLists: [
+              {
+                id: 'todo:turn-1:plan',
+                turnId: 'turn-1',
+                source: 'plan',
+                title: 'Plan',
+                items: [
+                  { id: 'todo-1', text: 'Add persistence', status: 'completed', order: 0 },
+                  { id: 'todo-2', text: 'Render panel', status: 'in_progress', order: 1 }
+                ],
+                createdAt: '2026-04-19T00:00:00.000Z',
+                updatedAt: '2026-04-19T00:00:00.000Z'
+              },
+              {
+                id: 'todo:turn-1:todo',
+                turnId: 'turn-1',
+                source: 'todo',
+                title: 'Todos',
+                items: [{ id: 'todo-3', text: 'Add tests', status: 'pending', order: 0 }],
+                createdAt: '2026-04-19T00:00:00.000Z',
+                updatedAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            latestTurn: {
+              id: 'turn-1',
+              status: 'completed',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: '2026-04-19T00:00:02.000Z'
+            }
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    const pill = await screen.findByRole('button', { name: /open todo list/i })
+    expect(pill).toHaveTextContent('1')
+    expect(pill).toHaveTextContent('3')
+
+    await user.click(pill)
+
+    expect(await screen.findByRole('region', { name: /todo list/i })).toBeInTheDocument()
+    expect(screen.getByText('Add persistence')).toBeInTheDocument()
+    expect(screen.getByText('Render panel')).toBeInTheDocument()
+    expect(screen.getByText('Add tests')).toBeInTheDocument()
+  })
+
   it('dispatches a turn command from the composer', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
@@ -577,6 +640,39 @@ describe('renderer app', () => {
       expect(modelSelect.value).toBe('gpt-5.4')
       expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
     })
+  })
+
+  it('keeps the model search input focused while filtering results', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.listModelCatalog = vi.fn(async (): Promise<ModelCatalog> => ({
+      providers: [
+        { id: 'codex', name: 'Codex', status: 'available', detail: 'ok' },
+        { id: 'opencode', name: 'OpenCode', status: 'missing', detail: '' }
+      ],
+      modelsByProvider: {
+        codex: [
+          { id: 'gpt-5.4-mini', providerId: 'codex', isDefault: true },
+          { id: 'gpt-5.4', providerId: 'codex' },
+          { id: 'gpt-5.3-codex', providerId: 'codex' }
+        ],
+        opencode: []
+      }
+    }))
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    fireEvent.keyDown(window, { key: 'm', metaKey: true, shiftKey: true })
+
+    const searchInput = await screen.findByRole('searchbox', { name: /search models/i })
+    await user.type(searchInput, '5.3')
+
+    expect(searchInput).toHaveFocus()
+    expect(searchInput).toHaveValue('5.3')
+    expect(screen.getByRole('option', { name: /gpt 5\.3 codex/i })).toBeInTheDocument()
   })
 
   it('keeps live events that arrive before the initial snapshot resolves', async () => {

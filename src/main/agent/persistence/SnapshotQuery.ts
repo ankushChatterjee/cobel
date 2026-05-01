@@ -4,6 +4,7 @@ import type {
   OrchestrationThread,
   OrchestrationThreadActivity,
   OrchestrationProposedPlan,
+  OrchestrationTodoList,
   OrchestrationSession,
   OrchestrationLatestTurn,
   OrchestrationCheckpointSummary,
@@ -43,6 +44,18 @@ interface PlanRow {
   turn_id: string
   text: string
   status: string
+  created_at: string
+  updated_at: string
+}
+
+interface TodoListRow {
+  todo_list_id: string
+  thread_id: string
+  turn_id: string
+  source: string
+  title: string | null
+  explanation: string | null
+  items_json: string
   created_at: string
   updated_at: string
 }
@@ -162,6 +175,14 @@ export class SnapshotQuery {
         .all(threadId) as PlanRow[]
     ).map(planRowToPlan)
 
+    const todoLists = (
+      this.db
+        .prepare(
+          `SELECT * FROM projection_thread_todo_lists WHERE thread_id = ? ORDER BY updated_at ASC, created_at ASC`
+        )
+        .all(threadId) as TodoListRow[]
+    ).map(todoListRowToTodoList)
+
     const sessionRow = this.db
       .prepare(`SELECT * FROM projection_thread_sessions WHERE thread_id = ?`)
       .get(threadId) as SessionRow | undefined
@@ -192,6 +213,7 @@ export class SnapshotQuery {
       messages,
       activities,
       proposedPlans,
+      todoLists,
       session,
       latestTurn,
       checkpoints,
@@ -262,6 +284,19 @@ function planRowToPlan(row: PlanRow): OrchestrationProposedPlan {
     turnId: row.turn_id,
     text: row.text,
     status: row.status as OrchestrationProposedPlan['status'],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }
+}
+
+function todoListRowToTodoList(row: TodoListRow): OrchestrationTodoList {
+  return {
+    id: row.todo_list_id,
+    turnId: row.turn_id,
+    source: row.source as OrchestrationTodoList['source'],
+    title: row.title ?? undefined,
+    explanation: row.explanation ?? undefined,
+    items: row.items_json ? tryParse(row.items_json) : [],
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }

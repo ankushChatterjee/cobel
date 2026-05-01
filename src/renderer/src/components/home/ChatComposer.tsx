@@ -362,6 +362,29 @@ function providerSummaryName(summaries: ProviderSummary[], id: ProviderId): stri
   return summaries.find((s) => s.id === id)?.name ?? (id === 'opencode' ? 'OpenCode' : 'Codex')
 }
 
+function buildProviderModelBrowseList({
+  catalogModels,
+  browseProviderId,
+  selectedProviderId,
+  search
+}: {
+  catalogModels: ModelInfo[]
+  browseProviderId: ProviderId
+  selectedProviderId: ProviderId
+  search: string
+}): ModelInfo[] {
+  const filtered = searchFilterModels(
+    filterModelsForProvider(catalogModels, browseProviderId),
+    search
+  )
+  if (filtered.length > 0 || search.trim().length > 0) return filtered
+
+  const selectedProviderModels = filterModelsForProvider(catalogModels, selectedProviderId)
+  if (selectedProviderModels.length > 0) return selectedProviderModels
+
+  return catalogModels
+}
+
 export function ProviderModelPicker({
   disabled,
   catalogModels,
@@ -422,8 +445,14 @@ export function ProviderModelPicker({
   const effectiveBrowseId = providerLocked ? selectedProviderId : browseProviderId
 
   const baseList = useMemo(
-    () => searchFilterModels(filterModelsForProvider(catalogModels, effectiveBrowseId), search),
-    [catalogModels, effectiveBrowseId, search]
+    () =>
+      buildProviderModelBrowseList({
+        catalogModels,
+        browseProviderId: effectiveBrowseId,
+        selectedProviderId,
+        search
+      }),
+    [catalogModels, effectiveBrowseId, search, selectedProviderId]
   )
 
   useEffect(() => {
@@ -436,10 +465,12 @@ export function ProviderModelPicker({
     if (isOpen && !wasOpenRef.current) {
       setBrowseProviderId(selectedProviderId)
       setSearch('')
-      const list = searchFilterModels(
-        filterModelsForProvider(catalogModels, selectedProviderId),
-        ''
-      )
+      const list = buildProviderModelBrowseList({
+        catalogModels,
+        browseProviderId: selectedProviderId,
+        selectedProviderId,
+        search: ''
+      })
       queueMicrotask(() => {
         if (list.length === 0) {
           searchInputRef.current?.focus()
@@ -516,7 +547,10 @@ export function ProviderModelPicker({
   const showTabs = !providerLocked && tabProviders.length > 1
 
   const nativeOptions = useMemo(
-    () => filterModelsForProvider(catalogModels, selectedProviderId),
+    () => {
+      const scoped = filterModelsForProvider(catalogModels, selectedProviderId)
+      return scoped.length > 0 ? scoped : catalogModels
+    },
     [catalogModels, selectedProviderId]
   )
 

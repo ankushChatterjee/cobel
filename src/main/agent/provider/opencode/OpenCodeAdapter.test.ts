@@ -38,7 +38,7 @@ vi.mock('./opencodeRuntime', () => ({
   toOpenCodeQuestionAnswers: vi.fn()
 }))
 
-import { OpenCodeAdapter } from './OpenCodeAdapter'
+import { OpenCodeAdapter, todoItemsFromOpenCodeToolPart } from './OpenCodeAdapter'
 
 describe('OpenCodeAdapter.generateThreadTitle', () => {
   beforeEach(() => {
@@ -95,5 +95,35 @@ describe('OpenCodeAdapter.generateThreadTitle', () => {
 
     expect(title).toBe('Sidebar Layout')
     expect(promptMock.mock.calls[0]?.[0]).toHaveProperty('format')
+  })
+})
+
+describe('todoItemsFromOpenCodeToolPart', () => {
+  it('normalizes TodoWrite tool state into checklist items', () => {
+    expect(
+      todoItemsFromOpenCodeToolPart({
+        id: 'part-1',
+        callID: 'call-1',
+        messageID: 'message-1',
+        tool: 'TodoWrite',
+        metadata: {},
+        state: {
+          status: 'running',
+          title: 'TodoWrite',
+          input: {
+            todos: [
+              { id: 'todo-1', content: 'Add persistence model', status: 'completed' },
+              { id: 'todo-2', content: 'Render composer pill', status: 'in_progress' },
+              { id: 'todo-3', content: 'Add tests', status: 'pending' }
+            ]
+          },
+          metadata: {}
+        }
+      } as never)
+    ).toEqual([
+      { id: 'todo-1', text: 'Add persistence model', status: 'completed' },
+      { id: 'todo-2', text: 'Render composer pill', status: 'in_progress' },
+      { id: 'todo-3', text: 'Add tests', status: 'pending' }
+    ])
   })
 })

@@ -29,6 +29,12 @@ export function applyOrchestrationEvent(
         proposedPlans: upsertById(thread.proposedPlans, event.proposedPlan),
         updatedAt: event.createdAt
       }
+    case 'thread.todo-list-upserted':
+      return {
+        ...thread,
+        todoLists: upsertById(thread.todoLists ?? [], event.todoList),
+        updatedAt: event.createdAt
+      }
     case 'thread.latest-turn-set':
       return { ...thread, latestTurn: event.latestTurn, updatedAt: event.createdAt }
     case 'thread.turn-diff-completed':
@@ -52,6 +58,9 @@ export function applyOrchestrationEvent(
         ),
         proposedPlans: thread.proposedPlans.filter((plan) =>
           retainedTurnIds(thread.checkpoints, event.turnCount).has(plan.turnId)
+        ),
+        todoLists: (thread.todoLists ?? []).filter((todoList) =>
+          retainedTurnIds(thread.checkpoints, event.turnCount).has(todoList.turnId)
         ),
         checkpoints: thread.checkpoints.filter(
           (checkpoint) => checkpoint.checkpointTurnCount <= event.turnCount
