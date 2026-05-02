@@ -852,6 +852,39 @@
   justify-content: flex-end;
 }
 
+.message-user-bubble {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  background: var(--surface-active);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  padding: 8px 14px 10px;
+  text-align: left;
+}
+
+.message-user-attachments {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 5px;
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.message-user-attachment-dot {
+  width: 9px;
+  height: 9px;
+  border: 1px dashed rgba(255, 255, 255, 0.32);
+  border-radius: 999px;
+}
+
 .message.assistant .message-meta {
   gap: 4px;
 }
@@ -890,15 +923,7 @@
 }
 
 .message.user p {
-  display: inline-block;
-  box-sizing: border-box;
-  min-width: 0;
-  max-width: 100%;
-  background: var(--surface-active);
-  border: 1px solid var(--border-medium);
-  border-radius: var(--radius-md);
-  padding: 10px 14px;
-  text-align: left;
+  width: 100%;
 }
 
 /* ── Revert warning ───────────────────────────────────────── */
@@ -2812,6 +2837,11 @@
   box-shadow: 0 4px 28px rgba(0, 0, 0, 0.55);
 }
 
+.composer.is-drag-over {
+  border-color: rgba(255, 255, 255, 0.34);
+  background: color-mix(in srgb, var(--surface-active) 88%, white 12%);
+}
+
 .composer textarea {
   width: 100%;
   min-height: 48px;
@@ -2829,6 +2859,86 @@
 
 .composer textarea::placeholder {
   color: var(--text-muted);
+}
+
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 0 14px 8px;
+}
+
+.composer-attachment {
+  display: inline-grid;
+  grid-template-columns: 14px minmax(0, 1fr) 18px;
+  align-items: center;
+  max-width: min(180px, 100%);
+  height: 28px;
+  gap: 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 0 5px 0 8px;
+  color: var(--text-primary);
+}
+
+.composer-attachment-dot {
+  width: 14px;
+  height: 14px;
+  border: 1px dashed rgba(255, 255, 255, 0.44);
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.18) 0 2px, transparent 2.5px);
+}
+
+.composer-attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.composer-attachment-remove,
+.composer-attach-button {
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease,
+    opacity 0.14s ease;
+}
+
+.composer-attachment-remove {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+}
+
+.composer-attachment-remove:hover,
+.composer-attachment-remove:focus-visible,
+.composer-attach-button:hover:not(:disabled),
+.composer-attach-button:focus-visible:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.composer-attach-button {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+}
+
+.composer-attach-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .composer-footer {

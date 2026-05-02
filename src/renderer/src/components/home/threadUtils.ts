@@ -308,6 +308,15 @@ function threadHasStreamingPlanForActiveTurn(thread: OrchestrationThread | null)
   )
 }
 
+function threadHasCompletedAssistantAfterCurrentWork(thread: OrchestrationThread | null): boolean {
+  if (!thread) return false
+  const lastAssistant = [...thread.messages].reverse().find((message) => message.role === 'assistant')
+  if (!lastAssistant || lastAssistant.streaming) return false
+  const activeTurnId = currentInFlightTurnId(thread)
+  if (!activeTurnId) return true
+  return lastAssistant.turnId === activeTurnId
+}
+
 function latestTurnStatusIsTerminalForActiveTurn(thread: OrchestrationThread): boolean {
   const activeTurnId = thread.session?.activeTurnId
   const latestTurn = thread.latestTurn
@@ -395,6 +404,9 @@ export function shouldShowTranscriptEndThinkingRow(
       return false
     }
     if (threadHasInFlightWorkIndicator(thread)) {
+      return false
+    }
+    if (!input.isPendingTurnStart && threadHasCompletedAssistantAfterCurrentWork(thread)) {
       return false
     }
   }

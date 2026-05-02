@@ -10,6 +10,7 @@ import {
   useState
 } from 'react'
 import type {
+  ImageChatAttachment,
   InteractionMode,
   ModelCatalog,
   ModelInfo,
@@ -685,8 +686,8 @@ export function HomePage(): React.JSX.Element {
   }, [todoPanelOpen])
 
   const sendPrompt = useCallback(
-    async (input: string): Promise<boolean> => {
-      if (!input || isBusy) return false
+    async (input: string, attachments: ImageChatAttachment[] = []): Promise<boolean> => {
+      if ((!input && attachments.length === 0) || isBusy) return false
       if (!activeProject || !activeThreadId) {
         setError('Open a project before starting a Codex chat.')
         return false
@@ -701,6 +702,7 @@ export function HomePage(): React.JSX.Element {
         id: `user:${commandId}`,
         role: 'user',
         text: input,
+        attachments: attachments.length > 0 ? attachments : undefined,
         turnId: null,
         streaming: false,
         sequence: lastSequenceRef.current + 0.5,
@@ -737,6 +739,7 @@ export function HomePage(): React.JSX.Element {
           runtimeMode,
           interactionMode,
           targetPlanId,
+          attachments: attachments.length > 0 ? attachments : undefined,
           createdAt
         })
       } catch (commandError) {

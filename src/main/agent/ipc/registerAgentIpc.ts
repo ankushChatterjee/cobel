@@ -6,8 +6,16 @@ import {
   type WebContents,
   type WebFrameMain
 } from 'electron'
-import { basename } from 'node:path'
-import type { RespondToApprovalInput, RespondToUserInputInput } from '../../../shared/agent'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, extname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { randomUUID } from 'node:crypto'
+import type {
+  ImageChatAttachment,
+  RespondToApprovalInput,
+  RespondToUserInputInput
+} from '../../../shared/agent'
 import type { AgentBackend } from '../AgentBackend'
 import { traceCommandEvent } from '../debug/commandEventTrace'
 import { AGENT_CHANNELS } from './channels'
@@ -83,6 +91,54 @@ export function registerAgentIpc(backend: AgentBackend): void {
     })
     const path = result.filePaths[0]
     return result.canceled || !path ? null : { path, name: basename(path) }
+  })
+
+  ipcMain.handle(AGENT_CHANNELS.openAttachmentFiles, async (event) => {
+    validateSender(event)
+    const result = await dialog.showOpenDialog({
+      title: 'Attach images',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        {
+          name: 'Images',
+          extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif']
+        }
+      ]
+    })
+    if (result.canceled) return []
+    return result.filePaths.map((path) => ({
+      type: 'image' as const,
+      url: pathToFileURL(path).href,
+      name: basename(path)
+    }))
+  })
+
+  ipcMain.handle(AGENT_CHANNELS.importAttachmentFiles, async (event, input: unknown) => {
+    validateSender(event)
+    if (!Array.isArray(input)) throw new Error('attachment files are required.')
+    const dir = join(tmpdir(), 'gencode-attachments')
+    await mkdir(dir, { recursive: true })
+    const attachments: ImageChatAttachment[] = []
+    for (const item of input) {
+      if (!item || typeof item !== 'object') continue
+      const record = item as { name?: unknown; mimeType?: unknown; data?: unknown }
+      if (typeof record.mimeType !== 'string' || !record.mimeType.startsWith('image/')) continue
+      if (!(record.data instanceof ArrayBuffer)) continue
+      const rawName =
+        typeof record.name === 'string' && record.name.trim().length > 0
+          ? basename(record.name)
+          : 'image'
+      const extension = extname(rawName) || extensionForMimeType(record.mimeType)
+      const fileName = `${Date.now().toString(36)}-${randomUUID()}${extension}`
+      const path = join(dir, fileName)
+      await writeFile(path, Buffer.from(record.data))
+      attachments.push({
+        type: 'image' as const,
+        url: pathToFileURL(path).href,
+        name: rawName
+      })
+    }
+    return attachments
   })
 
   ipcMain.handle(AGENT_CHANNELS.revealPath, async (event, input: { path?: unknown }) => {
@@ -241,6 +297,8 @@ export function removeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_CHANNELS.getCheckpointWorktreeDiff)
   ipcMain.removeHandler(AGENT_CHANNELS.getWorkspaceDiff)
   ipcMain.removeHandler(AGENT_CHANNELS.openWorkspaceFolder)
+  ipcMain.removeHandler(AGENT_CHANNELS.openAttachmentFiles)
+  ipcMain.removeHandler(AGENT_CHANNELS.importAttachmentFiles)
   ipcMain.removeHandler(AGENT_CHANNELS.revealPath)
   ipcMain.removeHandler(AGENT_CHANNELS.appendDebugTrace)
   ipcMain.removeHandler(AGENT_CHANNELS.subscribeThread)
@@ -279,6 +337,25 @@ function trackWebContentsSubscription(webContents: WebContents, subscriptionId: 
     for (const id of subscriptionIds) disposeSubscription(id)
     subscriptionIds.clear()
   })
+}
+
+function extensionForMimeType(mimeType: string): string {
+  switch (mimeType.toLowerCase()) {
+    case 'image/jpeg':
+      return '.jpg'
+    case 'image/png':
+      return '.png'
+    case 'image/gif':
+      return '.gif'
+    case 'image/webp':
+      return '.webp'
+    case 'image/heic':
+      return '.heic'
+    case 'image/heif':
+      return '.heif'
+    default:
+      return '.img'
+  }
 }
 
 function assertThreadInput(

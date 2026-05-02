@@ -24,6 +24,10 @@ function combinedReasoningText(activities: OrchestrationThreadActivity[]): strin
   return parts.join('\n\n')
 }
 
+function attachmentCountLabel(count: number): string {
+  return count === 1 ? '1 attachment' : `${count} attachments`
+}
+
 export const ThinkingRow = memo(function ThinkingRow({
   activities,
   activeTurnId,
@@ -141,6 +145,7 @@ export const MessageRow = memo(function MessageRow({
   onRevert: (turnCount: number) => Promise<void>
 }): React.JSX.Element {
   const isAssistant = message.role === 'assistant'
+  const userAttachmentCount = !isAssistant ? (message.attachments?.length ?? 0) : 0
   return (
     <article className={`message ${message.role} ${message.streaming ? 'streaming' : ''}`}>
       <div className="message-meta">
@@ -177,7 +182,15 @@ export const MessageRow = memo(function MessageRow({
           ) : null}
         </>
       ) : (
-        <p>{message.text}</p>
+        <div className="message-user-bubble">
+          {userAttachmentCount > 0 ? (
+            <div className="message-user-attachments" aria-label={attachmentCountLabel(userAttachmentCount)}>
+              <span className="message-user-attachment-dot" aria-hidden="true" />
+              <span>{attachmentCountLabel(userAttachmentCount)}</span>
+            </div>
+          ) : null}
+          <p>{message.text}</p>
+        </div>
       )}
     </article>
   )

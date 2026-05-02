@@ -16,6 +16,8 @@ export const AGENT_CHANNELS = {
   getCheckpointWorktreeDiff: 'agent:get-checkpoint-worktree-diff',
   getWorkspaceDiff: 'agent:get-workspace-diff',
   openWorkspaceFolder: 'agent:open-workspace-folder',
+  openAttachmentFiles: 'agent:open-attachment-files',
+  importAttachmentFiles: 'agent:import-attachment-files',
   revealPath: 'agent:reveal-path',
   appendDebugTrace: 'agent:append-debug-trace',
   threadEvent: (subscriptionId: string) => `agent:thread-event:${subscriptionId}`,

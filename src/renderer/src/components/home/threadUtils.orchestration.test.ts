@@ -266,6 +266,46 @@ describe('shouldShowTranscriptEndThinkingRow', () => {
     expect(show).toBe(false)
   })
 
+  it('hides the tail when a completed assistant answer arrived but latestTurn is stale running', () => {
+    const thread = {
+      ...createEmptyThread('th', t0),
+      session: {
+        threadId: 'th',
+        status: 'ready' as const,
+        providerName: 'codex' as const,
+        runtimeMode: 'auto-accept-edits' as const,
+        interactionMode: 'default' as const,
+        activeTurnId: null,
+        activePlanId: null,
+        lastError: null,
+        updatedAt: t0
+      },
+      latestTurn: {
+        id: 'turn-1',
+        status: 'running' as const,
+        startedAt: t0,
+        completedAt: null
+      },
+      messages: [
+        {
+          id: 'assistant:turn-1',
+          role: 'assistant' as const,
+          text: 'done',
+          turnId: 'turn-1',
+          streaming: false,
+          sequence: 1,
+          createdAt: t0,
+          updatedAt: t0
+        }
+      ]
+    }
+    const show = shouldShowTranscriptEndThinkingRow(thread, {
+      isPendingTurnStart: false,
+      hasActiveThinkingActivity: false
+    })
+    expect(show).toBe(false)
+  })
+
   it('hides the fallback tail when the active turn already has a streaming plan', () => {
     const thread = {
       ...createEmptyThread('th', t0),

@@ -49,6 +49,51 @@ function assistantMessage(sequence: number): TranscriptItem {
   }
 }
 
+function userMessageWithAttachments(sequence: number, count: number): TranscriptItem {
+  return {
+    id: 'message:user:1',
+    kind: 'message',
+    sequence,
+    createdAt: t0,
+    workDurationMs: null,
+    message: {
+      id: 'user:1',
+      role: 'user',
+      text: 'What is in these images?',
+      turnId: null,
+      streaming: false,
+      sequence,
+      createdAt: t0,
+      updatedAt: t0,
+      attachments: Array.from({ length: count }, (_, index) => ({
+        type: 'image' as const,
+        url: `file:///tmp/image-${index}.png`,
+        name: `image-${index}.png`
+      }))
+    }
+  }
+}
+
+function thinkingItem(id: string, sequence: number, turnId: string | null = null): ActivityTranscriptItem {
+  return {
+    id: `activity:${id}`,
+    kind: 'activity',
+    sequence,
+    createdAt: t0,
+    activity: {
+      id,
+      kind: 'task.started',
+      tone: 'thinking',
+      summary: 'Exploring',
+      payload: { status: 'inProgress' },
+      turnId,
+      resolved: false,
+      sequence,
+      createdAt: t0
+    }
+  }
+}
+
 function renderTranscript(items: TranscriptItem[], turnInProgress: boolean): void {
   render(
     <TranscriptList
@@ -83,5 +128,20 @@ describe('TranscriptList tool groups', () => {
     renderTranscript([toolItem('tool:1', 1), toolItem('tool:2', 2), assistantMessage(3)], true)
 
     expect(screen.getByRole('button', { expanded: false })).toBeInTheDocument()
+  })
+
+  it('does not keep stale thinking rows active after the turn is no longer running', () => {
+    renderTranscript([assistantMessage(1), thinkingItem('thinking:stale', 2)], false)
+
+    expect(screen.queryByLabelText('Thinking')).not.toBeInTheDocument()
+    expect(screen.queryByText('thinking…')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Thought')).toBeInTheDocument()
+  })
+
+  it('shows the attachment count on sent user messages', () => {
+    renderTranscript([userMessageWithAttachments(1, 2)], false)
+
+    expect(screen.getByLabelText('2 attachments')).toBeInTheDocument()
+    expect(screen.getByText('2 attachments')).toBeInTheDocument()
   })
 })

@@ -22,6 +22,8 @@ const agentApi: AgentApi = {
     ipcRenderer.invoke(AGENT_CHANNELS.getCheckpointWorktreeDiff, input),
   getWorkspaceDiff: (input) => ipcRenderer.invoke(AGENT_CHANNELS.getWorkspaceDiff, input),
   openWorkspaceFolder: () => ipcRenderer.invoke(AGENT_CHANNELS.openWorkspaceFolder),
+  openAttachmentFiles: () => ipcRenderer.invoke(AGENT_CHANNELS.openAttachmentFiles),
+  importAttachmentFiles: (input) => ipcRenderer.invoke(AGENT_CHANNELS.importAttachmentFiles, input),
   revealPath: (input) => ipcRenderer.invoke(AGENT_CHANNELS.revealPath, input),
   appendDebugTrace: (input) => ipcRenderer.invoke(AGENT_CHANNELS.appendDebugTrace, input),
   getShellSnapshot: (): Promise<OrchestrationShellSnapshot> =>

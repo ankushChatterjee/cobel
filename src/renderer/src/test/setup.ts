@@ -238,6 +238,8 @@ const agentApiMock: AgentApi = {
     path: '/Users/ankush/codespace/gencode',
     name: 'gencode'
   })),
+  openAttachmentFiles: vi.fn(async () => []),
+  importAttachmentFiles: vi.fn(async () => []),
   revealPath: vi.fn(async () => {}),
   appendDebugTrace: vi.fn(async () => {})
 }

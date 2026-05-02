@@ -204,6 +204,13 @@ export type ProviderRuntimeEvent =
 export interface ImageChatAttachment {
   type: 'image'
   url: string
+  name?: string
+}
+
+export interface ImportAttachmentFileInput {
+  name: string
+  mimeType: string
+  data: ArrayBuffer
 }
 
 export interface PlanChatAttachment {
@@ -700,6 +707,8 @@ export interface AgentApi {
   ): Promise<CheckpointWorktreeDiffResult>
   getWorkspaceDiff(input: WorkspaceDiffRequest): Promise<WorkspaceDiffResult>
   openWorkspaceFolder(): Promise<OpenWorkspaceFolderResult | null>
+  openAttachmentFiles(): Promise<ImageChatAttachment[]>
+  importAttachmentFiles(input: ImportAttachmentFileInput[]): Promise<ImageChatAttachment[]>
   revealPath(input: { path: string }): Promise<void>
   appendDebugTrace(input: { stage: string; payload: Record<string, unknown> }): Promise<void>
 }

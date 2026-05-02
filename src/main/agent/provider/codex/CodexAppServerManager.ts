@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { execFile } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import type {
   InteractionMode,
@@ -260,8 +261,10 @@ export class CodexAppServerManager {
     const turnInput = [
       { type: 'text', text: input.input, text_elements: [] },
       ...(input.attachments ?? [])
-        .filter((attachment): attachment is { type: 'image'; url: string } => attachment.type === 'image')
-        .map((attachment) => ({ type: 'image', url: attachment.url }))
+        .filter(
+          (attachment): attachment is { type: 'image'; url: string } => attachment.type === 'image'
+        )
+        .map((attachment) => toCodexImageInput(attachment))
     ]
     const result = await this.sendRequest<TurnStartResponse>(context, 'turn/start', {
       threadId: providerThreadId,
@@ -1213,6 +1216,18 @@ function normalizeCodexAnswers(
     } else normalized[key] = { answers: [String(value)] }
   }
   return normalized
+}
+
+function toCodexImageInput(attachment: {
+  type: 'image'
+  url: string
+}): { type: 'image'; url: string } | { type: 'localImage'; path: string } {
+  if (!attachment.url.startsWith('file:')) return { type: 'image', url: attachment.url }
+  try {
+    return { type: 'localImage', path: fileURLToPath(attachment.url) }
+  } catch {
+    return { type: 'image', url: attachment.url }
+  }
 }
 
 function logCodexEvent(label: string, payload: unknown): void {

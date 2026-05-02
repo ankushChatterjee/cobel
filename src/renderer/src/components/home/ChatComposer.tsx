@@ -1,6 +1,8 @@
 import {
   FormEvent,
+  DragEvent,
   KeyboardEvent,
+  ClipboardEvent,
   memo,
   useCallback,
   useEffect,
@@ -15,11 +17,15 @@ import {
   Check,
   ChevronDown,
   Map as MapIcon,
+  Plus,
+  X,
   Search,
   Square,
   Zap
 } from 'lucide-react'
 import type {
+  ImageChatAttachment,
+  ImportAttachmentFileInput,
   InteractionMode,
   ModelInfo,
   ProviderId,
@@ -36,6 +42,15 @@ import {
   runtimeModes
 } from './modelUtils'
 import type { ComposerSelectOption } from './types'
+
+function filesFromDataTransfer(dataTransfer: DataTransfer): File[] {
+  const files = Array.from(dataTransfer.files).filter((file) => file.type.startsWith('image/'))
+  if (files.length > 0) return files
+  return Array.from(dataTransfer.items)
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null)
+}
 
 function isHeaderRow(option: ComposerSelectOption): boolean {
   return option.kind === 'header'
@@ -770,10 +785,12 @@ export const ChatComposer = memo(function ChatComposer({
   onRuntimeModeChange: (mode: RuntimeMode) => void
   onModelChange: (model: string) => void
   onEffortChange: (effort: ReasoningEffort) => void
-  onSubmitPrompt: (input: string) => Promise<boolean>
+  onSubmitPrompt: (input: string, attachments?: ImageChatAttachment[]) => Promise<boolean>
   onInterrupt: () => void
 }): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
+  const [attachments, setAttachments] = useState<ImageChatAttachment[]>([])
+  const [isDragOver, setIsDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const activeModel = useMemo(
     () => catalogModels.find((candidate) => candidate.id === model) ?? null,
@@ -811,13 +828,105 @@ export const ChatComposer = memo(function ChatComposer({
     async (event: FormEvent<HTMLFormElement>): Promise<void> => {
       event.preventDefault()
       const input = prompt.trim()
-      if (!input || isBusy) return
+      if ((!input && attachments.length === 0) || isBusy) return
       setPrompt('')
-      const accepted = await onSubmitPrompt(input)
-      if (!accepted) setPrompt(input)
+      setAttachments([])
+      const submittedAttachments = attachments
+      const accepted = await onSubmitPrompt(input, submittedAttachments)
+      if (!accepted) {
+        setPrompt(input)
+        setAttachments(submittedAttachments)
+      }
     },
-    [isBusy, onSubmitPrompt, prompt]
+    [attachments, isBusy, onSubmitPrompt, prompt]
   )
+
+  const addAttachments = useCallback((selected: ImageChatAttachment[]): void => {
+    if (selected.length === 0) return
+    setAttachments((current) => {
+      const seen = new Set(current.map((attachment) => attachment.url))
+      return [...current, ...selected.filter((attachment) => !seen.has(attachment.url))]
+    })
+  }, [])
+
+  const importImageFiles = useCallback(
+    async (files: File[]): Promise<void> => {
+      if (!enabled || isBusy || files.length === 0) return
+      const imageFiles = files.filter((file) => file.type.startsWith('image/'))
+      if (imageFiles.length === 0) return
+      const payload: ImportAttachmentFileInput[] = await Promise.all(
+        imageFiles.map(async (file) => ({
+          name: file.name,
+          mimeType: file.type,
+          data: await file.arrayBuffer()
+        }))
+      )
+      const imported = await window.agentApi.importAttachmentFiles(payload)
+      addAttachments(imported)
+    },
+    [addAttachments, enabled, isBusy]
+  )
+
+  const handleAttach = useCallback(async (): Promise<void> => {
+    if (!enabled || isBusy) return
+    const selected = await window.agentApi.openAttachmentFiles()
+    addAttachments(selected)
+  }, [addAttachments, enabled, isBusy])
+
+  const handlePaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+      const files = filesFromDataTransfer(event.clipboardData)
+      if (files.length === 0) return
+      event.preventDefault()
+      void importImageFiles(files)
+    },
+    [importImageFiles]
+  )
+
+  const handleDragOver = useCallback(
+    (event: DragEvent<HTMLFormElement>): void => {
+      if (!enabled || isBusy || filesFromDataTransfer(event.dataTransfer).length === 0) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'copy'
+      setIsDragOver(true)
+    },
+    [enabled, isBusy]
+  )
+
+  const handleDragLeave = useCallback((event: DragEvent<HTMLFormElement>): void => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+    setIsDragOver(false)
+  }, [])
+
+  const handleDrop = useCallback(
+    (event: DragEvent<HTMLFormElement>): void => {
+      const files = filesFromDataTransfer(event.dataTransfer)
+      if (files.length === 0) return
+      event.preventDefault()
+      setIsDragOver(false)
+      void importImageFiles(files)
+    },
+    [importImageFiles]
+  )
+
+  const removeAttachment = useCallback((url: string): void => {
+    setAttachments((current) => current.filter((attachment) => attachment.url !== url))
+  }, [])
+
+  const canSubmit = prompt.trim().length > 0 || attachments.length > 0
+  const providerAttachmentHint =
+    selectedProviderId === 'opencode'
+      ? 'Attach images as OpenCode file parts'
+      : 'Attach images for Codex'
+
+  const attachmentSummary =
+    attachments.length === 1 ? '1 image attached' : `${attachments.length} images attached`
+
+  const attachmentTitle = (attachment: ImageChatAttachment): string =>
+    attachment.name ? `Remove ${attachment.name}` : 'Remove image'
+
+  const attachmentLabel = (attachment: ImageChatAttachment): string =>
+    attachment.name ?? attachment.url.replace(/^file:\/\//u, '')
 
   const handlePrimaryAction = useCallback((): void => {
     if (isRunning) {
@@ -848,7 +957,13 @@ export const ChatComposer = memo(function ChatComposer({
   )
 
   return (
-    <form className="composer" onSubmit={handleSubmit}>
+    <form
+      className={`composer${isDragOver ? ' is-drag-over' : ''}`}
+      onSubmit={handleSubmit}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <label className="sr-only" htmlFor="agent-prompt">
         Ask Codex
       </label>
@@ -858,11 +973,41 @@ export const ChatComposer = memo(function ChatComposer({
         value={prompt}
         onChange={(event) => setPrompt(event.target.value)}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         placeholder={enabled ? 'Ask for changes' : 'Open a project to start chatting...'}
         rows={1}
         disabled={!enabled}
       />
+      {attachments.length > 0 ? (
+        <div className="composer-attachments" aria-label={attachmentSummary}>
+          {attachments.map((attachment) => (
+            <span className="composer-attachment" key={attachment.url}>
+              <span className="composer-attachment-dot" aria-hidden="true" />
+              <span className="composer-attachment-name">{attachmentLabel(attachment)}</span>
+              <button
+                type="button"
+                className="composer-attachment-remove"
+                onClick={() => removeAttachment(attachment.url)}
+                title={attachmentTitle(attachment)}
+                aria-label={attachmentTitle(attachment)}
+              >
+                <X size={12} strokeWidth={2.4} aria-hidden="true" />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div className="composer-footer">
+        <button
+          type="button"
+          className="composer-attach-button"
+          disabled={!enabled || isBusy}
+          onClick={() => void handleAttach()}
+          title={providerAttachmentHint}
+          aria-label={providerAttachmentHint}
+        >
+          <Plus size={15} strokeWidth={2.3} aria-hidden="true" />
+        </button>
         <InteractionModeToggle
           value={interactionMode}
           onChange={onInteractionModeChange}
@@ -901,7 +1046,7 @@ export const ChatComposer = memo(function ChatComposer({
           <button
             type={isRunning ? 'button' : 'submit'}
             className={`send-button${isRunning ? ' streaming' : ''}`}
-            disabled={!enabled || (!isRunning && (isBusy || !prompt.trim()))}
+            disabled={!enabled || (!isRunning && (isBusy || !canSubmit))}
             title={isRunning ? 'Stop' : 'Send (↵)'}
             aria-label={isRunning ? 'Stop' : 'Send'}
             aria-busy={isRunning}
