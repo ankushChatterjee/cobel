@@ -410,6 +410,7 @@ export function eventClearsPendingTurnWait(event: OrchestrationEvent): boolean {
     }
     case 'thread.snapshot.changed':
       return snapshotMergeClearsPendingTurnStart(event.thread)
+    case 'thread.todo-lists-cleared':
     case 'thread.turn-diff-completed':
     case 'thread.reverted':
       return true

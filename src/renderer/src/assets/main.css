@@ -3340,21 +3340,25 @@
 .send-button.streaming::before {
   content: '';
   position: absolute;
-  inset: -4px;
+  inset: -5px;
   border-radius: inherit;
   background:
-    radial-gradient(circle, transparent 58%, rgba(12, 10, 8, 0.84) 61%),
+    radial-gradient(circle, transparent 56%, rgba(12, 10, 8, 0.88) 60%),
     conic-gradient(
-      from 0deg,
+      from 10deg,
       rgba(255, 214, 165, 0),
-      rgba(255, 214, 165, 0.18),
-      rgba(232, 98, 26, 0.52),
-      rgba(255, 214, 165, 0.12),
+      rgba(255, 214, 165, 0.28),
+      rgba(255, 196, 136, 0.42),
+      rgba(232, 98, 26, 0.68),
+      rgba(255, 214, 165, 0.22),
       rgba(255, 214, 165, 0)
     );
-  opacity: 0.74;
+  box-shadow:
+    0 0 0 1px rgba(255, 232, 205, 0.07),
+    0 0 12px rgba(232, 98, 26, 0.12);
+  opacity: 0.9;
   pointer-events: none;
-  animation: send-button-stream-ring 1.9s linear infinite;
+  animation: send-button-stream-ring 1.7s linear infinite;
 }
 
 .send-button.streaming::after {
