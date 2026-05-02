@@ -2360,6 +2360,15 @@
 
 .embedded-tool-line {
   overflow: visible;
+  margin-block: 0;
+}
+
+.tool-group > .embedded-tool-line + .embedded-tool-line {
+  margin-top: 8px;
+}
+
+.tool-group-body + .embedded-tool-line {
+  margin-top: 8px;
 }
 
 .embedded-diff-card {
