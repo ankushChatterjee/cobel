@@ -2,9 +2,6 @@ import { memo, useMemo } from 'react'
 import type { OrchestrationCheckpointSummary, ProviderId } from '../../../../../shared/agent'
 import { groupTranscriptItems } from '../threadUtils'
 import type {
-  ApprovalDecision,
-  OnAnswer,
-  OnApprove,
   OnOpenDiff,
   OnOpenPlan,
   OnPreviewDiff,
@@ -23,12 +20,9 @@ export const TranscriptList = memo(function TranscriptList({
   latestTurnId,
   providerName,
   expandedToolIds,
-  submittingApprovals,
   checkpointByAssistantMessageId,
   onOpenPlan,
   onToggleTool,
-  onApprove,
-  onAnswer,
   onPreviewDiff,
   onOpenDiff,
   onRevert
@@ -40,12 +34,9 @@ export const TranscriptList = memo(function TranscriptList({
   latestTurnId: string | null
   providerName: ProviderId | null
   expandedToolIds: Set<string>
-  submittingApprovals: Map<string, ApprovalDecision>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
   onOpenPlan: OnOpenPlan
   onToggleTool: (activityId: string) => void
-  onApprove: OnApprove
-  onAnswer: OnAnswer
   onPreviewDiff: OnPreviewDiff
   onOpenDiff: OnOpenDiff
   onRevert: (turnCount: number) => Promise<void>
@@ -63,11 +54,8 @@ export const TranscriptList = memo(function TranscriptList({
               activeTurnId={activeTurnId}
               turnInProgress={turnInProgress}
               latestTurnId={latestTurnId}
-              submittingApprovals={submittingApprovals}
               checkpointByAssistantMessageId={checkpointByAssistantMessageId}
               onOpenPlan={onOpenPlan}
-              onApprove={onApprove}
-              onAnswer={onAnswer}
               onPreviewDiff={onPreviewDiff}
               onOpenDiff={onOpenDiff}
               onRevert={onRevert}

@@ -37,6 +37,29 @@ export interface ThreadSidebarState {
   hiddenPlanIds?: string[]
 }
 
+export interface PendingQuestionOption {
+  label: string
+  description?: string
+}
+
+export interface PendingQuestion {
+  id: string
+  header?: string
+  question: string
+  options: PendingQuestionOption[]
+}
+
+export interface PendingRequestViewModel {
+  activity: OrchestrationThreadActivity
+  kind: 'approval' | 'input'
+  requestType: string
+  requestLabel: string
+  requestTypeLabel: string
+  summary: string
+  fileChange: { diff: string; title: string } | null
+  questions: PendingQuestion[]
+}
+
 export type MessageTranscriptItem = {
   id: string
   kind: 'message'

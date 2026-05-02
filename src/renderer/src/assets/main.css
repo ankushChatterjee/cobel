@@ -2363,6 +2363,296 @@
   margin-block: 0;
 }
 
+/* ── Pending request dock ─────────────────────────────────── */
+
+.pending-request-dock {
+  pointer-events: all;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 850px;
+  max-height: min(50vh, 520px);
+  margin: 0 auto;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border-medium);
+  border-radius: 20px;
+  background: var(--surface-active);
+  box-shadow: 0 4px 28px rgba(0, 0, 0, 0.45);
+  animation: transcript-item-in 0.12s ease-out;
+}
+
+.pending-request-dock:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.14);
+  outline-offset: 2px;
+}
+
+.pending-request-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pending-request-header,
+.pending-request-summary {
+  margin: 0;
+}
+
+.pending-request-header {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pending-request-queue-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pending-request-dock h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.pending-request-summary {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pending-request-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0;
+  margin: 0;
+  scrollbar-gutter: stable;
+}
+
+.pending-request-option {
+  appearance: none;
+  -webkit-appearance: none;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--surface-panel);
+  box-shadow: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    transform 0.14s ease-out,
+    background 0.14s ease-out,
+    color 0.14s ease-out;
+}
+
+.pending-request-option:hover,
+.pending-request-option.is-active {
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-primary);
+}
+
+.pending-request-option:focus-visible {
+  outline: none;
+}
+
+.pending-request-option:active,
+.pending-request-approval-action:active,
+.pending-request-submit:active,
+.pending-request-dismiss:active {
+  transform: scale(0.98);
+}
+
+.pending-request-option-index {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pending-request-option-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pending-request-option-label {
+  color: currentColor;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.pending-request-option-description {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pending-request-diff-shell {
+  min-height: 0;
+  overflow: auto;
+}
+
+.pending-request-diff-shell .embedded-diff-card {
+  max-height: min(28vh, 320px);
+  overflow: auto;
+  border-color: var(--border-subtle);
+  background: var(--surface-panel);
+}
+
+.pending-request-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pending-request-dismiss,
+.pending-request-submit,
+.pending-request-approval-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 34px;
+  border: 1px solid var(--border-medium);
+  border-radius: 999px;
+  padding: 0 12px;
+  font-size: 11.5px;
+  font-weight: 500;
+  transition:
+    transform 0.14s ease-out,
+    border-color 0.14s ease-out,
+    background 0.14s ease-out,
+    color 0.14s ease-out;
+}
+
+.pending-request-dismiss {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.pending-request-dismiss:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.pending-request-submit,
+.pending-request-approval-action.is-primary {
+  border-color: rgba(255, 168, 90, 0.2);
+  background: rgba(232, 98, 26, 0.88);
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 215, 155, 0.18),
+    0 2px 10px rgba(232, 98, 26, 0.22);
+}
+
+.pending-request-submit:hover,
+.pending-request-approval-action.is-primary:hover {
+  border-color: rgba(255, 185, 110, 0.28);
+  background: rgba(240, 114, 50, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 225, 165, 0.22),
+    0 3px 14px rgba(232, 98, 26, 0.3);
+}
+
+.pending-request-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pending-request-approval-action {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.pending-request-approval-action:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.pending-request-approval-action.is-secondary:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.pending-request-approval-action.is-danger:hover {
+  border-color: #4a3535;
+  background: rgba(248, 113, 113, 0.06);
+  color: #d1b0b0;
+}
+
+.pending-request-submit:focus-visible,
+.pending-request-dismiss:focus-visible,
+.pending-request-approval-action:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.12);
+  outline-offset: 2px;
+}
+
+.pending-request-approval-action.is-focused:not(:focus-visible) {
+  border-color: var(--border-strong);
+}
+
+.pending-request-dismiss kbd,
+.pending-request-approval-action kbd {
+  padding: 2px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.pending-request-submit {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.pending-request-submit .button-spinner {
+  width: 12px;
+  height: 12px;
+  border-width: 1.75px;
+}
+
+.pending-request-submit svg {
+  flex: 0 0 auto;
+}
+
+.pending-request-submit:disabled,
+.pending-request-dismiss:disabled,
+.pending-request-approval-action:disabled,
+.pending-request-option:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .tool-group > .embedded-tool-line + .embedded-tool-line {
   margin-top: 8px;
 }
@@ -4546,6 +4836,31 @@ button.diff-toolbar-pill:focus-visible,
 
   .composer-wrap {
     padding: 32px 12px 14px;
+  }
+
+  .pending-request-dock {
+    max-height: min(58vh, 560px);
+    padding: 14px 14px 12px;
+    border-radius: 20px;
+  }
+
+  .pending-request-dock h2 {
+    font-size: 18px;
+  }
+
+  .pending-request-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pending-request-approval-actions {
+    justify-content: flex-start;
+  }
+
+  .pending-request-approval-action,
+  .pending-request-submit,
+  .pending-request-dismiss {
+    width: 100%;
   }
 
   .composer-footer {

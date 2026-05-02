@@ -1806,6 +1806,7 @@ describe('renderer app', () => {
     const { container } = render(<RouterProvider router={router} />)
     await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
 
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: /app\.ts/i })).toHaveAttribute(
       'aria-expanded',
       'true'
@@ -1819,6 +1820,7 @@ describe('renderer app', () => {
       expect.objectContaining({ requestId: 'approval-1', decision: 'accept' })
     )
     expect(approve).toBeDisabled()
+    expect(screen.getByRole('button', { name: /allow for session/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /decline/i })).toBeDisabled()
     expect(container.querySelector('.button-spinner')).toBeInTheDocument()
   })
@@ -1862,7 +1864,7 @@ describe('renderer app', () => {
     expect(container.querySelector('.activity-row.approval')).not.toBeInTheDocument()
   })
 
-  it('renders command approvals as a subtle single prompt', async () => {
+  it('renders command approvals in the docked prompt card', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     mockThreadSnapshotWithActivities([
@@ -1882,9 +1884,246 @@ describe('renderer app', () => {
     const { container } = render(<RouterProvider router={router} />)
     await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
 
-    expect(await screen.findByText('bun test')).toBeInTheDocument()
-    expect(container.querySelector('.approval-prompt')).toBeInTheDocument()
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('bun test')).toBeInTheDocument()
+    expect(screen.getAllByText(/command approval/i).length).toBeGreaterThan(0)
+    expect(container.querySelector('.pending-request-dock')).toBeInTheDocument()
     expect(container.querySelector('.embedded-diff-card')).not.toBeInTheDocument()
+  })
+
+  it('renders full question options and submits the active selection from keyboard shortcuts', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.respondToUserInput = vi.fn(() => new Promise<void>(() => {}))
+    mockThreadSnapshotWithActivities([
+      {
+        id: 'user-input:question-1',
+        kind: 'user-input.requested',
+        tone: 'approval',
+        summary: 'Question 1 of 1',
+        payload: {
+          questions: [
+            {
+              id: 'question-1',
+              header: 'Live state',
+              question: 'Why keep the in-memory threads map?',
+              options: [
+                { label: 'Live stream state', description: 'Best for active turn state.' },
+                {
+                  label: 'Persistence replacement',
+                  description: 'Use storage as the single source of truth.'
+                },
+                { label: 'Test-only cache', description: 'Keep it only for tests.' },
+                {
+                  label: 'Tell Codex what to do differently',
+                  description: 'Reject the framing and redirect the agent.'
+                }
+              ]
+            }
+          ]
+        },
+        turnId: 'turn-1',
+        sequence: 1,
+        resolved: false,
+        createdAt: '2026-04-19T00:00:00.000Z'
+      }
+    ])
+
+    render(<RouterProvider router={router} />)
+    await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
+
+    const dialog = await screen.findByRole('dialog')
+    expect(screen.getByText(/why keep the in-memory threads map/i)).toBeInTheDocument()
+    expect(screen.getByText(/best for active turn state/i)).toBeInTheDocument()
+    expect(screen.getByText(/tell codex what to do differently/i)).toBeInTheDocument()
+
+    fireEvent.keyDown(dialog, { key: '2' })
+    fireEvent.keyDown(dialog, { key: 'Enter' })
+
+    expect(window.agentApi.respondToUserInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'question-1',
+        answers: { 'question-1': 'Persistence replacement' }
+      })
+    )
+    expect(screen.getByRole('button', { name: /submit/i })).toBeDisabled()
+  })
+
+  it('submits a question immediately when an option is clicked', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.respondToUserInput = vi.fn(async () => {})
+    mockThreadSnapshotWithActivities([
+      {
+        id: 'user-input:question-1',
+        kind: 'user-input.requested',
+        tone: 'approval',
+        summary: 'Question 1 of 1',
+        payload: {
+          questions: [
+            {
+              id: 'question-1',
+              question: 'How should I present results?',
+              options: [
+                { label: 'Concise', description: 'Keep answers short and action-focused.' },
+                { label: 'Detailed', description: 'Include more context.' }
+              ]
+            }
+          ]
+        },
+        turnId: 'turn-1',
+        sequence: 1,
+        resolved: false,
+        createdAt: '2026-04-19T00:00:00.000Z'
+      }
+    ])
+
+    render(<RouterProvider router={router} />)
+    await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
+    await user.click(await screen.findByRole('option', { name: /detailed/i }))
+
+    expect(window.agentApi.respondToUserInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'question-1',
+        answers: { 'question-1': 'Detailed' }
+      })
+    )
+  })
+
+  it('supports approval keyboard shortcuts including allow for session', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.respondToApproval = vi.fn(async () => {})
+    mockThreadSnapshotWithActivities([
+      {
+        id: 'approval:approval-1',
+        kind: 'approval.requested',
+        tone: 'approval',
+        summary: 'npm run build',
+        payload: { requestType: 'command_execution_approval' },
+        turnId: 'turn-1',
+        sequence: 1,
+        resolved: false,
+        createdAt: '2026-04-19T00:00:00.000Z'
+      }
+    ])
+
+    render(<RouterProvider router={router} />)
+    await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
+
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.keyDown(dialog, { key: 's' })
+
+    expect(window.agentApi.respondToApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: 'approval-1', decision: 'acceptForSession' })
+    )
+  })
+
+  it('advances to the next pending request after the first one resolves', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    let threadListener: ((item: OrchestrationThreadStreamItem) => void) | null = null
+
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      threadListener = listener
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            activities: [
+              {
+                id: 'approval:approval-1',
+                kind: 'approval.requested',
+                tone: 'approval',
+                summary: 'bun test',
+                payload: { requestType: 'command_execution_approval' },
+                turnId: 'turn-1',
+                sequence: 1,
+                resolved: false,
+                createdAt: '2026-04-19T00:00:00.000Z'
+              },
+              {
+                id: 'user-input:question-2',
+                kind: 'user-input.requested',
+                tone: 'approval',
+                summary: 'Question 2 of 2',
+                payload: {
+                  questions: [
+                    {
+                      id: 'question-2',
+                      question: 'What should happen next?',
+                      options: [{ label: 'Continue', description: 'Move to the next step.' }]
+                    }
+                  ]
+                },
+                turnId: 'turn-1',
+                sequence: 2,
+                resolved: false,
+                createdAt: '2026-04-19T00:00:01.000Z'
+              }
+            ]
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+    await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
+
+    expect(await screen.findByText('bun test')).toBeInTheDocument()
+    expect(screen.getByText(/1 of 2/i)).toBeInTheDocument()
+
+    act(() => {
+      threadListener?.({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 2,
+          thread: createTestThread({
+            id: 'local:main',
+            activities: [
+              {
+                id: 'approval:approval-1',
+                kind: 'approval.resolved',
+                tone: 'info',
+                summary: 'bun test',
+                payload: { requestType: 'command_execution_approval', decision: 'accept' },
+                turnId: 'turn-1',
+                sequence: 1,
+                resolved: true,
+                createdAt: '2026-04-19T00:00:00.000Z'
+              },
+              {
+                id: 'user-input:question-2',
+                kind: 'user-input.requested',
+                tone: 'approval',
+                summary: 'Question 2 of 2',
+                payload: {
+                  questions: [
+                    {
+                      id: 'question-2',
+                      question: 'What should happen next?',
+                      options: [{ label: 'Continue', description: 'Move to the next step.' }]
+                    }
+                  ]
+                },
+                turnId: 'turn-1',
+                sequence: 2,
+                resolved: false,
+                createdAt: '2026-04-19T00:00:01.000Z'
+              }
+            ]
+          })
+        }
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByText('bun test')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText(/what should happen next/i)).toBeInTheDocument()
   })
 
   it('opens projects and deletes the active chat from controls', async () => {

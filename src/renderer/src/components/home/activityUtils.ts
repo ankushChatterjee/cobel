@@ -5,6 +5,7 @@ import {
   readCanonicalFileEditChanges
 } from '../../../../shared/fileEditChanges'
 import { readCanonicalFileReadPreview } from '../../../../shared/fileReadPreview'
+import type { PendingQuestion, PendingRequestViewModel } from './types'
 
 export function isPendingPrompt(activity: OrchestrationThreadActivity): boolean {
   return (
@@ -74,22 +75,22 @@ export function extractFileChangeDiff(
   return null
 }
 
-export function readQuestions(activity: OrchestrationThreadActivity): Array<{
-  id: string
-  options?: Array<{ label: string }>
-}> {
+export function readQuestions(activity: OrchestrationThreadActivity): PendingQuestion[] {
   const questions = activity.payload?.questions
-  return Array.isArray(questions)
-    ? questions
-        .map((question) =>
-          typeof question === 'object' && question !== null
-            ? (question as { id: string; options?: Array<{ label: string }> })
-            : null
-        )
-        .filter((question): question is { id: string; options?: Array<{ label: string }> } =>
-          Boolean(question)
-        )
-    : []
+  if (!Array.isArray(questions)) return []
+  const normalized: PendingQuestion[] = []
+  for (const entry of questions) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const question = entry as PendingQuestion
+    if (typeof question.id !== 'string' || typeof question.question !== 'string') continue
+    normalized.push({
+      id: question.id,
+      ...(question.header ? { header: question.header } : {}),
+      question: question.question,
+      options: Array.isArray(question.options) ? question.options : []
+    })
+  }
+  return normalized
 }
 
 export function requestIdFromActivity(activity: OrchestrationThreadActivity): string {
@@ -276,4 +277,66 @@ export function labelForApproval(activity: OrchestrationThreadActivity): string 
   if (requestType === 'command_execution_approval') return 'approval'
   if (requestType === 'file_read_approval') return 'read approval'
   return 'approval'
+}
+
+export function pendingRequestTypeLabel(requestType: string, kind: 'approval' | 'input'): string {
+  if (kind === 'input') return 'Question'
+  switch (requestType) {
+    case 'file_change_approval':
+    case 'apply_patch_approval':
+      return 'Edit approval'
+    case 'command_execution_approval':
+    case 'exec_command_approval':
+      return 'Command approval'
+    case 'file_read_approval':
+      return 'Read approval'
+    default:
+      return 'Approval'
+  }
+}
+
+export function normalizePendingRequest(
+  activity: OrchestrationThreadActivity
+): PendingRequestViewModel | null {
+  if (!isPendingPrompt(activity)) return null
+  const requestType = readPayloadString(activity.payload, 'requestType') ?? 'unknown'
+  const kind = activity.kind === 'approval.requested' ? 'approval' : 'input'
+  return {
+    activity,
+    kind,
+    requestType,
+    requestLabel: kind === 'approval' ? labelForApproval(activity) : 'input',
+    requestTypeLabel: pendingRequestTypeLabel(requestType, kind),
+    summary: activity.summary,
+    fileChange: kind === 'approval' ? extractFileChangeDiff(activity.payload) : null,
+    questions: readQuestions(activity)
+  }
+}
+
+export function compareActivityOrder(
+  left: Pick<OrchestrationThreadActivity, 'sequence' | 'createdAt' | 'id'>,
+  right: Pick<OrchestrationThreadActivity, 'sequence' | 'createdAt' | 'id'>
+): number {
+  const leftSequence = left.sequence ?? Number.MAX_SAFE_INTEGER
+  const rightSequence = right.sequence ?? Number.MAX_SAFE_INTEGER
+  if (leftSequence !== rightSequence) return leftSequence - rightSequence
+  const leftTime = new Date(left.createdAt).getTime()
+  const rightTime = new Date(right.createdAt).getTime()
+  if (leftTime !== rightTime) return leftTime - rightTime
+  return left.id.localeCompare(right.id)
+}
+
+export function listPendingRequests(
+  activities: OrchestrationThreadActivity[],
+  activeTurnId: string | null
+): PendingRequestViewModel[] {
+  return activities
+    .map(normalizePendingRequest)
+    .filter((request): request is PendingRequestViewModel => Boolean(request))
+    .sort((left, right) => {
+      const leftActive = left.activity.turnId !== null && left.activity.turnId === activeTurnId
+      const rightActive = right.activity.turnId !== null && right.activity.turnId === activeTurnId
+      if (leftActive !== rightActive) return leftActive ? -1 : 1
+      return compareActivityOrder(left.activity, right.activity)
+    })
 }

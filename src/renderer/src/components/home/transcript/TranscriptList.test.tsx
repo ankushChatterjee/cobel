@@ -104,12 +104,9 @@ function renderTranscript(items: TranscriptItem[], turnInProgress: boolean): voi
       latestTurnId="turn-1"
       providerName="codex"
       expandedToolIds={new Set()}
-      submittingApprovals={new Map()}
       checkpointByAssistantMessageId={new Map()}
       onOpenPlan={vi.fn()}
       onToggleTool={vi.fn()}
-      onApprove={vi.fn()}
-      onAnswer={vi.fn()}
       onPreviewDiff={vi.fn()}
       onOpenDiff={vi.fn()}
       onRevert={vi.fn()}

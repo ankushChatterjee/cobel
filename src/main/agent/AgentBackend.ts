@@ -62,6 +62,8 @@ export class AgentBackend {
       this.engine = new OrchestrationEngine()
     }
 
+    this.clearRestartStaleUserInputs()
+
     this.providers = new ProviderService()
     this.ingestion = new ProviderRuntimeIngestion(this.engine)
     this.checkpointStore = new CheckpointStore()
@@ -296,11 +298,13 @@ export class AgentBackend {
   }
 
   async respondToApproval(input: RespondToApprovalInput): Promise<void> {
-    await this.providers.respondToApproval(this.providerForThread(input.threadId), input)
+    const provider = await this.ensureProviderSessionForThread(input.threadId)
+    await this.providers.respondToApproval(provider, input)
   }
 
   async respondToUserInput(input: RespondToUserInputInput): Promise<void> {
-    await this.providers.respondToUserInput(this.providerForThread(input.threadId), input)
+    const provider = await this.ensureProviderSessionForThread(input.threadId)
+    await this.providers.respondToUserInput(provider, input)
   }
 
   async stopSession(input: StopSessionInput): Promise<void> {
@@ -370,8 +374,46 @@ export class AgentBackend {
     await this.providers.disposeOpenCodeSessions()
   }
 
+  private clearRestartStaleUserInputs(): void {
+    for (const shellThread of this.snapshots.getShellSnapshot().threads) {
+      const thread = this.engine.getThread(shellThread.id)
+      for (const activity of thread.activities) {
+        if (activity.kind !== 'user-input.requested' || activity.resolved === true) continue
+        this.engine.upsertActivity(
+          {
+            ...activity,
+            kind: 'user-input.resolved',
+            tone: 'info',
+            summary: `${activity.summary} (cleared on app restart)`,
+            resolved: true,
+            createdAt: activity.createdAt
+          },
+          thread.id
+        )
+      }
+    }
+  }
+
   private providerForThread(threadId: string): ProviderId {
     return this.engine.getThread(threadId).session?.providerName ?? 'codex'
+  }
+
+  private async ensureProviderSessionForThread(threadId: string): Promise<ProviderId> {
+    const thread = this.engine.getThread(threadId)
+    const binding = this.directory.get(threadId)
+    const provider = thread.session?.providerName ?? binding?.provider ?? 'codex'
+    const runtimeMode = thread.session?.runtimeMode ?? binding?.runtimeMode ?? 'auto-accept-edits'
+    const interactionMode = thread.session?.interactionMode ?? binding?.interactionMode ?? 'default'
+    await this.providers.startSession({
+      provider,
+      threadId,
+      cwd: thread.cwd,
+      model: thread.session?.model,
+      runtimeMode,
+      interactionMode,
+      resumeCursor: binding?.resumeCursor
+    })
+    return provider
   }
 
   private seedThreadTitle(input: {

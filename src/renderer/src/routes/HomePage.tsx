@@ -40,12 +40,14 @@ import {
 } from '../components/diff/DiffReview'
 import { ChatComposer } from '../components/home/ChatComposer'
 import { NoProjectSplash } from '../components/home/NoProjectSplash'
+import { PendingRequestDock } from '../components/home/PendingRequestDock'
 import { CommitMessageDialog, RevertWarningDialog } from '../components/home/Dialogs'
 import { ProjectSidebar } from '../components/home/ProjectSidebar'
 import { FloatingTodoPanel, FloatingTodoPill } from '../components/home/TodoPanel'
 import { ThreadSidebar, PlanSidebarPanel } from '../components/home/ThreadSidebar'
 import { TranscriptList } from '../components/home/transcript'
 import { SessionErrorBanner } from '../components/home/transcript'
+import { isPendingPrompt, listPendingRequests } from '../components/home/activityUtils'
 import { errorMessageForDisplay } from '../components/home/formatUtils'
 import {
   filterModelsForProvider,
@@ -125,6 +127,7 @@ export function HomePage(): React.JSX.Element {
   const transcriptStackRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const todoFloatingUiRef = useRef<HTMLDivElement | null>(null)
+  const composerStackRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRafRef = useRef(0)
   /** Ignore `onScroll` while we adjust scroll position so smooth/CSS scroll does not clear stick-to-bottom. */
   const suppressConversationScrollRef = useRef(false)
@@ -150,8 +153,10 @@ export function HomePage(): React.JSX.Element {
   const [submittingApprovals, setSubmittingApprovals] = useState<
     Map<string, ApprovalDecision>
   >(() => new Map())
+  const [submittingUserInputIds, setSubmittingUserInputIds] = useState<Set<string>>(() => new Set())
   const [todoPanelOpen, setTodoPanelOpen] = useState(false)
   const autoOpenedLatestPlanIdsRef = useRef(new Map<string, string>())
+  const lastAutoFocusedPendingRequestIdRef = useRef<string | null>(null)
 
   const activeProject = useMemo(
     () => shell.projects.find((p) => p.id === selection.activeProjectId) ?? null,
@@ -204,6 +209,18 @@ export function HomePage(): React.JSX.Element {
     ? threadSidebarState[activeSidebarScopeKey]
     : undefined
   const transcriptItems = useMemo(() => buildTranscriptItems(thread), [thread])
+  const pendingRequests = useMemo(
+    () => listPendingRequests(thread?.activities ?? [], activeTurnId ?? null),
+    [activeTurnId, thread?.activities]
+  )
+  const activePendingRequest = pendingRequests[0] ?? null
+  const filteredTranscriptItems = useMemo(
+    () =>
+      transcriptItems.filter(
+        (item) => !(item.kind === 'activity' && isPendingPrompt(item.activity) && !item.activity.resolved)
+      ),
+    [transcriptItems]
+  )
   const latestProposedPlan = useMemo(
     () => findLatestProposedPlan(thread?.proposedPlans ?? [], thread?.latestTurn?.id ?? null),
     [thread?.latestTurn?.id, thread?.proposedPlans]
@@ -234,7 +251,6 @@ export function HomePage(): React.JSX.Element {
     [thread?.updatedAt, workspaceDiffVersion]
   )
   const visibleTodoLists = useMemo(() => visibleTodoListsForThread(thread), [thread])
-
   useEffect(() => {
     threadRef.current = thread
   }, [thread])
@@ -253,6 +269,28 @@ export function HomePage(): React.JSX.Element {
       const next = new Map(current)
       for (const id of current.keys()) {
         if (!activeApprovalIds.has(id)) {
+          next.delete(id)
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }, [thread?.activities])
+
+  useEffect(() => {
+    setSubmittingUserInputIds((current) => {
+      if (current.size === 0) return current
+      const activePromptIds = new Set(
+        (thread?.activities ?? [])
+          .filter(
+            (activity) => activity.kind === 'user-input.requested' && activity.resolved !== true
+          )
+          .map((activity) => activity.id)
+      )
+      let changed = false
+      const next = new Set(current)
+      for (const id of current.values()) {
+        if (!activePromptIds.has(id)) {
           next.delete(id)
           changed = true
         }
@@ -955,16 +993,47 @@ export function HomePage(): React.JSX.Element {
   )
 
   const respondToUserInput = useCallback(
-    (activity: OrchestrationThreadActivity, answer: Record<string, unknown>) =>
-      activeThreadId
-        ? window.agentApi.respondToUserInput({
-            threadId: activeThreadId,
-            requestId: activity.id.replace(/^approval:/u, '').replace(/^user-input:/u, ''),
-            answers: answer
-          })
-        : Promise.resolve(),
+    async (activity: OrchestrationThreadActivity, answer: Record<string, unknown>) => {
+      if (!activeThreadId) return
+      setSubmittingUserInputIds((current) => new Set(current).add(activity.id))
+      try {
+        await window.agentApi.respondToUserInput({
+          threadId: activeThreadId,
+          requestId: activity.id.replace(/^approval:/u, '').replace(/^user-input:/u, ''),
+          answers: answer
+        })
+      } catch (userInputError) {
+        setSubmittingUserInputIds((current) => {
+          const next = new Set(current)
+          next.delete(activity.id)
+          return next
+        })
+        throw userInputError
+      }
+    },
     [activeThreadId]
   )
+
+  const focusComposerInput = useCallback((): void => {
+    const root = composerStackRef.current
+    if (!root) return
+    const target = root.querySelector<HTMLTextAreaElement>('textarea')
+    target?.focus()
+  }, [])
+
+  const shouldAutoFocusPendingRequest =
+    activePendingRequest !== null &&
+    lastAutoFocusedPendingRequestIdRef.current !== activePendingRequest.activity.id
+
+  useEffect(() => {
+    if (!activePendingRequest) {
+      lastAutoFocusedPendingRequestIdRef.current = null
+      return
+    }
+    if (shouldAutoFocusPendingRequest) {
+      lastAutoFocusedPendingRequestIdRef.current = activePendingRequest.activity.id
+    }
+  }, [activePendingRequest, shouldAutoFocusPendingRequest])
 
   const updateActiveSidebarState = useCallback(
     (updater: (current: ThreadSidebarState) => ThreadSidebarState) => {
@@ -1315,19 +1384,16 @@ export function HomePage(): React.JSX.Element {
                 </div>
               ) : (
               <TranscriptList
-                items={transcriptItems}
+                items={filteredTranscriptItems}
                 showPendingThinking={showPendingThinking}
                 turnInProgress={turnInProgress}
                 activeTurnId={activeTurnId ?? thread?.latestTurn?.id ?? null}
                 latestTurnId={thread?.latestTurn?.id ?? null}
                 providerName={thread?.session?.providerName ?? null}
                 expandedToolIds={expandedToolIds}
-                submittingApprovals={submittingApprovals}
                 checkpointByAssistantMessageId={checkpointByAssistantMessageId}
                 onOpenPlan={reopenPlanTab}
                 onToggleTool={toggleToolExpanded}
-                onApprove={respondToApproval}
-                onAnswer={respondToUserInput}
                 onPreviewDiff={showDiffPreview}
                 onOpenDiff={(turnId, filePath) =>
                   openDiffPanel({ mode: turnId ? 'turn' : 'full', turnId, filePath })
@@ -1341,9 +1407,22 @@ export function HomePage(): React.JSX.Element {
             </div>
           </section>
 
-          {activeProject ? (
+              {activeProject ? (
             <div className="composer-wrap">
-              <div className="composer-stack">
+              <div ref={composerStackRef} className="composer-stack">
+                {activePendingRequest ? (
+                  <PendingRequestDock
+                    request={activePendingRequest}
+                    queueIndex={0}
+                    queueCount={pendingRequests.length}
+                    submittingDecision={submittingApprovals.get(activePendingRequest.activity.id) ?? null}
+                    submittingInput={submittingUserInputIds.has(activePendingRequest.activity.id)}
+                    autoFocus={shouldAutoFocusPendingRequest}
+                    onApprove={respondToApproval}
+                    onAnswer={respondToUserInput}
+                    onDismissFocus={focusComposerInput}
+                  />
+                ) : null}
                 <div ref={todoFloatingUiRef} className="composer-floating-ui">
                   <FloatingTodoPanel todoLists={visibleTodoLists} open={todoPanelOpen} />
                   <FloatingTodoPill

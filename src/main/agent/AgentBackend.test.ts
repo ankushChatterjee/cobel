@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { execFile } from 'node:child_process'
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -310,6 +310,69 @@ describe('AgentBackend', () => {
     const cursor = (backendB as unknown as { directory: { getResumeCursor: (id: string) => unknown } }).directory.getResumeCursor(threadId)
     // cursor presence depends on the fake adapter, so we just verify no exception thrown
     expect(cursor === undefined || cursor !== null).toBe(true)
+  })
+
+  it('re-establishes a persisted provider session before responding to user input after restart', async () => {
+    const db = openInMemoryDatabase()
+    const threadId = 'thread:resume-before-user-input'
+    const backend = new AgentBackend({ useFakeProvider: true, db })
+    const createdAt = '2026-04-19T00:00:00.000Z'
+
+    backend.engine.ensureThread({ threadId, cwd: '/tmp/project' })
+    backend.engine.setSession({
+      threadId,
+      status: 'ready',
+      providerName: 'codex',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'gpt-5.4',
+      effort: undefined,
+      activeTurnId: null,
+      activePlanId: null,
+      lastError: null,
+      createdAt
+    })
+    ;(
+      backend as unknown as {
+        directory: { upsert: (threadId: string, binding: Record<string, unknown>) => void }
+      }
+    ).directory.upsert(threadId, {
+      provider: 'codex',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      status: 'ready',
+      resumeCursor: { threadId: 'provider-thread-123' }
+    })
+
+    const startSessionSpy = vi
+      .spyOn(backend.providers, 'startSession')
+      .mockResolvedValue(undefined as never)
+    const respondSpy = vi
+      .spyOn(backend.providers, 'respondToUserInput')
+      .mockResolvedValue(undefined)
+
+    await backend.respondToUserInput({
+      threadId,
+      requestId: 'user-input-1',
+      answers: { answer: 'yes' }
+    })
+
+    expect(startSessionSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'codex',
+        threadId,
+        cwd: '/tmp/project',
+        model: 'gpt-5.4',
+        runtimeMode: 'auto-accept-edits',
+        interactionMode: 'default',
+        resumeCursor: { threadId: 'provider-thread-123' }
+      })
+    )
+    expect(respondSpy).toHaveBeenCalledWith('codex', {
+      threadId,
+      requestId: 'user-input-1',
+      answers: { answer: 'yes' }
+    })
   })
 
   it('shell snapshot returns created projects and threads', async () => {

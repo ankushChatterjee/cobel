@@ -1,10 +1,7 @@
 import { memo } from 'react'
 import type { OrchestrationCheckpointSummary } from '../../../../../shared/agent'
-import { isPendingPrompt, isRuntimeError, isThinkingActivity } from '../activityUtils'
+import { isRuntimeError, isThinkingActivity } from '../activityUtils'
 import type {
-  ApprovalDecision,
-  OnAnswer,
-  OnApprove,
   OnOpenDiff,
   OnOpenPlan,
   OnPreviewDiff,
@@ -12,7 +9,6 @@ import type {
 } from '../types'
 import { ActivityRow } from './ActivityRow'
 import { MessageRow, ThinkingRow } from './MessageRow'
-import { PendingPrompt } from './PendingPrompt'
 import { SessionErrorBanner } from './SessionErrorBanner'
 
 export const TranscriptRow = memo(function TranscriptRow({
@@ -20,11 +16,8 @@ export const TranscriptRow = memo(function TranscriptRow({
   activeTurnId,
   turnInProgress,
   latestTurnId,
-  submittingApprovals,
   checkpointByAssistantMessageId,
   onOpenPlan,
-  onApprove,
-  onAnswer,
   onPreviewDiff,
   onOpenDiff,
   onRevert
@@ -33,11 +26,8 @@ export const TranscriptRow = memo(function TranscriptRow({
   activeTurnId: string | null
   turnInProgress: boolean
   latestTurnId: string | null
-  submittingApprovals: Map<string, ApprovalDecision>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
   onOpenPlan: OnOpenPlan
-  onApprove: OnApprove
-  onAnswer: OnAnswer
   onPreviewDiff: OnPreviewDiff
   onOpenDiff: OnOpenDiff
   onRevert: (turnCount: number) => Promise<void>
@@ -57,16 +47,6 @@ export const TranscriptRow = memo(function TranscriptRow({
   }
 
   const { activity } = item
-  if (isPendingPrompt(activity)) {
-    return (
-      <PendingPrompt
-        activity={activity}
-        submittingDecision={submittingApprovals.get(activity.id) ?? null}
-        onApprove={onApprove}
-        onAnswer={onAnswer}
-      />
-    )
-  }
   if (activity.kind === 'approval.resolved') {
     return null
   }
