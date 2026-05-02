@@ -327,11 +327,7 @@ function planUpdatedEvent(base: RuntimeEventBase, event: ProviderEvent): Provide
     .filter(
       (
         item
-      ): item is {
-        id?: string
-        text: string
-        status: 'pending' | 'in_progress' | 'completed'
-      } => item !== null
+      ): item is NonNullable<typeof item> => item !== null
     )
   if (items.length === 0) return null
   return {
