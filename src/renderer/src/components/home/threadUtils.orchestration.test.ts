@@ -103,6 +103,30 @@ describe('isOrchestrationModelTurnInProgress', () => {
     }
     expect(isOrchestrationModelTurnInProgress(thread)).toBe(true)
   })
+
+  it('is false when activeTurnId is stale for the same turn latestTurn already marked completed', () => {
+    const thread = {
+      ...createEmptyThread('th', t0),
+      session: {
+        threadId: 'th',
+        status: 'ready' as const,
+        providerName: 'codex' as const,
+        runtimeMode: 'auto-accept-edits' as const,
+        interactionMode: 'default' as const,
+        activeTurnId: 'turn-1',
+        activePlanId: null,
+        lastError: null,
+        updatedAt: t0
+      },
+      latestTurn: {
+        id: 'turn-1',
+        status: 'completed' as const,
+        startedAt: t0,
+        completedAt: t0
+      }
+    }
+    expect(isOrchestrationModelTurnInProgress(thread)).toBe(false)
+  })
 })
 
 describe('shouldShowTranscriptEndThinkingRow', () => {
@@ -200,6 +224,84 @@ describe('shouldShowTranscriptEndThinkingRow', () => {
       hasActiveThinkingActivity: false
     })
     expect(show).toBe(true)
+  })
+
+  it('hides the tail when the latest turn is finished and only a stale activeTurnId remains', () => {
+    const thread = {
+      ...createEmptyThread('th', t0),
+      session: {
+        threadId: 'th',
+        status: 'ready' as const,
+        providerName: 'codex' as const,
+        runtimeMode: 'auto-accept-edits' as const,
+        interactionMode: 'default' as const,
+        activeTurnId: 'turn-1',
+        activePlanId: null,
+        lastError: null,
+        updatedAt: t0
+      },
+      latestTurn: {
+        id: 'turn-1',
+        status: 'completed' as const,
+        startedAt: t0,
+        completedAt: t0
+      },
+      messages: [
+        {
+          id: 'assistant:turn-1',
+          role: 'assistant' as const,
+          text: 'done',
+          turnId: 'turn-1',
+          streaming: false,
+          sequence: 1,
+          createdAt: t0,
+          updatedAt: t0
+        }
+      ]
+    }
+    const show = shouldShowTranscriptEndThinkingRow(thread, {
+      isPendingTurnStart: false,
+      hasActiveThinkingActivity: false
+    })
+    expect(show).toBe(false)
+  })
+
+  it('hides the fallback tail when the active turn already has a streaming plan', () => {
+    const thread = {
+      ...createEmptyThread('th', t0),
+      session: {
+        threadId: 'th',
+        status: 'running' as const,
+        providerName: 'codex' as const,
+        runtimeMode: 'auto-accept-edits' as const,
+        interactionMode: 'plan' as const,
+        activeTurnId: 'turn-2',
+        activePlanId: 'plan:th:turn:turn-1',
+        lastError: null,
+        updatedAt: t0
+      },
+      latestTurn: {
+        id: 'turn-2',
+        status: 'running' as const,
+        startedAt: t0,
+        completedAt: null
+      },
+      proposedPlans: [
+        {
+          id: 'plan:th:turn:turn-1',
+          turnId: 'turn-2',
+          text: '# Rollout',
+          status: 'streaming' as const,
+          createdAt: t0,
+          updatedAt: t0
+        }
+      ]
+    }
+    const show = shouldShowTranscriptEndThinkingRow(thread, {
+      isPendingTurnStart: true,
+      hasActiveThinkingActivity: false
+    })
+    expect(show).toBe(false)
   })
 })
 

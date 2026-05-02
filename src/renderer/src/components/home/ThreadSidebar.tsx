@@ -10,6 +10,7 @@ export function ThreadSidebar({
   activeTabId,
   onSelectTab,
   onClose,
+  onCloseTab,
   resizeLabel,
   resizeMin,
   resizeMax,
@@ -25,6 +26,7 @@ export function ThreadSidebar({
   activeTabId: SidebarTabId
   onSelectTab: (tabId: SidebarTabId) => void
   onClose: () => void
+  onCloseTab?: (tabId: SidebarTabId) => void
   resizeLabel: string
   resizeMin: number
   resizeMax: number
@@ -55,17 +57,36 @@ export function ThreadSidebar({
       <div className="thread-sidebar-tabs" role="tablist" aria-label="Sidebar tabs">
         <div className="thread-sidebar-tab-strip">
           {tabs.map((tab) => (
-            <button
+            <div
               key={tab.id}
-              type="button"
-              role="tab"
-              className={`thread-sidebar-tab ${tab.id === activeTabId ? 'active' : ''}`}
-              aria-selected={tab.id === activeTabId}
-              onClick={() => onSelectTab(tab.id)}
-              title={tab.label}
+              className={`thread-sidebar-tab ${tab.id === activeTabId ? 'active' : ''} ${
+                tab.plan?.status === 'streaming' ? 'is-updating' : ''
+              }`}
             >
-              <span>{tab.label}</span>
-            </button>
+              <button
+                type="button"
+                role="tab"
+                className="thread-sidebar-tab-button"
+                aria-selected={tab.id === activeTabId}
+                onClick={() => onSelectTab(tab.id)}
+                title={tab.label}
+              >
+                {tab.plan?.status === 'streaming' ? (
+                  <span className="thread-sidebar-tab-spinner thinking-spinner" aria-hidden="true" />
+                ) : null}
+                <span>{tab.label}</span>
+              </button>
+              {tab.plan && onCloseTab ? (
+                <button
+                  type="button"
+                  className="thread-sidebar-tab-dismiss"
+                  aria-label={`Close ${tab.label}`}
+                  onClick={() => onCloseTab(tab.id)}
+                >
+                  ×
+                </button>
+              ) : null}
+            </div>
           ))}
         </div>
         <button type="button" className="diff-close-button" onClick={onClose} aria-label="Close sidebar">
@@ -92,6 +113,12 @@ export function PlanSidebarPanel({
         <div>
           <p>Proposed plan</p>
           <h2>{derivePlanTitle(plan.text)}</h2>
+          {plan.status === 'streaming' ? (
+            <div className="plan-sidebar-status" aria-live="polite">
+              <span className="thinking-spinner" aria-hidden="true" />
+              <span>Updating plan…</span>
+            </div>
+          ) : null}
         </div>
         <button type="button" className="plan-implement-button" disabled={disabled} onClick={onImplement}>
           Implement

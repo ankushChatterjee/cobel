@@ -201,10 +201,19 @@ export type ProviderRuntimeEvent =
       payload: { message: string; detail?: unknown }
     })
 
-export interface ChatAttachment {
+export interface ImageChatAttachment {
   type: 'image'
   url: string
 }
+
+export interface PlanChatAttachment {
+  type: 'plan'
+  planId: string
+  title: string
+  status: OrchestrationProposedPlan['status']
+}
+
+export type ChatAttachment = ImageChatAttachment | PlanChatAttachment
 
 export interface OrchestrationMessage {
   id: string

@@ -680,6 +680,143 @@ describe('renderer app', () => {
     )
   })
 
+  it('lets the user close a plan tab and reopen it from the assistant plan tile', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            messages: [
+              {
+                id: 'assistant:plan:1',
+                role: 'assistant',
+                text: '',
+                attachments: [
+                  {
+                    type: 'plan',
+                    planId: `plan:${_input.threadId}:turn:turn-plan-1`,
+                    title: 'Alpha plan',
+                    status: 'proposed'
+                  }
+                ],
+                turnId: 'turn-plan-1',
+                streaming: false,
+                createdAt: '2026-04-19T00:00:01.000Z',
+                updatedAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            proposedPlans: [
+              {
+                id: `plan:${_input.threadId}:turn:turn-plan-1`,
+                turnId: 'turn-plan-1',
+                text: '# Alpha plan\n\nShip the first version.',
+                status: 'proposed',
+                createdAt: '2026-04-19T00:00:00.000Z',
+                updatedAt: '2026-04-19T00:00:01.000Z'
+              }
+            ],
+            latestTurn: {
+              id: 'turn-plan-1',
+              status: 'completed',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: '2026-04-19T00:00:01.000Z'
+            },
+            session: {
+              threadId: _input.threadId,
+              status: 'ready',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'plan',
+              activeTurnId: null,
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:01.000Z'
+            }
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    await screen.findByRole('tab', { name: 'Alpha plan' })
+    await user.click(screen.getByRole('button', { name: 'Close Alpha plan' }))
+
+    expect(screen.queryByRole('tab', { name: 'Alpha plan' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /alpha plan/i }))
+
+    expect(await screen.findByRole('tab', { name: 'Alpha plan' })).toBeInTheDocument()
+    expect(screen.getByText('Ship the first version.')).toBeInTheDocument()
+  })
+
+  it('allows closing the plan sidebar and switching back to review after auto-opening a latest plan', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            proposedPlans: [
+              {
+                id: `plan:${_input.threadId}:turn:turn-plan-1`,
+                turnId: 'turn-plan-1',
+                text: '# Alpha plan\n\nShip the first version.',
+                status: 'proposed',
+                createdAt: '2026-04-19T00:00:00.000Z',
+                updatedAt: '2026-04-19T00:00:00.000Z'
+              }
+            ],
+            latestTurn: {
+              id: 'turn-plan-1',
+              status: 'completed',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: '2026-04-19T00:00:01.000Z'
+            },
+            session: {
+              threadId: _input.threadId,
+              status: 'ready',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'plan',
+              activeTurnId: null,
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:01.000Z'
+            }
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    expect(await screen.findByText('Ship the first version.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /close sidebar/i }))
+    await waitFor(() => {
+      expect(document.querySelector('.thread-sidebar')).toHaveAttribute('aria-hidden', 'true')
+    })
+
+    await user.click(screen.getByRole('button', { name: /open workspace diff/i }))
+    expect(await screen.findByRole('tab', { name: 'Review' })).toHaveAttribute('aria-selected', 'true')
+  })
+
   it('persists model and runtime mode per thread', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))

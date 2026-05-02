@@ -300,6 +300,21 @@ function currentInFlightTurnId(thread: OrchestrationThread | null): string | nul
   )
 }
 
+function threadHasStreamingPlanForActiveTurn(thread: OrchestrationThread | null): boolean {
+  const activeTurnId = currentInFlightTurnId(thread)
+  if (!thread || !activeTurnId) return false
+  return thread.proposedPlans.some(
+    (plan) => plan.turnId === activeTurnId && plan.status === 'streaming'
+  )
+}
+
+function latestTurnStatusIsTerminalForActiveTurn(thread: OrchestrationThread): boolean {
+  const activeTurnId = thread.session?.activeTurnId
+  const latestTurn = thread.latestTurn
+  if (!activeTurnId || !latestTurn || latestTurn.id !== activeTurnId) return false
+  return latestTurn.status !== 'running'
+}
+
 /**
  * A model turn is still in flight (waiting for the next model chunk, tool, or end of turn).
  * - Session can be `ready` with `activeTurnId` set between sub-steps.
@@ -314,6 +329,7 @@ export function isOrchestrationModelTurnInProgress(thread: OrchestrationThread |
   if (s === 'starting' || s === 'running') return true
   const turnSt = thread.latestTurn?.status
   if (turnSt === 'running') return true
+  if (latestTurnStatusIsTerminalForActiveTurn(thread)) return false
   if (thread.session?.activeTurnId) return true
   return false
 }
@@ -366,6 +382,7 @@ export function shouldShowTranscriptEndThinkingRow(
   if (thread) {
     const activeTurnId = currentInFlightTurnId(thread)
     if (thread.activities.some(isPendingPrompt)) return false
+    if (threadHasStreamingPlanForActiveTurn(thread)) return false
     if (
       thread.messages.some(
         (message) =>

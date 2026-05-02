@@ -259,7 +259,9 @@ export class CodexAppServerManager {
     const providerThreadId = readResumeThreadId(context.session.resumeCursor) ?? input.threadId
     const turnInput = [
       { type: 'text', text: input.input, text_elements: [] },
-      ...(input.attachments ?? []).map((attachment) => ({ type: 'image', url: attachment.url }))
+      ...(input.attachments ?? [])
+        .filter((attachment): attachment is { type: 'image'; url: string } => attachment.type === 'image')
+        .map((attachment) => ({ type: 'image', url: attachment.url }))
     ]
     const result = await this.sendRequest<TurnStartResponse>(context, 'turn/start', {
       threadId: providerThreadId,

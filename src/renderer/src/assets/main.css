@@ -3598,12 +3598,10 @@
   align-items: center;
   min-width: 0;
   height: 28px;
-  padding: 0 10px;
   border: 1px solid transparent;
   border-radius: 999px;
   background: transparent;
   color: var(--text-muted);
-  cursor: pointer;
   font-size: 11px;
   font-weight: 600;
   transition:
@@ -3612,10 +3610,45 @@
     color 0.14s ease;
 }
 
-.thread-sidebar-tab span {
+.thread-sidebar-tab-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.thread-sidebar-tab-button span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thread-sidebar-tab-spinner {
+  width: 10px;
+  height: 10px;
+}
+
+.thread-sidebar-tab-dismiss {
+  display: grid;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
 }
 
 .thread-sidebar-tab:hover,
@@ -3624,6 +3657,18 @@
   border-color: var(--border-medium);
   background: var(--surface-hover);
   color: var(--text-primary);
+}
+
+.thread-sidebar-tab.is-updating {
+  border-color: color-mix(in srgb, var(--accent-primary) 26%, transparent);
+  color: var(--text-primary);
+}
+
+.thread-sidebar-tab-dismiss:hover,
+.thread-sidebar-tab-dismiss:focus-visible {
+  background: color-mix(in srgb, var(--surface-hover) 88%, white 12%);
+  color: var(--text-primary);
+  outline: none;
 }
 
 .thread-sidebar-content {
@@ -3730,6 +3775,16 @@ button.diff-toolbar-pill:focus-visible,
   line-height: 1.35;
 }
 
+.plan-sidebar-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .plan-implement-button {
   flex: 0 0 auto;
   height: 30px;
@@ -3763,6 +3818,69 @@ button.diff-toolbar-pill:focus-visible,
   min-height: 0;
   overflow: auto;
   padding: 14px;
+}
+
+.message-attachments {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.message-image-attachment {
+  display: block;
+  max-width: min(100%, 420px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.message-plan-attachment {
+  display: grid;
+  gap: 4px;
+  width: min(100%, 340px);
+  padding: 12px 13px;
+  border: 1px solid var(--border-medium);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-hover) 82%, transparent);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 0.14s ease,
+    background 0.14s ease,
+    transform 0.14s ease;
+}
+
+.message-plan-attachment:hover,
+.message-plan-attachment:focus-visible {
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 10%, var(--surface-hover));
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.message-plan-attachment-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.message-plan-attachment strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.message-plan-attachment-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.message-plan-attachment.is-updating {
+  border-color: color-mix(in srgb, var(--accent-primary) 28%, var(--border-medium));
 }
 
 .diff-header-empty {

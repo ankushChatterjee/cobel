@@ -569,6 +569,44 @@ describe('ProviderRuntimeIngestion', () => {
         status: 'proposed'
       })
     )
+    expect(engine.getThread('thread-1').messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          turnId: 'turn-1',
+          attachments: [
+            expect.objectContaining({
+              type: 'plan',
+              planId: 'plan:thread-1:turn:turn-1',
+              title: 'Ship it',
+              status: 'proposed'
+            })
+          ]
+        })
+      ])
+    )
+  })
+
+  it('streams plan text into a proposed plan before turn completion', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        payload: { streamKind: 'plan_text', delta: '<proposed_plan># Rollout' }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').proposedPlans[0]).toEqual(
+      expect.objectContaining({
+        id: 'plan:thread-1:turn:turn-1',
+        turnId: 'turn-1',
+        text: '# Rollout',
+        status: 'streaming'
+      })
+    )
   })
 
   it('updates the active plan instead of creating a new one for plan feedback', async () => {

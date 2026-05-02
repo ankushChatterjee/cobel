@@ -61,6 +61,7 @@ function renderTranscript(items: TranscriptItem[], turnInProgress: boolean): voi
       expandedToolIds={new Set()}
       submittingApprovals={new Map()}
       checkpointByAssistantMessageId={new Map()}
+      onOpenPlan={vi.fn()}
       onToggleTool={vi.fn()}
       onApprove={vi.fn()}
       onAnswer={vi.fn()}

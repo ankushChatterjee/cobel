@@ -347,6 +347,7 @@ export class ProviderRuntimeIngestion {
       } else {
         this.planBuffers.set(key, { text: event.payload.delta, createdAt: event.createdAt })
       }
+      this.upsertStreamingPlan(event)
       return
     }
 
@@ -762,21 +763,89 @@ export class ProviderRuntimeIngestion {
     const buffer = this.planBuffers.get(key)
     const text = normalizeProposedPlanText(buffer?.text) ?? normalizeProposedPlanText(fallbackText)
     if (!text) return
+    const proposedPlan = this.buildProposedPlan(event, {
+      text,
+      status: 'proposed',
+      createdAt: buffer?.createdAt ?? event.createdAt
+    })
+    this.engine.upsertProposedPlan(proposedPlan, event.threadId)
+    this.attachPlanArtifact(event, proposedPlan)
+    this.planBuffers.delete(key)
+  }
+
+  private upsertStreamingPlan(
+    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
+  ): void {
+    const turnId = event.turnId ?? event.eventId
+    const buffer = this.planBuffers.get(this.planKey(event.threadId, turnId))
+    const text = normalizeStreamingProposedPlanText(buffer?.text)
+    const proposedPlan = this.buildProposedPlan(event, {
+      text,
+      status: 'streaming',
+      createdAt: buffer?.createdAt ?? event.createdAt
+    })
+    this.engine.upsertProposedPlan(proposedPlan, event.threadId)
+  }
+
+  private buildProposedPlan(
+    event: Pick<ProviderRuntimeEvent, 'threadId' | 'turnId' | 'eventId' | 'createdAt'>,
+    input: {
+      text: string | undefined
+      status: OrchestrationProposedPlan['status']
+      createdAt: string
+    }
+  ): OrchestrationProposedPlan {
+    const turnId = event.turnId ?? event.eventId
     const thread = this.engine.getThread(event.threadId)
     const existingPlanId = thread.session?.activePlanId
     const existingPlan = existingPlanId
       ? thread.proposedPlans.find((plan) => plan.id === existingPlanId) ?? null
       : null
-    const proposedPlan: OrchestrationProposedPlan = {
+    return {
       id: existingPlan?.id ?? `plan:${event.threadId}:turn:${turnId}`,
       turnId,
-      text,
-      status: 'proposed',
-      createdAt: existingPlan?.createdAt ?? buffer?.createdAt ?? event.createdAt,
+      text: input.text ?? existingPlan?.text ?? '',
+      status: input.status,
+      createdAt: existingPlan?.createdAt ?? input.createdAt,
       updatedAt: event.createdAt
     }
-    this.engine.upsertProposedPlan(proposedPlan, event.threadId)
-    this.planBuffers.delete(key)
+  }
+
+  private attachPlanArtifact(
+    event: Pick<ProviderRuntimeEvent, 'threadId' | 'turnId' | 'eventId' | 'createdAt'>,
+    plan: OrchestrationProposedPlan
+  ): void {
+    const turnId = event.turnId ?? event.eventId
+    const thread = this.engine.getThread(event.threadId)
+    const existingMessage = [...thread.messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.turnId === turnId)
+    const attachments = upsertPlanAttachment(existingMessage?.attachments, plan)
+    if (existingMessage) {
+      this.engine.upsertMessage(
+        {
+          ...existingMessage,
+          attachments,
+          streaming: false,
+          updatedAt: event.createdAt
+        },
+        event.threadId
+      )
+      return
+    }
+    this.engine.upsertMessage(
+      {
+        id: `assistant:plan:${plan.id}`,
+        role: 'assistant',
+        text: '',
+        attachments,
+        turnId,
+        streaming: false,
+        createdAt: event.createdAt,
+        updatedAt: event.createdAt
+      },
+      event.threadId
+    )
   }
 
   private closeActiveTurn(event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>): void {
@@ -1082,6 +1151,40 @@ function normalizeProposedPlanText(value: string | undefined): string | undefine
     '$1'
   )
   return unwrapped.trim() || undefined
+}
+
+function normalizeStreamingProposedPlanText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  if (!trimmed) return undefined
+  return trimmed
+    .replace(/^<proposed_plan>\s*/i, '')
+    .replace(/\s*<\/proposed_plan>$/i, '')
+    .trim()
+}
+
+function upsertPlanAttachment(
+  attachments: OrchestrationMessage['attachments'],
+  plan: OrchestrationProposedPlan
+): OrchestrationMessage['attachments'] {
+  const nextAttachment = {
+    type: 'plan' as const,
+    planId: plan.id,
+    title: derivePlanTitle(plan.text),
+    status: plan.status
+  }
+  const existing = attachments ?? []
+  const withoutPlan = existing.filter((attachment) => attachment.type !== 'plan')
+  return [...withoutPlan, nextAttachment]
+}
+
+function derivePlanTitle(markdown: string): string {
+  const lines = markdown
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const heading = lines.find((line) => /^#{1,6}\s+/u.test(line))
+  const title = heading ? heading.replace(/^#{1,6}\s+/u, '') : lines[0]
+  return title?.trim() || 'Plan'
 }
 
 function activityBelongsToTurn(

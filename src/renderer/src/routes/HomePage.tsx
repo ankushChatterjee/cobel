@@ -150,6 +150,7 @@ export function HomePage(): React.JSX.Element {
     Map<string, ApprovalDecision>
   >(() => new Map())
   const [todoPanelOpen, setTodoPanelOpen] = useState(false)
+  const autoOpenedLatestPlanIdsRef = useRef(new Map<string, string>())
 
   const activeProject = useMemo(
     () => shell.projects.find((p) => p.id === selection.activeProjectId) ?? null,
@@ -165,6 +166,11 @@ export function HomePage(): React.JSX.Element {
   const activeThreadId = activeChat?.id ?? null
   const activeSidebarScopeKey =
     activeThreadId ?? (activeProject ? `project:${activeProject.id}` : null)
+
+  useEffect(() => {
+    if (!activeSidebarScopeKey) return
+    autoOpenedLatestPlanIdsRef.current.delete(activeSidebarScopeKey)
+  }, [activeSidebarScopeKey, activeThreadId])
   const providerSummaries = modelCatalog?.providers ?? providerProbe ?? []
   const allCatalogModels = useMemo((): ModelInfo[] => {
     if (!modelCatalog) return []
@@ -970,6 +976,17 @@ export function HomePage(): React.JSX.Element {
     [activeSidebarScopeKey]
   )
 
+  const reopenPlanTab = useCallback(
+    (planId: string): void => {
+      updateActiveSidebarState((current) => ({
+        open: true,
+        activeTabId: `plan:${planId}` as SidebarTabId,
+        hiddenPlanIds: (current.hiddenPlanIds ?? []).filter((candidate) => candidate !== planId)
+      }))
+    },
+    [updateActiveSidebarState]
+  )
+
   const openDiffPanel = useCallback(
     (input: { mode?: DiffPanelMode; turnId?: string | null; filePath?: string | null } = {}) => {
       setDiffPanelMode(input.mode ?? 'full')
@@ -1107,15 +1124,20 @@ export function HomePage(): React.JSX.Element {
   )
 
   const sidebarTabs = useMemo(
-    () => [
-      { id: 'review' as const, label: 'Review' },
-      ...(thread?.proposedPlans ?? []).map((plan) => ({
-        id: `plan:${plan.id}` as const,
-        label: derivePlanTitle(plan.text),
-        plan
-      }))
-    ],
-    [thread?.proposedPlans]
+    () => {
+      const hiddenPlanIds = new Set(activeSidebarState?.hiddenPlanIds ?? [])
+      return [
+        { id: 'review' as const, label: 'Review' },
+        ...(thread?.proposedPlans ?? [])
+          .filter((plan) => !hiddenPlanIds.has(plan.id))
+          .map((plan) => ({
+            id: `plan:${plan.id}` as const,
+            label: derivePlanTitle(plan.text),
+            plan
+          }))
+      ]
+    },
+    [activeSidebarState?.hiddenPlanIds, thread?.proposedPlans]
   )
 
   const resolvedSidebarTabId = useMemo(() => {
@@ -1125,18 +1147,23 @@ export function HomePage(): React.JSX.Element {
   }, [activeSidebarState?.activeTabId, sidebarTabs])
 
   useEffect(() => {
-    if (!activeThreadId) return
+    if (!activeThreadId || !activeSidebarScopeKey) return
     if (!latestProposedPlan) return
+    if (latestProposedPlan.status === 'streaming') return
+    if (activeSidebarState?.hiddenPlanIds?.includes(latestProposedPlan.id)) return
     if (latestProposedPlan.turnId !== thread?.latestTurn?.id) return
+    if (autoOpenedLatestPlanIdsRef.current.get(activeSidebarScopeKey) === latestProposedPlan.id) return
     const expectedTabId = `plan:${latestProposedPlan.id}` as SidebarTabId
-    if (activeSidebarState?.open && activeSidebarState.activeTabId === expectedTabId) return
+    autoOpenedLatestPlanIdsRef.current.set(activeSidebarScopeKey, latestProposedPlan.id)
+    if (activeSidebarState?.activeTabId === expectedTabId) return
     updateActiveSidebarState(() => ({
       open: true,
       activeTabId: expectedTabId
     }))
   }, [
+    activeSidebarScopeKey,
     activeSidebarState?.activeTabId,
-    activeSidebarState?.open,
+    activeSidebarState?.hiddenPlanIds,
     activeThreadId,
     latestProposedPlan,
     thread?.latestTurn?.id,
@@ -1292,17 +1319,18 @@ export function HomePage(): React.JSX.Element {
                 latestTurnId={thread?.latestTurn?.id ?? null}
                 providerName={thread?.session?.providerName ?? null}
                 expandedToolIds={expandedToolIds}
-                  submittingApprovals={submittingApprovals}
-                  checkpointByAssistantMessageId={checkpointByAssistantMessageId}
-                  onToggleTool={toggleToolExpanded}
-                  onApprove={respondToApproval}
-                  onAnswer={respondToUserInput}
-                  onPreviewDiff={showDiffPreview}
-                  onOpenDiff={(turnId, filePath) =>
-                    openDiffPanel({ mode: turnId ? 'turn' : 'full', turnId, filePath })
-                  }
-                  onRevert={requestRevertToCheckpoint}
-                />
+                submittingApprovals={submittingApprovals}
+                checkpointByAssistantMessageId={checkpointByAssistantMessageId}
+                onOpenPlan={reopenPlanTab}
+                onToggleTool={toggleToolExpanded}
+                onApprove={respondToApproval}
+                onAnswer={respondToUserInput}
+                onPreviewDiff={showDiffPreview}
+                onOpenDiff={(turnId, filePath) =>
+                  openDiffPanel({ mode: turnId ? 'turn' : 'full', turnId, filePath })
+                }
+                onRevert={requestRevertToCheckpoint}
+              />
               )}
               {sessionError ? <SessionErrorBanner message={sessionError} /> : null}
               {error ? <p className="error-line">{errorMessageForDisplay(error)}</p> : null}
@@ -1362,6 +1390,24 @@ export function HomePage(): React.JSX.Element {
               activeTabId: tabId
             }))
           }
+          onCloseTab={(tabId) => {
+            if (!tabId.startsWith('plan:')) return
+            const planId = tabId.slice('plan:'.length)
+            updateActiveSidebarState((current) => {
+              const nextHiddenPlanIds = Array.from(
+                new Set([...(current.hiddenPlanIds ?? []), planId])
+              )
+              const nextActiveTabId =
+                current.activeTabId === tabId
+                  ? ('review' as SidebarTabId)
+                  : current.activeTabId
+              return {
+                ...current,
+                activeTabId: nextActiveTabId,
+                hiddenPlanIds: nextHiddenPlanIds
+              }
+            })
+          }}
           onClose={() => updateActiveSidebarState((current) => ({ ...current, open: false }))}
           resizeLabel="Resize review panel"
           resizeMin={minDiffPanelWidth}

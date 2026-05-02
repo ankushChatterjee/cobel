@@ -1,7 +1,15 @@
 import { memo, useMemo } from 'react'
 import type { OrchestrationCheckpointSummary, ProviderId } from '../../../../../shared/agent'
 import { groupTranscriptItems } from '../threadUtils'
-import type { ApprovalDecision, OnAnswer, OnApprove, OnOpenDiff, OnPreviewDiff, TranscriptItem } from '../types'
+import type {
+  ApprovalDecision,
+  OnAnswer,
+  OnApprove,
+  OnOpenDiff,
+  OnOpenPlan,
+  OnPreviewDiff,
+  TranscriptItem
+} from '../types'
 import { ThinkingRow } from './MessageRow'
 import { ToolGroup } from './ToolGroup'
 import { ToolLine } from './ToolLine'
@@ -17,6 +25,7 @@ export const TranscriptList = memo(function TranscriptList({
   expandedToolIds,
   submittingApprovals,
   checkpointByAssistantMessageId,
+  onOpenPlan,
   onToggleTool,
   onApprove,
   onAnswer,
@@ -33,6 +42,7 @@ export const TranscriptList = memo(function TranscriptList({
   expandedToolIds: Set<string>
   submittingApprovals: Map<string, ApprovalDecision>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
+  onOpenPlan: OnOpenPlan
   onToggleTool: (activityId: string) => void
   onApprove: OnApprove
   onAnswer: OnAnswer
@@ -55,6 +65,7 @@ export const TranscriptList = memo(function TranscriptList({
               latestTurnId={latestTurnId}
               submittingApprovals={submittingApprovals}
               checkpointByAssistantMessageId={checkpointByAssistantMessageId}
+              onOpenPlan={onOpenPlan}
               onApprove={onApprove}
               onAnswer={onAnswer}
               onPreviewDiff={onPreviewDiff}

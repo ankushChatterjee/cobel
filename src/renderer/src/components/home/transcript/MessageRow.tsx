@@ -1,6 +1,12 @@
 import { ChevronDown } from 'lucide-react'
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import type { OrchestrationCheckpointSummary, OrchestrationMessage, CheckpointFileChange, OrchestrationThreadActivity } from '../../../../../shared/agent'
+import type {
+  ChatAttachment,
+  OrchestrationCheckpointSummary,
+  OrchestrationMessage,
+  CheckpointFileChange,
+  OrchestrationThreadActivity
+} from '../../../../../shared/agent'
 import { readPayloadString } from '../activityUtils'
 import { ChangedFilePills } from '../../diff/DiffReview'
 import { MarkdownMessage } from '../MarkdownMessage'
@@ -121,6 +127,7 @@ export const MessageRow = memo(function MessageRow({
   message,
   workDurationMs,
   checkpointSummary,
+  onOpenPlan,
   onPreviewDiff,
   onOpenDiff,
   onRevert
@@ -128,6 +135,7 @@ export const MessageRow = memo(function MessageRow({
   message: OrchestrationMessage
   workDurationMs: number | null
   checkpointSummary: OrchestrationCheckpointSummary | null
+  onOpenPlan: (planId: string) => void
   onPreviewDiff: OnPreviewDiff
   onOpenDiff: OnOpenDiff
   onRevert: (turnCount: number) => Promise<void>
@@ -150,7 +158,10 @@ export const MessageRow = memo(function MessageRow({
       </div>
       {isAssistant ? (
         <>
-          <MarkdownMessage text={message.text} isStreaming={message.streaming} />
+          {message.text.trim().length > 0 ? (
+            <MarkdownMessage text={message.text} isStreaming={message.streaming} />
+          ) : null}
+          <MessageAttachments attachments={message.attachments} onOpenPlan={onOpenPlan} />
           {checkpointSummary ? (
             <ChangedFilePills
               summary={checkpointSummary}
@@ -169,5 +180,52 @@ export const MessageRow = memo(function MessageRow({
         <p>{message.text}</p>
       )}
     </article>
+  )
+})
+
+const MessageAttachments = memo(function MessageAttachments({
+  attachments,
+  onOpenPlan
+}: {
+  attachments: ChatAttachment[] | undefined
+  onOpenPlan: (planId: string) => void
+}): React.JSX.Element | null {
+  if (!attachments || attachments.length === 0) return null
+  return (
+    <div className="message-attachments">
+      {attachments.map((attachment) => {
+        if (attachment.type === 'image') {
+          return (
+            <img
+              key={attachment.url}
+              className="message-image-attachment"
+              src={attachment.url}
+              alt=""
+            />
+          )
+        }
+        return (
+          <button
+            key={attachment.planId}
+            type="button"
+            className={`message-plan-attachment ${attachment.status === 'streaming' ? 'is-updating' : ''}`}
+            onClick={() => onOpenPlan(attachment.planId)}
+          >
+            <span className="message-plan-attachment-label">Plan</span>
+            <strong>{attachment.title}</strong>
+            <span className="message-plan-attachment-meta">
+              {attachment.status === 'streaming' ? (
+                <>
+                  <span className="thinking-spinner" aria-hidden="true" />
+                  <span>Updating…</span>
+                </>
+              ) : (
+                'Open in sidebar'
+              )}
+            </span>
+          </button>
+        )
+      })}
+    </div>
   )
 })

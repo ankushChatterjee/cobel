@@ -46,7 +46,12 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   async sendTurn(input: SendTurnInput): Promise<{ turnId: string; resumeCursor?: unknown }> {
-    return this.manager.sendTurn(input)
+    return this.manager.sendTurn({
+      ...input,
+      attachments: input.attachments?.filter(
+        (attachment): attachment is { type: 'image'; url: string } => attachment.type === 'image'
+      )
+    })
   }
 
   async generateThreadTitle(input: {

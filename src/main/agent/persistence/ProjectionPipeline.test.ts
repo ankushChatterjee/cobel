@@ -184,4 +184,123 @@ describe('ProjectionPipeline', () => {
 
     expect(snapshots.getThreadDetail('thread-todo')?.todoLists).toEqual([])
   })
+
+  it('updates persisted proposed plans with the latest turn id and thread updated_at', () => {
+    const createdAt = '2026-04-19T00:00:00.000Z'
+    const updatedAt = '2026-04-19T00:00:05.000Z'
+    const threadSeq = eventStore.append({
+      eventId: 'thread-plan',
+      aggregateKind: 'thread',
+      streamId: 'thread-plan',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: createdAt,
+      actorKind: 'system',
+      payload: { threadId: 'thread-plan', projectId: 'proj-1', title: 'Plan thread' }
+    })
+    projections.apply({
+      sequence: threadSeq,
+      eventId: 'thread-plan',
+      aggregateKind: 'thread',
+      streamId: 'thread-plan',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: createdAt,
+      actorKind: 'system',
+      payload: { threadId: 'thread-plan', projectId: 'proj-1', title: 'Plan thread' }
+    })
+
+    const firstPlanSeq = eventStore.append({
+      eventId: 'plan-1',
+      aggregateKind: 'thread',
+      streamId: 'thread-plan',
+      streamVersion: 2,
+      eventType: 'thread.proposed-plan-upserted',
+      occurredAt: createdAt,
+      actorKind: 'system',
+      payload: {
+        proposedPlan: {
+          id: 'plan:thread-plan:turn:turn-1',
+          turnId: 'turn-1',
+          text: 'Original plan',
+          status: 'proposed',
+          createdAt,
+          updatedAt: createdAt
+        }
+      }
+    })
+    projections.apply({
+      sequence: firstPlanSeq,
+      eventId: 'plan-1',
+      aggregateKind: 'thread',
+      streamId: 'thread-plan',
+      streamVersion: 2,
+      eventType: 'thread.proposed-plan-upserted',
+      occurredAt: createdAt,
+      actorKind: 'system',
+      payload: {
+        proposedPlan: {
+          id: 'plan:thread-plan:turn:turn-1',
+          turnId: 'turn-1',
+          text: 'Original plan',
+          status: 'proposed',
+          createdAt,
+          updatedAt: createdAt
+        }
+      }
+    })
+
+    const refinedPlanSeq = eventStore.append({
+      eventId: 'plan-2',
+      aggregateKind: 'thread',
+      streamId: 'thread-plan',
+      streamVersion: 3,
+      eventType: 'thread.proposed-plan-upserted',
+      occurredAt: updatedAt,
+      actorKind: 'system',
+      payload: {
+        proposedPlan: {
+          id: 'plan:thread-plan:turn:turn-1',
+          turnId: 'turn-2',
+          text: 'Refined plan',
+          status: 'proposed',
+          createdAt,
+          updatedAt
+        }
+      }
+    })
+    projections.apply({
+      sequence: refinedPlanSeq,
+      eventId: 'plan-2',
+      aggregateKind: 'thread',
+      streamId: 'thread-plan',
+      streamVersion: 3,
+      eventType: 'thread.proposed-plan-upserted',
+      occurredAt: updatedAt,
+      actorKind: 'system',
+      payload: {
+        proposedPlan: {
+          id: 'plan:thread-plan:turn:turn-1',
+          turnId: 'turn-2',
+          text: 'Refined plan',
+          status: 'proposed',
+          createdAt,
+          updatedAt
+        }
+      }
+    })
+
+    const detail = snapshots.getThreadDetail('thread-plan')
+    expect(detail?.proposedPlans).toEqual([
+      expect.objectContaining({
+        id: 'plan:thread-plan:turn:turn-1',
+        turnId: 'turn-2',
+        text: 'Refined plan',
+        updatedAt
+      })
+    ])
+
+    const shellThread = snapshots.getShellSnapshot().threads.find((thread) => thread.id === 'thread-plan')
+    expect(shellThread?.updatedAt).toBe(updatedAt)
+  })
 })

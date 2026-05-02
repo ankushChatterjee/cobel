@@ -1417,6 +1417,7 @@ function formatProbeFailure(message: string, serverUrl: string): string {
 }
 
 function resolveComposerAttachment(attachment: ChatAttachment): string | null {
+  if (attachment.type !== 'image') return null
   try {
     if (attachment.url.startsWith('file:')) {
       return fileURLToPath(attachment.url)

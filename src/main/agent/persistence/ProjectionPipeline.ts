@@ -307,7 +307,10 @@ export class ProjectionPipeline {
         INSERT INTO projection_thread_proposed_plans(plan_id, thread_id, turn_id, text, status, created_at, updated_at)
         VALUES(@plan_id, @thread_id, @turn_id, @text, @status, @created_at, @updated_at)
         ON CONFLICT(plan_id) DO UPDATE SET
-          text = @text, status = @status, updated_at = @updated_at
+          turn_id = @turn_id,
+          text = @text,
+          status = @status,
+          updated_at = @updated_at
       `
       )
       .run({
@@ -319,6 +322,9 @@ export class ProjectionPipeline {
         created_at: str(plan['createdAt']) ?? e.occurredAt,
         updated_at: str(plan['updatedAt']) ?? e.occurredAt
       })
+    this.db
+      .prepare(`UPDATE projection_threads SET updated_at = ? WHERE thread_id = ?`)
+      .run(e.occurredAt, e.streamId)
   }
 
   private applyTodoListUpserted(e: KnownEvent): void {

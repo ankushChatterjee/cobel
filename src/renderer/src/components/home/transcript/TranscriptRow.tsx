@@ -1,7 +1,15 @@
 import { memo } from 'react'
 import type { OrchestrationCheckpointSummary } from '../../../../../shared/agent'
 import { isPendingPrompt, isRuntimeError, isThinkingActivity } from '../activityUtils'
-import type { ApprovalDecision, OnAnswer, OnApprove, OnOpenDiff, OnPreviewDiff, TranscriptItem } from '../types'
+import type {
+  ApprovalDecision,
+  OnAnswer,
+  OnApprove,
+  OnOpenDiff,
+  OnOpenPlan,
+  OnPreviewDiff,
+  TranscriptItem
+} from '../types'
 import { ActivityRow } from './ActivityRow'
 import { MessageRow, ThinkingRow } from './MessageRow'
 import { PendingPrompt } from './PendingPrompt'
@@ -14,6 +22,7 @@ export const TranscriptRow = memo(function TranscriptRow({
   latestTurnId,
   submittingApprovals,
   checkpointByAssistantMessageId,
+  onOpenPlan,
   onApprove,
   onAnswer,
   onPreviewDiff,
@@ -26,6 +35,7 @@ export const TranscriptRow = memo(function TranscriptRow({
   latestTurnId: string | null
   submittingApprovals: Map<string, ApprovalDecision>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
+  onOpenPlan: OnOpenPlan
   onApprove: OnApprove
   onAnswer: OnAnswer
   onPreviewDiff: OnPreviewDiff
@@ -38,6 +48,7 @@ export const TranscriptRow = memo(function TranscriptRow({
         message={item.message}
         workDurationMs={item.workDurationMs}
         checkpointSummary={checkpointByAssistantMessageId.get(item.message.id) ?? null}
+        onOpenPlan={onOpenPlan}
         onPreviewDiff={onPreviewDiff}
         onOpenDiff={onOpenDiff}
         onRevert={onRevert}

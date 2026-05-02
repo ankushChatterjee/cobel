@@ -34,6 +34,7 @@ export type SidebarTabId = 'review' | `plan:${string}`
 export interface ThreadSidebarState {
   open: boolean
   activeTabId: SidebarTabId | null
+  hiddenPlanIds?: string[]
 }
 
 export type MessageTranscriptItem = {
@@ -79,3 +80,4 @@ export type OnPreviewDiff = (
 ) => void
 
 export type OnOpenDiff = (turnId: string | null, filePath?: string) => void
+export type OnOpenPlan = (planId: string) => void
