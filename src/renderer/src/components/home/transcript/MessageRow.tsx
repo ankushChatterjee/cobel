@@ -28,101 +28,87 @@ function attachmentCountLabel(count: number): string {
   return count === 1 ? '1 attachment' : `${count} attachments`
 }
 
+function isReasoningTerminal(activity: OrchestrationThreadActivity): boolean {
+  return (
+    activity.resolved === true ||
+    activity.kind === 'task.completed' ||
+    readPayloadString(activity.payload, 'status') === 'completed'
+  )
+}
+
 export const ThinkingRow = memo(function ThinkingRow({
   activities,
-  activeTurnId,
-  turnInProgress,
-  latestTurnId
+  turnInProgress = false
 }: {
   activities: OrchestrationThreadActivity[]
-  activeTurnId?: string | null
+  /** When false, reasoning rows are treated as finished (collapsed) for replay / idle UI. */
   turnInProgress?: boolean
-  latestTurnId?: string | null
 }): React.JSX.Element | null {
   if (activities.length === 0) {
     return null
   }
-  const belongsToActiveTurn =
-    turnInProgress === true &&
-    activeTurnId != null &&
-    activities.some((activity) => activity.turnId === activeTurnId)
-  const belongsToKnownCompletedTurn =
-    turnInProgress !== true &&
-    latestTurnId != null &&
-    activities.some((activity) => activity.turnId === latestTurnId)
-  const isComplete =
-    belongsToKnownCompletedTurn ||
-    (!belongsToActiveTurn && latestTurnId != null) ||
-    activities.every(
-      (activity) =>
-        activity.resolved === true ||
-        activity.kind === 'task.completed' ||
-        readPayloadString(activity.payload, 'status') === 'completed'
-    )
+
+  const allTerminal = activities.every(isReasoningTerminal)
+  const isComplete = !turnInProgress || allTerminal
+
   const reasoningText = combinedReasoningText(activities)
-  const hasReasoningBody = Boolean(reasoningText && reasoningText.trim().length > 0)
-  const statusLabel = isComplete ? 'thought' : 'thinking…'
+  const hasReasoningBody = reasoningText.trim().length > 0
+  // Item-only reasoning (e.g. Codex) often has no `reasoning_text` deltas — show a spinner since the stream carries no text.
+  const showReasoningHeaderSpinner = !isComplete && !hasReasoningBody
   const contentId = useId()
-  const [reasoningExpanded, setReasoningExpanded] = useState(() => !isComplete)
   const reasoningBodyRef = useRef<HTMLDivElement | null>(null)
+  const [userExpandedAfterComplete, setUserExpandedAfterComplete] = useState(false)
 
   useEffect(() => {
-    if (isComplete) setReasoningExpanded(false)
+    if (isComplete) setUserExpandedAfterComplete(false)
   }, [isComplete])
 
-  useLayoutEffect(() => {
-    if (isComplete || !reasoningExpanded || !reasoningText) return
-    const el = reasoningBodyRef.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-  }, [isComplete, reasoningExpanded, reasoningText])
+  // Open while streaming; after streaming ends, stay collapsed until the user expands again.
+  const expanded = !isComplete || userExpandedAfterComplete
 
-  if (hasReasoningBody) {
-    return (
-      <article
-        className={`thinking-row ${isComplete ? 'is-complete' : 'is-active'} has-reasoning`}
-        aria-label="Model reasoning"
-        aria-busy={!isComplete ? true : undefined}
-      >
-        <button
-          type="button"
-          className="transcript-reasoning-toggle"
-          aria-expanded={reasoningExpanded}
-          aria-controls={contentId}
-          onClick={() => setReasoningExpanded((open) => !open)}
-        >
-          {!isComplete ? <span className="thinking-spinner" aria-hidden="true" /> : null}
-          <span className="transcript-reasoning-toggle-label">Reasoning</span>
-          <ChevronDown
-            size={13}
-            strokeWidth={1.85}
-            className={`transcript-reasoning-chevron${reasoningExpanded ? ' is-open' : ''}`}
-            aria-hidden
-          />
-        </button>
-        <div
-          id={contentId}
-          className={`transcript-reasoning-shell${reasoningExpanded ? ' is-expanded' : ''}`}
-        >
-          <div className="transcript-reasoning-measure">
-            <div ref={reasoningBodyRef} className="transcript-reasoning-body">
-              {reasoningText}
-            </div>
-          </div>
-        </div>
-      </article>
-    )
-  }
+  useLayoutEffect(() => {
+    if (isComplete || !expanded) return
+    const el = reasoningBodyRef.current
+    if (!el || !reasoningText.trim()) return
+    el.scrollTop = el.scrollHeight
+  }, [isComplete, expanded, reasoningText])
 
   return (
     <article
-      className={`thinking-row ${isComplete ? 'is-complete' : 'is-active'}`}
-      aria-label={isComplete ? 'Thought' : 'Thinking'}
+      className={`thinking-row ${isComplete ? 'is-complete' : 'is-active'} has-reasoning`}
+      aria-label="Model reasoning"
+      aria-busy={!isComplete ? true : undefined}
     >
-      <span className="thinking-row-status">
-        {!isComplete && <span className="thinking-spinner" aria-hidden="true" />}
-        <span>{statusLabel}</span>
-      </span>
+      <button
+        type="button"
+        className="transcript-reasoning-toggle"
+        aria-expanded={expanded}
+        aria-controls={contentId}
+        onClick={() => {
+          if (isComplete) setUserExpandedAfterComplete((open) => !open)
+        }}
+      >
+        {showReasoningHeaderSpinner ? (
+          <span className="thinking-spinner" aria-hidden="true" />
+        ) : null}
+        <span className="transcript-reasoning-toggle-label">Reasoning</span>
+        <ChevronDown
+          size={13}
+          strokeWidth={1.85}
+          className={`transcript-reasoning-chevron${expanded ? ' is-open' : ''}`}
+          aria-hidden
+        />
+      </button>
+      <div
+        id={contentId}
+        className={`transcript-reasoning-shell${expanded ? ' is-expanded' : ''}`}
+      >
+        <div className="transcript-reasoning-measure">
+          <div ref={reasoningBodyRef} className="transcript-reasoning-body">
+            {reasoningText}
+          </div>
+        </div>
+      </div>
     </article>
   )
 })

@@ -6,6 +6,10 @@ import {
   groupTranscriptItems,
   isOrchestrationModelTurnInProgress,
   mergePendingUserMessages,
+  selectPendingRequestIds,
+  selectRunningToolItemIds,
+  selectTailIndicator,
+  selectTranscriptTailRowVisible,
   shouldShowTranscriptEndThinkingRow,
   snapshotMergeClearsPendingTurnStart
 } from './threadUtils'
@@ -698,5 +702,104 @@ describe('groupTranscriptItems', () => {
 
     expect(groups).toHaveLength(3)
     expect(groups.map((group) => group.kind)).toEqual(['non-tool', 'non-tool', 'non-tool'])
+  })
+})
+
+describe('activeTurn selectors', () => {
+  const threadWithActiveTurn = (activeTurn: OrchestrationThread['activeTurn']): OrchestrationThread => ({
+    ...createEmptyThread('th', t0),
+    activeTurn
+  })
+
+  it('selectTailIndicator returns none when activeTurn is null', () => {
+    expect(selectTailIndicator(threadWithActiveTurn(null))).toBe('none')
+  })
+
+  it('selectTailIndicator returns none for terminal phases', () => {
+    for (const phase of ['completed', 'failed', 'interrupted', 'idle'] as const) {
+      expect(
+        selectTailIndicator(
+          threadWithActiveTurn({
+            turnId: 't1',
+            phase,
+            activeItemIds: [],
+            visibleIndicator: 'thinking',
+            startedAt: t0,
+            updatedAt: t0
+          })
+        )
+      ).toBe('none')
+    }
+  })
+
+  it('selectTailIndicator returns visibleIndicator for in-flight phases', () => {
+    expect(
+      selectTailIndicator(
+        threadWithActiveTurn({
+          turnId: 't1',
+          phase: 'thinking',
+          activeItemIds: [],
+          visibleIndicator: 'thinking',
+          startedAt: t0,
+          updatedAt: t0
+        })
+      )
+    ).toBe('thinking')
+  })
+
+  it('selectRunningToolItemIds excludes approval slots', () => {
+    expect(
+      selectRunningToolItemIds(
+        threadWithActiveTurn({
+          turnId: 't1',
+          phase: 'tool_running',
+          activeItemIds: ['tool-a', 'approval:req-1', 'tool-b'],
+          visibleIndicator: 'tool',
+          startedAt: t0,
+          updatedAt: t0
+        })
+      )
+    ).toEqual(['tool-a', 'tool-b'])
+  })
+
+  it('selectPendingRequestIds returns request ids from approval slots', () => {
+    expect(
+      selectPendingRequestIds(
+        threadWithActiveTurn({
+          turnId: 't1',
+          phase: 'waiting_for_input',
+          activeItemIds: ['tool-a', 'approval:req-1'],
+          visibleIndicator: 'approval',
+          startedAt: t0,
+          updatedAt: t0
+        })
+      )
+    ).toEqual(['req-1'])
+  })
+
+  it('does not show the tool tail row when a live tool line is already visible', () => {
+    expect(
+      selectTranscriptTailRowVisible({
+        ...threadWithActiveTurn({
+          turnId: 't1',
+          phase: 'tool_running',
+          activeItemIds: ['tool-a'],
+          visibleIndicator: 'tool',
+          startedAt: t0,
+          updatedAt: t0
+        }),
+        activities: [
+          {
+            id: 'tool:tool-a',
+            kind: 'tool.started',
+            tone: 'tool',
+            summary: 'Shell',
+            payload: { itemType: 'command_execution', status: 'inProgress' },
+            turnId: 't1',
+            createdAt: t0
+          }
+        ]
+      })
+    ).toBe(false)
   })
 })

@@ -41,6 +41,7 @@ export function createTestThread(
     todoLists: [],
     session: null,
     latestTurn: null,
+    activeTurn: null,
     checkpoints: [],
     createdAt: now,
     updatedAt: now,
@@ -65,6 +66,20 @@ const agentApiMock: AgentApi = {
           streaming: false,
           sequence,
           createdAt: input.createdAt,
+          updatedAt: input.createdAt
+        },
+        createdAt: input.createdAt
+      })
+      emitThreadEvent(input.threadId, {
+        sequence: nextSequence(),
+        type: 'thread.active-turn-set',
+        threadId: input.threadId,
+        activeTurn: {
+          turnId: `pending:${input.commandId}`,
+          phase: 'queued',
+          activeItemIds: [],
+          visibleIndicator: 'exploring',
+          startedAt: input.createdAt,
           updatedAt: input.createdAt
         },
         createdAt: input.createdAt

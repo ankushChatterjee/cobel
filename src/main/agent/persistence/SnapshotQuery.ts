@@ -1,5 +1,6 @@
 import type { Database } from 'better-sqlite3'
 import type {
+  ActiveTurnProjection,
   OrchestrationMessage,
   OrchestrationThread,
   OrchestrationThreadActivity,
@@ -101,6 +102,7 @@ interface ThreadRow {
   cwd: string | null
   branch: string | null
   latest_turn_id: string | null
+  active_turn_json: string | null
   created_at: string
   updated_at: string
   archived_at: string | null
@@ -216,11 +218,21 @@ export class SnapshotQuery {
       todoLists,
       session,
       latestTurn,
+      activeTurn: parseActiveTurnProjection(threadRow.active_turn_json),
       checkpoints,
       createdAt: threadRow.created_at,
       updatedAt: threadRow.updated_at,
       archivedAt: threadRow.archived_at ?? null
     }
+  }
+}
+
+function parseActiveTurnProjection(json: string | null | undefined): ActiveTurnProjection | null {
+  if (!json) return null
+  try {
+    return JSON.parse(json) as ActiveTurnProjection
+  } catch {
+    return null
   }
 }
 

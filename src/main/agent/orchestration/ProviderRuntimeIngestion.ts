@@ -1,4 +1,5 @@
 import type {
+  ActiveTurnProjection,
   CanonicalItemType,
   OrchestrationMessage,
   OrchestrationProposedPlan,
@@ -48,6 +49,7 @@ export class ProviderRuntimeIngestion {
   private readonly streamedAssistantItems = new Set<string>()
   private readonly planBuffers = new Map<string, PlanBufferState>()
   private readonly completedTurns = new Map<string, 'completed' | 'failed'>()
+  private readonly turnFinalizeOutcome = new Map<string, 'completed' | 'failed' | 'interrupted'>()
   private draining = false
   private drainPromise: Promise<void> = Promise.resolve()
 
@@ -75,6 +77,252 @@ export class ProviderRuntimeIngestion {
     } finally {
       this.draining = false
     }
+  }
+
+  private eventMatchesActiveTurn(
+    event: Pick<ProviderRuntimeEvent, 'turnId'>,
+    activeTurn: ActiveTurnProjection
+  ): boolean {
+    if (!event.turnId) return true
+    if (event.turnId === activeTurn.turnId) return true
+    if (activeTurn.turnId.startsWith('pending:')) return true
+    return false
+  }
+
+  private patchActiveTurn(
+    threadId: string,
+    updater: (prev: ActiveTurnProjection | null) => ActiveTurnProjection | null,
+    createdAt: string
+  ): void {
+    const prev = this.engine.getThread(threadId).activeTurn ?? null
+    const next = updater(prev)
+    if (activeTurnProjectionEquals(prev, next)) return
+    this.engine.setActiveTurn({ threadId, activeTurn: next, createdAt })
+  }
+
+  /** Re-derive tail phase/indicator from thread state (streaming assistant, tools, thinking, plan). */
+  private recomputeIdleTailSurface(threadId: string, createdAt: string): void {
+    this.patchActiveTurn(
+      threadId,
+      (prev) => {
+        if (!prev) return prev
+        return this.reconcileActiveTurnTail(threadId, prev, createdAt)
+      },
+      createdAt
+    )
+  }
+
+  private reconcileActiveTurnTail(
+    threadId: string,
+    base: ActiveTurnProjection,
+    createdAt: string
+  ): ActiveTurnProjection {
+    if (
+      base.phase === 'completed' ||
+      base.phase === 'failed' ||
+      base.phase === 'interrupted' ||
+      base.phase === 'idle' ||
+      base.phase === 'finalizing' ||
+      base.phase === 'queued'
+    ) {
+      return base
+    }
+    if (base.phase === 'waiting_for_input' && base.visibleIndicator === 'approval') {
+      return base
+    }
+    if (base.turnId.startsWith('pending:')) {
+      return { ...base, visibleIndicator: 'exploring', updatedAt: createdAt }
+    }
+
+    const thread = this.engine.getThread(threadId)
+    const toolSlots = base.activeItemIds.filter((id) => !id.startsWith('approval:'))
+    if (toolSlots.length > 0) {
+      return { ...base, phase: 'tool_running', visibleIndicator: 'tool', updatedAt: createdAt }
+    }
+    const approvalSlots = base.activeItemIds.filter((id) => id.startsWith('approval:'))
+    if (approvalSlots.length > 0) {
+      return {
+        ...base,
+        phase: 'waiting_for_input',
+        visibleIndicator: 'approval',
+        updatedAt: createdAt
+      }
+    }
+    if (this.turnHasUnresolvedReasoningThinking(thread, base.turnId)) {
+      return { ...base, phase: 'thinking', visibleIndicator: 'thinking', updatedAt: createdAt }
+    }
+    if (this.turnHasStreamingAssistant(thread, base.turnId)) {
+      return { ...base, phase: 'streaming', visibleIndicator: 'assistant_stream', updatedAt: createdAt }
+    }
+    if (this.turnHasStreamingPlan(thread, base.turnId)) {
+      return { ...base, phase: 'streaming', visibleIndicator: 'plan', updatedAt: createdAt }
+    }
+
+    const phase: ActiveTurnProjection['phase'] = base.phase === 'starting' ? 'starting' : 'streaming'
+    return { ...base, phase, visibleIndicator: 'exploring', updatedAt: createdAt }
+  }
+
+  private turnHasUnresolvedReasoningThinking(
+    thread: ReturnType<OrchestrationEngine['getThread']>,
+    turnId: string
+  ): boolean {
+    const sessionTurnId = thread.session?.activeTurnId
+    for (const activity of thread.activities) {
+      if (!activity.id.startsWith('thinking:')) continue
+      if (activity.resolved === true) continue
+      if (readPayloadString(activity.payload, 'itemType') !== 'reasoning') continue
+      const aTurn = activity.turnId
+      if (aTurn) {
+        if (aTurn !== turnId) continue
+      } else if (sessionTurnId !== turnId) {
+        continue
+      }
+      return true
+    }
+    return false
+  }
+
+  private turnHasStreamingAssistant(
+    thread: ReturnType<OrchestrationEngine['getThread']>,
+    turnId: string
+  ): boolean {
+    return thread.messages.some(
+      (m) => m.role === 'assistant' && m.turnId === turnId && m.streaming === true
+    )
+  }
+
+  private turnHasStreamingPlan(
+    thread: ReturnType<OrchestrationEngine['getThread']>,
+    turnId: string
+  ): boolean {
+    return thread.proposedPlans.some((p) => p.turnId === turnId && p.status === 'streaming')
+  }
+
+  private applyTurnCompletedUi(
+    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
+  ): void {
+    const threadId = event.threadId
+    const thread = this.engine.getThread(threadId)
+    const activeTurnId = thread.session?.activeTurnId
+    if (activeTurnId && event.turnId && activeTurnId !== event.turnId) return
+    const prev = thread.activeTurn
+    if (!prev) return
+
+    const mapped = mapTurnCompletedPhase(event.payload.state)
+    this.turnFinalizeOutcome.set(threadId, mapped)
+    const ids = [...prev.activeItemIds]
+    if (ids.length === 0) {
+      this.turnFinalizeOutcome.delete(threadId)
+      this.engine.setActiveTurn({
+        threadId,
+        activeTurn: {
+          ...prev,
+          phase: mapped,
+          visibleIndicator: 'none',
+          activeItemIds: [],
+          updatedAt: event.createdAt
+        },
+        createdAt: event.createdAt
+      })
+      return
+    }
+    this.engine.setActiveTurn({
+      threadId,
+      activeTurn: {
+        ...prev,
+        phase: 'finalizing',
+        visibleIndicator: 'tool',
+        activeItemIds: ids,
+        updatedAt: event.createdAt
+      },
+      createdAt: event.createdAt
+    })
+  }
+
+  private onToolItemLifecycle(
+    event: Extract<
+      ProviderRuntimeEvent,
+      { type: 'item.started' | 'item.updated' | 'item.completed' }
+    >
+  ): void {
+    if (!isTrackedToolItemType(event.payload.itemType)) return
+    const itemId = event.itemId
+    if (!itemId) return
+    this.patchActiveTurn(
+      event.threadId,
+      (prev) => {
+        if (!prev || !this.eventMatchesActiveTurn(event, prev)) return prev
+        if (
+          prev.phase === 'completed' ||
+          prev.phase === 'failed' ||
+          prev.phase === 'interrupted'
+        ) {
+          return prev
+        }
+        if (event.type === 'item.started') {
+          const ids = prev.activeItemIds.includes(itemId)
+            ? prev.activeItemIds
+            : [...prev.activeItemIds, itemId]
+          return {
+            ...prev,
+            phase: 'tool_running',
+            visibleIndicator: 'tool',
+            activeItemIds: ids,
+            updatedAt: event.createdAt
+          }
+        }
+        if (event.type === 'item.completed') {
+          const ids = prev.activeItemIds.filter((id) => id !== itemId)
+          return this.advanceAfterToolItemChange(event.threadId, prev, ids, event.createdAt)
+        }
+        // item.updated: re-derive tail state. OpenCode sometimes sends a stale `running` update
+        // after `completed`; blindly forcing tool_running leaves an empty activeItemIds stuck
+        // in a "tool running" UI phase.
+        return this.reconcileActiveTurnTail(event.threadId, { ...prev, updatedAt: event.createdAt }, event.createdAt)
+      },
+      event.createdAt
+    )
+  }
+
+  private advanceAfterToolItemChange(
+    threadId: string,
+    prev: ActiveTurnProjection,
+    ids: string[],
+    createdAt: string
+  ): ActiveTurnProjection {
+    const outcome = this.turnFinalizeOutcome.get(threadId)
+    if (prev.phase === 'finalizing' && ids.length === 0 && outcome) {
+      this.turnFinalizeOutcome.delete(threadId)
+      return {
+        ...prev,
+        phase: outcome,
+        visibleIndicator: 'none',
+        activeItemIds: [],
+        updatedAt: createdAt
+      }
+    }
+    const draft: ActiveTurnProjection = {
+      ...prev,
+      activeItemIds: ids,
+      updatedAt: createdAt
+    }
+    return this.reconcileActiveTurnTail(threadId, draft, createdAt)
+  }
+
+  private toolOutputActivityId(
+    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
+  ): string {
+    if (event.itemId) return `tool:${event.itemId}`
+    const at = this.engine.getThread(event.threadId).activeTurn
+    if (at && at.activeItemIds.length > 0) {
+      for (let i = at.activeItemIds.length - 1; i >= 0; i -= 1) {
+        const slot = at.activeItemIds[i]!
+        if (!slot.startsWith('approval:')) {
+          return `tool:${slot}`
+        }
+      }
+    }
+    return `tool:${event.eventId}`
   }
 
   private ingest(event: ProviderRuntimeEvent): void {
@@ -111,6 +359,22 @@ export class ProviderRuntimeIngestion {
         return
 
       case 'turn.started':
+        this.turnFinalizeOutcome.delete(event.threadId)
+        {
+          const turnId = event.turnId ?? event.eventId
+          this.patchActiveTurn(
+            event.threadId,
+            (prev) => ({
+              turnId,
+              phase: 'starting',
+              activeItemIds: [],
+              visibleIndicator: 'exploring',
+              startedAt: prev?.startedAt ?? event.createdAt,
+              updatedAt: event.createdAt
+            }),
+            event.createdAt
+          )
+        }
         const currentModel = this.engine.getThread(event.threadId).session?.model
         const currentEffort = this.engine.getThread(event.threadId).session?.effort
         const nextModel = typeof event.payload.model === 'string' ? event.payload.model : currentModel
@@ -143,6 +407,7 @@ export class ProviderRuntimeIngestion {
       case 'turn.completed':
         this.flushAssistant(event, { closeSegment: true })
         this.finalizePlan(event)
+        this.applyTurnCompletedUi(event)
         this.closeActiveTurn(event)
         return
 
@@ -162,7 +427,25 @@ export class ProviderRuntimeIngestion {
           this.flushAssistant(event, { closeSegment: true })
         return
 
-      case 'request.opened':
+      case 'request.opened': {
+        const approvalSlotId = `approval:${event.requestId ?? event.eventId}`
+        this.patchActiveTurn(
+          event.threadId,
+          (prev) => {
+            if (!prev || !this.eventMatchesActiveTurn(event, prev)) return prev
+            const ids = prev.activeItemIds.includes(approvalSlotId)
+              ? prev.activeItemIds
+              : [...prev.activeItemIds, approvalSlotId]
+            return {
+              ...prev,
+              phase: 'waiting_for_input',
+              visibleIndicator: 'approval',
+              activeItemIds: ids,
+              updatedAt: event.createdAt
+            }
+          },
+          event.createdAt
+        )
         this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
         this.flushAssistant(event, { closeSegment: true })
         {
@@ -201,37 +484,66 @@ export class ProviderRuntimeIngestion {
           createdAt: event.createdAt
         })
         return
+      }
 
-      case 'request.resolved':
-        {
-          const existing = this.findApprovalForResolution(event)
-          const id = existing?.id ?? `approval:${event.requestId ?? event.eventId}`
-          this.engine.upsertActivity(
-            {
-              id,
-              kind: 'approval.resolved',
-              tone: 'info',
-              summary: existing?.summary ?? `Approval ${event.payload.decision ?? 'resolved'}`,
-              payload: {
-                ...existing?.payload,
-                requestType:
-                  event.payload.requestType && event.payload.requestType !== 'unknown'
-                    ? event.payload.requestType
-                    : (readPayloadString(existing?.payload, 'requestType') ??
-                      event.payload.requestType),
-                decision: event.payload.decision,
-                resolution: event.payload.resolution
-              },
-              turnId: event.turnId ?? existing?.turnId ?? null,
-              resolved: true,
-              createdAt: event.createdAt
+      case 'request.resolved': {
+        const existing = this.findApprovalForResolution(event)
+        const resolvedApprovalId = existing?.id ?? `approval:${event.requestId ?? event.eventId}`
+        this.engine.upsertActivity(
+          {
+            id: resolvedApprovalId,
+            kind: 'approval.resolved',
+            tone: 'info',
+            summary: existing?.summary ?? `Approval ${event.payload.decision ?? 'resolved'}`,
+            payload: {
+              ...existing?.payload,
+              requestType:
+                event.payload.requestType && event.payload.requestType !== 'unknown'
+                  ? event.payload.requestType
+                  : (readPayloadString(existing?.payload, 'requestType') ??
+                    event.payload.requestType),
+              decision: event.payload.decision,
+              resolution: event.payload.resolution
             },
-            event.threadId
-          )
-        }
+            turnId: event.turnId ?? existing?.turnId ?? null,
+            resolved: true,
+            createdAt: event.createdAt
+          },
+          event.threadId
+        )
+        this.patchActiveTurn(
+          event.threadId,
+          (prev) => {
+            if (!prev || !this.eventMatchesActiveTurn(event, prev)) return prev
+            if (prev.phase !== 'waiting_for_input') return prev
+            const ids = prev.activeItemIds.filter((slot) => slot !== resolvedApprovalId)
+            const draft: ActiveTurnProjection = {
+              ...prev,
+              activeItemIds: ids,
+              phase: ids.length > 0 ? 'tool_running' : 'streaming',
+              updatedAt: event.createdAt
+            }
+            return this.reconcileActiveTurnTail(event.threadId, draft, event.createdAt)
+          },
+          event.createdAt
+        )
         return
+      }
 
       case 'user-input.requested':
+        this.patchActiveTurn(
+          event.threadId,
+          (prev) => {
+            if (!prev || !this.eventMatchesActiveTurn(event, prev)) return prev
+            return {
+              ...prev,
+              phase: 'waiting_for_input',
+              visibleIndicator: 'approval',
+              updatedAt: event.createdAt
+            }
+          },
+          event.createdAt
+        )
         this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
         this.flushAssistant(event, { closeSegment: true })
         this.engine.upsertActivity(
@@ -263,6 +575,36 @@ export class ProviderRuntimeIngestion {
           },
           event.threadId
         )
+        this.patchActiveTurn(
+          event.threadId,
+          (prev) => {
+            if (!prev || !this.eventMatchesActiveTurn(event, prev)) return prev
+            if (prev.phase !== 'waiting_for_input') return prev
+            const ids = prev.activeItemIds
+            const draft: ActiveTurnProjection = {
+              ...prev,
+              phase: ids.length > 0 ? 'tool_running' : 'streaming',
+              updatedAt: event.createdAt
+            }
+            return this.reconcileActiveTurnTail(event.threadId, draft, event.createdAt)
+          },
+          event.createdAt
+        )
+        return
+
+      case 'runtime.info':
+        this.engine.upsertActivity(
+          {
+            id: `runtime-info:${event.eventId}`,
+            kind: 'task.progress',
+            tone: 'info',
+            summary: event.payload.message ?? event.payload.kind ?? 'Info',
+            payload: { detail: event.payload.detail, kind: event.payload.kind },
+            turnId: event.turnId ?? null,
+            createdAt: event.createdAt
+          },
+          event.threadId
+        )
         return
 
       case 'runtime.error':
@@ -280,6 +622,12 @@ export class ProviderRuntimeIngestion {
           event.threadId
         )
         if (event.type === 'runtime.error' && this.shouldPromoteRuntimeError(event)) {
+          this.turnFinalizeOutcome.delete(event.threadId)
+          this.engine.setActiveTurn({
+            threadId: event.threadId,
+            activeTurn: null,
+            createdAt: event.createdAt
+          })
           this.engine.setSession({
             threadId: event.threadId,
             status: 'error',
@@ -309,6 +657,29 @@ export class ProviderRuntimeIngestion {
     return activeTurnId === event.turnId
   }
 
+  private patchActiveTurnFromContentDelta(
+    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>,
+    phase: ActiveTurnProjection['phase'],
+    visibleIndicator: ActiveTurnProjection['visibleIndicator']
+  ): void {
+    this.patchActiveTurn(
+      event.threadId,
+      (prev) => {
+        if (!prev || !this.eventMatchesActiveTurn(event, prev)) return prev
+        if (
+          prev.phase === 'completed' ||
+          prev.phase === 'failed' ||
+          prev.phase === 'interrupted' ||
+          prev.phase === 'finalizing'
+        ) {
+          return prev
+        }
+        return { ...prev, phase, visibleIndicator, updatedAt: event.createdAt }
+      },
+      event.createdAt
+    )
+  }
+
   private ingestContentDelta(
     event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
   ): void {
@@ -318,6 +689,7 @@ export class ProviderRuntimeIngestion {
     }
 
     if (event.payload.streamKind === 'assistant_text') {
+      this.patchActiveTurnFromContentDelta(event, 'streaming', 'assistant_stream')
       const key = this.assistantStateKey(event)
       const isFinalSnapshot = this.isFinalAssistantItemSnapshot(event)
       if (isFinalSnapshot) {
@@ -340,6 +712,7 @@ export class ProviderRuntimeIngestion {
     }
 
     if (event.payload.streamKind === 'plan_text') {
+      this.patchActiveTurnFromContentDelta(event, 'streaming', 'plan')
       const key = this.planKey(event.threadId, event.turnId ?? event.eventId)
       const existing = this.planBuffers.get(key)
       if (existing) {
@@ -352,12 +725,15 @@ export class ProviderRuntimeIngestion {
     }
 
     if (event.payload.streamKind === 'reasoning_text') {
+      this.patchActiveTurnFromContentDelta(event, 'thinking', 'thinking')
       this.appendReasoningTextDelta(event)
       return
     }
 
     if (isToolOutput(event.payload.streamKind)) {
       this.appendToolOutput(event)
+      this.patchActiveTurnFromContentDelta(event, 'tool_running', 'tool')
+      return
     }
   }
 
@@ -439,6 +815,7 @@ export class ProviderRuntimeIngestion {
       },
       event.threadId
     )
+    this.onToolItemLifecycle(event)
   }
 
   private ingestPlanItem(
@@ -538,6 +915,9 @@ export class ProviderRuntimeIngestion {
       },
       event.threadId
     )
+    if (completed) {
+      this.recomputeIdleTailSurface(event.threadId, event.createdAt)
+    }
   }
 
   /**
@@ -579,6 +959,7 @@ export class ProviderRuntimeIngestion {
         threadId
       )
     }
+    this.recomputeIdleTailSurface(threadId, createdAt)
   }
 
   private appendReasoningTextDelta(
@@ -637,7 +1018,7 @@ export class ProviderRuntimeIngestion {
   }
 
   private appendToolOutput(event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>): void {
-    const id = toolActivityId(event)
+    const id = this.toolOutputActivityId(event)
     const existing = this.engine
       .getThread(event.threadId)
       .activities.find((activity) => activity.id === id)
@@ -703,11 +1084,12 @@ export class ProviderRuntimeIngestion {
     event: ProviderRuntimeEvent,
     options: { closeSegment: boolean; streaming?: boolean } = { closeSegment: true }
   ): void {
+    const effectiveStreaming = options.streaming ?? event.type !== 'turn.completed'
     for (const [key, state] of this.assistantSegments) {
       if (!key.startsWith(`${event.threadId}:`)) continue
       if (state.buffer.length === 0) {
         if (options.closeSegment && state.activeMessageId) {
-          this.closeAssistantMessage(event, state.activeMessageId, options.streaming)
+          this.closeAssistantMessage(event, state.activeMessageId, effectiveStreaming)
           state.activeMessageId = null
           state.nextSegmentIndex += 1
         }
@@ -724,7 +1106,7 @@ export class ProviderRuntimeIngestion {
         role: 'assistant',
         text: `${existing?.text ?? ''}${state.buffer}`,
         turnId: event.turnId ?? existing?.turnId ?? null,
-        streaming: options.streaming ?? event.type !== 'turn.completed',
+        streaming: effectiveStreaming,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
       }
@@ -735,6 +1117,13 @@ export class ProviderRuntimeIngestion {
         state.activeMessageId = null
         state.nextSegmentIndex += 1
       }
+    }
+    if (
+      options.closeSegment &&
+      effectiveStreaming === false &&
+      event.type !== 'turn.completed'
+    ) {
+      this.recomputeIdleTailSurface(event.threadId, event.createdAt)
     }
   }
 
@@ -918,6 +1307,12 @@ export class ProviderRuntimeIngestion {
       status: state,
       startedAt: thread.latestTurn?.startedAt ?? event.createdAt,
       completedAt: event.createdAt
+    })
+    this.turnFinalizeOutcome.delete(event.threadId)
+    this.engine.setActiveTurn({
+      threadId: event.threadId,
+      activeTurn: null,
+      createdAt: event.createdAt
     })
   }
 
@@ -1121,6 +1516,44 @@ function titleForToolOutput(kind: RuntimeContentStreamKind): string {
 
 function toolActivityId(event: Pick<ProviderRuntimeEvent, 'itemId' | 'eventId'>): string {
   return `tool:${event.itemId ?? event.eventId}`
+}
+
+function activeTurnProjectionEquals(
+  a: ActiveTurnProjection | null,
+  b: ActiveTurnProjection | null
+): boolean {
+  if (a === null && b === null) return true
+  if (!a || !b) return false
+  if (a.turnId !== b.turnId || a.phase !== b.phase || a.visibleIndicator !== b.visibleIndicator) {
+    return false
+  }
+  if (a.startedAt !== b.startedAt) return false
+  if (a.activeItemIds.length !== b.activeItemIds.length) return false
+  for (let i = 0; i < a.activeItemIds.length; i += 1) {
+    if (a.activeItemIds[i] !== b.activeItemIds[i]) return false
+  }
+  return true
+}
+
+function mapTurnCompletedPhase(
+  state: 'completed' | 'failed' | 'cancelled' | 'interrupted'
+): 'completed' | 'failed' | 'interrupted' {
+  if (state === 'failed') return 'failed'
+  if (state === 'completed') return 'completed'
+  return 'interrupted'
+}
+
+function isTrackedToolItemType(itemType: CanonicalItemType | undefined): boolean {
+  if (!itemType) return false
+  if (
+    itemType === 'reasoning' ||
+    itemType === 'assistant_message' ||
+    itemType === 'plan' ||
+    itemType === 'user_message'
+  ) {
+    return false
+  }
+  return true
 }
 
 function readPayloadString(

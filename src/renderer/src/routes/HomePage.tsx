@@ -80,13 +80,15 @@ import {
   derivePlanTitle,
   findLatestProposedPlan,
   isOrchestrationModelTurnInProgress,
+  labelForTranscriptTailIndicator,
   mergePendingUserMessages,
   projectIdForPath,
   readSessionErrorForDisplay,
   runLegacyMigration,
-  shouldShowTranscriptEndThinkingRow,
-  snapshotMergeClearsPendingTurnStart,
+  selectTailIndicator,
+  selectTranscriptTailRowVisible,
   threadsForProject,
+  transcriptTailShowsSpinner,
   visibleTodoListsForThread,
   upsertById,
   upsertOptimisticUserMessage
@@ -135,7 +137,6 @@ export function HomePage(): React.JSX.Element {
   const pendingUserMessagesRef = useRef(new Map<string, OrchestrationMessage>())
   const [error, setError] = useState<string | null>(null)
   const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(() => new Set())
-  const [isPendingThinking, setIsPendingThinking] = useState(false)
   const [threadSidebarState, setThreadSidebarState] = useState<Record<string, ThreadSidebarState>>(
     {}
   )
@@ -230,21 +231,15 @@ export function HomePage(): React.JSX.Element {
     [thread?.checkpoints]
   )
   const sessionError = useMemo(() => readSessionErrorForDisplay(thread), [thread])
-  const hasActiveThinkingActivity = useMemo(
-    () =>
-      thread?.activities.some(
-        (activity: OrchestrationThreadActivity) =>
-          activity.tone === 'thinking' && !activity.resolved
-      ) ?? false,
-    [thread]
+  const transcriptTailIndicator = useMemo(() => selectTailIndicator(thread), [thread])
+  const showTranscriptTailRow = useMemo(() => selectTranscriptTailRowVisible(thread), [thread])
+  const transcriptTailLabel = useMemo(
+    () => labelForTranscriptTailIndicator(transcriptTailIndicator),
+    [transcriptTailIndicator]
   )
-  const showPendingThinking = useMemo(
-    () =>
-      shouldShowTranscriptEndThinkingRow(thread, {
-        isPendingTurnStart: isPendingThinking,
-        hasActiveThinkingActivity
-      }),
-    [thread, isPendingThinking, hasActiveThinkingActivity]
+  const transcriptTailSpinner = useMemo(
+    () => transcriptTailShowsSpinner(transcriptTailIndicator),
+    [transcriptTailIndicator]
   )
   const workspaceDiffRefreshKey = useMemo(
     () => `${workspaceDiffVersion}:${thread?.updatedAt ?? 'no-thread'}`,
@@ -539,7 +534,6 @@ export function HomePage(): React.JSX.Element {
     if (!activeThreadId) return undefined
 
     lastSequenceRef.current = 0
-    setIsPendingThinking(false)
     pendingUserMessagesRef.current.clear()
     const unsubscribe = window.agentApi.subscribeThread({ threadId: activeThreadId }, (item) => {
       if (item.kind === 'snapshot') {
@@ -551,9 +545,6 @@ export function HomePage(): React.JSX.Element {
         )
         threadRef.current = mergedThread
         setThread(mergedThread)
-        if (snapshotMergeClearsPendingTurnStart(mergedThread)) {
-          setIsPendingThinking(false)
-        }
         return
       }
 
@@ -595,9 +586,6 @@ export function HomePage(): React.JSX.Element {
       const nextThread = applyOrchestrationEvent(currentThread, item.event)
       threadRef.current = nextThread
       setThread(nextThread)
-      if (snapshotMergeClearsPendingTurnStart(nextThread)) {
-        setIsPendingThinking(false)
-      }
     })
 
     return unsubscribe
@@ -733,7 +721,6 @@ export function HomePage(): React.JSX.Element {
 
       shouldStickToBottomRef.current = true
       setError(null)
-      setIsPendingThinking(true)
       const commandId = `cmd:${createId()}`
       const createdAt = new Date().toISOString()
       const optimisticMessage: OrchestrationMessage = {
@@ -781,7 +768,6 @@ export function HomePage(): React.JSX.Element {
           createdAt
         })
       } catch (commandError) {
-        setIsPendingThinking(false)
         setError(commandError instanceof Error ? commandError.message : String(commandError))
         return false
       }
@@ -850,7 +836,6 @@ export function HomePage(): React.JSX.Element {
     setSelection({ activeProjectId: targetProject.id, activeChatId: chatId })
     setComposerResetToken((token) => token + 1)
     setThread(null)
-    setIsPendingThinking(false)
     setError(null)
   }
 
@@ -895,7 +880,6 @@ export function HomePage(): React.JSX.Element {
       })
       setThread(null)
       setComposerResetToken((token) => token + 1)
-      setIsPendingThinking(false)
     }
 
     setThreadComposerPreferences((current) => {
@@ -1106,7 +1090,6 @@ export function HomePage(): React.JSX.Element {
       const implementationPrompt = buildPlanImplementationPrompt(plan.text)
       const titleSeed = `Implement ${derivePlanTitle(plan.text)}`
       setError(null)
-      setIsPendingThinking(true)
       setInteractionMode('default')
       setRuntimeMode(executionRuntimeMode)
       setThreadComposerPreferences((current) => ({
@@ -1133,7 +1116,6 @@ export function HomePage(): React.JSX.Element {
           createdAt
         })
       } catch (implementError) {
-        setIsPendingThinking(false)
         setError(implementError instanceof Error ? implementError.message : String(implementError))
       }
     },
@@ -1374,7 +1356,7 @@ export function HomePage(): React.JSX.Element {
             <div ref={transcriptStackRef} className="conversation-transcript-stack">
               {!activeProject ? (
                 <NoProjectSplash providers={providerProbe} errorMessage={providerProbeError} />
-              ) : transcriptItems.length === 0 && !showPendingThinking ? (
+              ) : transcriptItems.length === 0 && !showTranscriptTailRow ? (
                 <div className="empty-state">
                   <NoProjectSplash
                     mode="empty-chat"
@@ -1385,10 +1367,10 @@ export function HomePage(): React.JSX.Element {
               ) : (
               <TranscriptList
                 items={filteredTranscriptItems}
-                showPendingThinking={showPendingThinking}
+                showTranscriptTailRow={showTranscriptTailRow}
+                transcriptTailLabel={transcriptTailLabel}
+                transcriptTailSpinner={transcriptTailSpinner}
                 turnInProgress={turnInProgress}
-                activeTurnId={activeTurnId ?? thread?.latestTurn?.id ?? null}
-                latestTurnId={thread?.latestTurn?.id ?? null}
                 providerName={thread?.session?.providerName ?? null}
                 expandedToolIds={expandedToolIds}
                 checkpointByAssistantMessageId={checkpointByAssistantMessageId}

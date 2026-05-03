@@ -216,6 +216,12 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
       CREATE INDEX IF NOT EXISTS idx_projection_thread_todo_lists_thread_id
         ON projection_thread_todo_lists(thread_id, updated_at);
     `
+  },
+  {
+    name: '008_thread_active_turn',
+    sql: `
+      ALTER TABLE projection_threads ADD COLUMN active_turn_json TEXT;
+    `
   }
 ]
 

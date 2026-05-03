@@ -78,6 +78,10 @@ interface OpenCodeSessionContext {
   readonly partTurnIdById: Map<string, string>
   readonly emittedTextByPartId: Map<string, string>
   readonly completedAssistantPartIds: Set<string>
+  /** Delta bytes received before `partById` / message role is known */
+  readonly pendingPartTextDeltas: Map<string, string>
+  /** callIDs that have already reached a terminal tool state (SDK may emit an extra `running` after `completed`). */
+  readonly terminalToolCallIds: Set<string>
   activeTurnId: string | undefined
   stopped: boolean
   readonly eventsAbortController: AbortController
@@ -710,6 +714,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
       partTurnIdById: new Map(),
       emittedTextByPartId: new Map(),
       completedAssistantPartIds: new Set(),
+      pendingPartTextDeltas: new Map(),
+      terminalToolCallIds: new Set(),
       activeTurnId: undefined,
       stopped: false,
       eventsAbortController: new AbortController()
@@ -757,6 +763,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     const resolvedEffort = input.effort ?? 'medium'
     const agent = input.interactionMode === 'plan' ? 'plan' : undefined
     ctx.activeTurnId = turnId
+    ctx.terminalToolCallIds.clear()
     this.emit({
       ...buildEventBase({ threadId: input.threadId, turnId }),
       type: 'turn.started',
@@ -973,6 +980,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
         for await (const rawEvent of subscription.stream) {
           dumpOpenCodeSubscribeRawMessage(rawEvent, { threadId: context.session.threadId })
           const event = rawEvent as SdkEvent
+          // One Cobel thread ↔ one bound OpenCode session id (`openCodeSessionId`). Nested explore/task
+          // sessions use a different `sessionID` on the wire; those events are not ingested here.
           const payloadSessionId = event.properties?.sessionID as string | undefined
           if (payloadSessionId !== context.openCodeSessionId) continue
           await this.dispatchSdkEvent(context, event)
@@ -1018,12 +1027,49 @@ export class OpenCodeAdapter implements ProviderAdapter {
     }
   }
 
+  private flushBufferedAssistantDelta(
+    context: OpenCodeSessionContext,
+    part: Part,
+    partTurnId: string | undefined,
+    raw: unknown
+  ): void {
+    const buffered = context.pendingPartTextDeltas.get(part.id)
+    if (!buffered) return
+    context.pendingPartTextDeltas.delete(part.id)
+    if (messageRoleForPart(context, part) !== 'assistant') return
+    const streamKind = resolveTextStreamKind(part)
+    const previousText = context.emittedTextByPartId.get(part.id) ?? textFromPart(part) ?? ''
+    const { nextText, deltaToEmit } = appendOpenCodeAssistantTextDelta(previousText, buffered)
+    if (!deltaToEmit) return
+    context.emittedTextByPartId.set(part.id, nextText)
+    if (part.type === 'text' || part.type === 'reasoning') {
+      context.partById.set(part.id, { ...part, text: nextText })
+    }
+    this.emit({
+      ...buildEventBase({
+        threadId: context.session.threadId,
+        turnId: partTurnId,
+        itemId: part.id,
+        raw
+      }),
+      type: 'content.delta',
+      payload: { streamKind, delta: deltaToEmit }
+    })
+  }
+
   private async dispatchSdkEvent(context: OpenCodeSessionContext, event: SdkEvent): Promise<void> {
     const turnId = context.activeTurnId
     switch (event.type) {
       case 'message.updated': {
         const info = event.properties.info as { id?: string; role?: 'user' | 'assistant' }
         if (info.id && info.role) context.messageRoleById.set(info.id, info.role)
+        if (info.role === 'assistant' && info.id) {
+          for (const part of context.partById.values()) {
+            if (part.messageID !== info.id) continue
+            const partTurnId = this.resolveTurnIdForPart(context, part.id, turnId)
+            this.flushBufferedAssistantDelta(context, part, partTurnId, event)
+          }
+        }
         if (info.role === 'assistant') {
           for (const part of context.partById.values()) {
             if (part.messageID !== info.id) continue
@@ -1042,15 +1088,26 @@ export class OpenCodeAdapter implements ProviderAdapter {
         context.messageRoleById.delete(messageID)
         break
       }
+      case 'message.part.removed': {
+        const partID = event.properties.partID as string
+        context.partById.delete(partID)
+        context.pendingPartTextDeltas.delete(partID)
+        context.emittedTextByPartId.delete(partID)
+        break
+      }
       case 'message.part.delta': {
         const partID = event.properties.partID as string
+        const delta = (event.properties.delta as string) ?? ''
+        if (!delta) break
         const existingPart = context.partById.get(partID)
-        if (!existingPart) break
+        if (!existingPart) {
+          const buf = context.pendingPartTextDeltas.get(partID) ?? ''
+          context.pendingPartTextDeltas.set(partID, buf + delta)
+          break
+        }
         if (messageRoleForPart(context, existingPart) !== 'assistant') break
         const partTurnId = this.resolveTurnIdForPart(context, partID, turnId)
         const streamKind = resolveTextStreamKind(existingPart)
-        const delta = (event.properties.delta as string) ?? ''
-        if (!delta) break
         const previousText =
           context.emittedTextByPartId.get(partID) ?? textFromPart(existingPart) ?? ''
         const { nextText, deltaToEmit } = appendOpenCodeAssistantTextDelta(previousText, delta)
@@ -1075,11 +1132,23 @@ export class OpenCodeAdapter implements ProviderAdapter {
         const part = event.properties.part as Part
         context.partById.set(part.id, part)
         const partTurnId = this.resolveTurnIdForPart(context, part.id, turnId)
+        this.flushBufferedAssistantDelta(context, part, partTurnId, event)
         const messageRole = messageRoleForPart(context, part)
         if (messageRole === 'assistant') {
           await this.emitAssistantTextDelta(context, part, partTurnId, event)
         }
         if (part.type === 'tool') {
+          const callID = part.callID
+          if (callID) {
+            const terminal =
+              part.state.status === 'completed' ||
+              part.state.status === 'error'
+            if (terminal) {
+              context.terminalToolCallIds.add(callID)
+            } else if (context.terminalToolCallIds.has(callID)) {
+              break
+            }
+          }
           const todoItems = todoItemsFromOpenCodeToolPart(part)
           if (todoItems.length > 0) {
             this.emit({
@@ -1297,6 +1366,34 @@ export class OpenCodeAdapter implements ProviderAdapter {
         }
         break
       }
+      case 'session.compacted':
+        this.emit({
+          ...buildEventBase({ threadId: context.session.threadId, turnId, raw: event }),
+          type: 'runtime.info',
+          payload: {
+            kind: 'session.compacted',
+            message: 'Session compacted',
+            detail: event.properties
+          }
+        })
+        break
+      case 'session.idle': {
+        const active = context.activeTurnId
+        if (active) {
+          context.activeTurnId = undefined
+          context.session = {
+            ...context.session,
+            status: 'ready',
+            updatedAt: nowIso()
+          }
+          this.emit({
+            ...buildEventBase({ threadId: context.session.threadId, turnId: active, raw: event }),
+            type: 'turn.completed',
+            payload: { state: 'completed' }
+          })
+        }
+        break
+      }
       case 'session.error': {
         const message = sessionErrorMessage(event.properties.error)
         const activeTurn = context.activeTurnId
@@ -1373,6 +1470,28 @@ export class OpenCodeAdapter implements ProviderAdapter {
           status: 'completed',
           title: 'Assistant message',
           ...(latestText.length > 0 ? { detail: latestText } : {})
+        }
+      })
+    }
+    if (
+      part.type === 'reasoning' &&
+      part.time?.end !== undefined &&
+      !context.completedAssistantPartIds.has(part.id)
+    ) {
+      context.completedAssistantPartIds.add(part.id)
+      this.emit({
+        ...buildEventBase({
+          threadId: context.session.threadId,
+          turnId,
+          itemId: part.id,
+          createdAt: isoFromEpochMs(part.time.end),
+          raw
+        }),
+        type: 'item.completed',
+        payload: {
+          itemType: 'reasoning',
+          status: 'completed',
+          title: 'Reasoning'
         }
       })
     }

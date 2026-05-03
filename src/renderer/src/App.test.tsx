@@ -309,6 +309,14 @@ describe('renderer app', () => {
               status: 'running',
               startedAt: '2026-04-19T00:00:00.000Z',
               completedAt: null
+            },
+            activeTurn: {
+              turnId: 'turn-1',
+              phase: 'starting',
+              activeItemIds: [],
+              visibleIndicator: 'exploring',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              updatedAt: '2026-04-19T00:00:00.000Z'
             }
           })
         }
@@ -468,8 +476,10 @@ describe('renderer app', () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     let threadListener: ((item: OrchestrationThreadStreamItem) => void) | null = null
+    let subscribedThreadId = ''
 
     window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      subscribedThreadId = _input.threadId
       threadListener = listener
       listener({
         kind: 'snapshot',
@@ -521,6 +531,26 @@ describe('renderer app', () => {
     await user.type(composer, 'follow-up')
     await user.click(screen.getByRole('button', { name: /send/i }))
 
+    await act(async () => {
+      threadListener?.({
+        kind: 'event',
+        event: {
+          sequence: 99,
+          type: 'thread.active-turn-set',
+          threadId: subscribedThreadId,
+          activeTurn: {
+            turnId: 'pending:follow-up',
+            phase: 'queued',
+            activeItemIds: [],
+            visibleIndicator: 'exploring',
+            startedAt: '2026-04-19T00:00:02.000Z',
+            updatedAt: '2026-04-19T00:00:02.000Z'
+          },
+          createdAt: '2026-04-19T00:00:02.000Z'
+        }
+      })
+    })
+
     expect(screen.getByLabelText('Exploring')).toBeInTheDocument()
 
     await act(async () => {
@@ -529,7 +559,7 @@ describe('renderer app', () => {
         event: {
           sequence: 100,
           type: 'thread.activity-upserted',
-          threadId: 'local:main',
+          threadId: subscribedThreadId,
           activity: {
             id: 'tool:turn-1-late',
             kind: 'tool.completed',
@@ -1751,8 +1781,23 @@ describe('renderer app', () => {
               }
             ],
             proposedPlans: [],
-            session: null,
-            latestTurn: null,
+            session: {
+              threadId: _input.threadId,
+              status: 'running',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: 'turn-1',
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:00.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'running',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: null
+            },
             checkpoints: [],
             createdAt: '2026-04-19T00:00:00.000Z',
             updatedAt: '2026-04-19T00:00:01.000Z',
@@ -1768,9 +1813,10 @@ describe('renderer app', () => {
     const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
     await userEvent.click(openFolderButtons[0])
 
-    expect(await screen.findByLabelText('Thinking')).toBeInTheDocument()
-    expect(screen.getAllByText('thinking…')).toHaveLength(1)
-    expect(screen.queryByLabelText('Thought')).not.toBeInTheDocument()
+    expect(await screen.findByLabelText('Model reasoning')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /reasoning/i })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Thinking')).not.toBeInTheDocument()
+    expect(screen.queryByText('thinking…')).not.toBeInTheDocument()
   })
 
   it('renders file-change approvals as embedded diffs and shows a spinner on the chosen action', async () => {

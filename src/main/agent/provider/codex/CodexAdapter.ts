@@ -4,7 +4,8 @@ import type {
   RuntimeEventBase,
   ProviderRuntimeEvent,
   ProviderSession,
-  RuntimeContentStreamKind
+  RuntimeContentStreamKind,
+  RuntimeSessionState
 } from '../../../../shared/agent'
 import { fileEditChangesFromUnknownPayload } from '../../../../shared/fileEditChanges'
 import { traceCommandEvent } from '../../debug/commandEventTrace'
@@ -260,6 +261,74 @@ export function mapProviderEvent(event: ProviderEvent): ProviderRuntimeEvent | n
     }
     case 'item/requestApproval/decision':
       return null
+    case 'thread/status/changed': {
+      const rec = readRecord(payload)
+      const raw =
+        readString(rec, 'status')?.toLowerCase() ??
+        readString(readRecord(rec.thread), 'status')?.toLowerCase()
+      const state: RuntimeSessionState =
+        raw === 'running' || raw === 'busy' ? 'running' : raw === 'error' ? 'error' : 'ready'
+      return { ...base, type: 'session.state.changed', payload: { state } }
+    }
+    case 'turn/diff/updated':
+      return {
+        ...base,
+        type: 'runtime.info',
+        payload: { kind: 'turn.diff.updated', detail: event.payload }
+      }
+    case 'contextCompaction':
+    case 'context/compacted':
+    case 'compacted':
+      return {
+        ...base,
+        type: 'runtime.info',
+        payload: {
+          kind: 'context.compaction',
+          message: 'Context compaction',
+          detail: event.payload
+        }
+      }
+    case 'configWarning':
+      return {
+        ...base,
+        type: 'runtime.warning',
+        payload: {
+          message: readString(payload, 'message') ?? 'Configuration warning',
+          detail: event.payload
+        }
+      }
+    case 'model/rerouted':
+      return {
+        ...base,
+        type: 'runtime.info',
+        payload: {
+          kind: 'model.rerouted',
+          message: readString(payload, 'model') ?? readString(payload, 'to') ?? 'Model rerouted',
+          detail: event.payload
+        }
+      }
+    case 'item/autoApprovalReview/started':
+      return {
+        ...base,
+        type: 'item.started',
+        payload: {
+          itemType: 'review_entered',
+          status: 'inProgress',
+          title: 'Auto-approval review',
+          data: payload
+        }
+      }
+    case 'item/autoApprovalReview/completed':
+      return {
+        ...base,
+        type: 'item.completed',
+        payload: {
+          itemType: 'review_exited',
+          status: 'completed',
+          title: 'Auto-approval review',
+          data: payload
+        }
+      }
     case 'serverRequest/resolved':
       return {
         ...base,

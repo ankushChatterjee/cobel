@@ -14,10 +14,10 @@ import { TranscriptRow } from './TranscriptRow'
 
 export const TranscriptList = memo(function TranscriptList({
   items,
-  showPendingThinking,
+  showTranscriptTailRow,
+  transcriptTailLabel,
+  transcriptTailSpinner,
   turnInProgress,
-  activeTurnId,
-  latestTurnId,
   providerName,
   expandedToolIds,
   checkpointByAssistantMessageId,
@@ -28,10 +28,11 @@ export const TranscriptList = memo(function TranscriptList({
   onRevert
 }: {
   items: TranscriptItem[]
-  showPendingThinking: boolean
+  showTranscriptTailRow: boolean
+  transcriptTailLabel: { aria: string; text: string }
+  /** Spinner on the tail row for non-streaming waits (Exploring, Thinking…, etc.). */
+  transcriptTailSpinner: boolean
   turnInProgress: boolean
-  activeTurnId: string | null
-  latestTurnId: string | null
   providerName: ProviderId | null
   expandedToolIds: Set<string>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
@@ -51,9 +52,7 @@ export const TranscriptList = memo(function TranscriptList({
             <TranscriptRow
               key={group.item.id}
               item={group.item}
-              activeTurnId={activeTurnId}
               turnInProgress={turnInProgress}
-              latestTurnId={latestTurnId}
               checkpointByAssistantMessageId={checkpointByAssistantMessageId}
               onOpenPlan={onOpenPlan}
               onPreviewDiff={onPreviewDiff}
@@ -67,9 +66,7 @@ export const TranscriptList = memo(function TranscriptList({
             <ThinkingRow
               key={group.id}
               activities={group.activities.map((item) => item.activity)}
-              activeTurnId={activeTurnId}
               turnInProgress={turnInProgress}
-              latestTurnId={latestTurnId}
             />
           )
         }
@@ -96,12 +93,15 @@ export const TranscriptList = memo(function TranscriptList({
           />
         )
       })}
-      {showPendingThinking && (
-        <article className="thinking-row is-active" aria-label="Exploring">
-          <span className="thinking-spinner" aria-hidden="true" />
-          <span>Exploring</span>
+      {showTranscriptTailRow && transcriptTailLabel.text.length > 0 ? (
+        <article
+          className="thinking-row is-active"
+          aria-label={transcriptTailLabel.aria || undefined}
+        >
+          {transcriptTailSpinner ? <span className="thinking-spinner" aria-hidden="true" /> : null}
+          <span>{transcriptTailLabel.text}</span>
         </article>
-      )}
+      ) : null}
     </div>
   )
 })

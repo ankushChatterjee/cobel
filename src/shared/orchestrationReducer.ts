@@ -43,6 +43,8 @@ export function applyOrchestrationEvent(
       }
     case 'thread.latest-turn-set':
       return { ...thread, latestTurn: event.latestTurn, updatedAt: event.createdAt }
+    case 'thread.active-turn-set':
+      return { ...thread, activeTurn: event.activeTurn, updatedAt: event.createdAt }
     case 'thread.turn-diff-completed':
       return {
         ...thread,
@@ -75,6 +77,7 @@ export function applyOrchestrationEvent(
         session: thread.session
           ? { ...thread.session, activeTurnId: null, status: 'ready' }
           : thread.session,
+        activeTurn: null,
         updatedAt: event.createdAt
       }
     case 'thread.created':

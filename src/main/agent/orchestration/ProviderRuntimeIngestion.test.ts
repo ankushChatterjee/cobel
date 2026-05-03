@@ -6,6 +6,41 @@ import { ProviderRuntimeIngestion } from './ProviderRuntimeIngestion'
 const createdAt = '2026-04-19T00:00:00.000Z'
 
 describe('ProviderRuntimeIngestion', () => {
+  it('preserves the first tool activity createdAt when the item completes later', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+    const tStart = '2026-04-19T00:00:01.000Z'
+    const tEnd = '2026-04-19T00:00:09.000Z'
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      {
+        ...event({
+          type: 'item.started',
+          turnId: 'turn-1',
+          itemId: 'tool-1',
+          payload: { itemType: 'mcp_tool_call', title: 'Search' }
+        }),
+        createdAt: tStart
+      }
+    )
+    ingestion.enqueue(
+      {
+        ...event({
+          type: 'item.completed',
+          turnId: 'turn-1',
+          itemId: 'tool-1',
+          payload: { itemType: 'mcp_tool_call', status: 'completed' }
+        }),
+        createdAt: tEnd
+      }
+    )
+    await ingestion.drain()
+
+    const tool = engine.getThread('thread-1').activities.find((a) => a.id === 'tool:tool-1')
+    expect(tool?.createdAt).toBe(tStart)
+  })
+
   it('buffers assistant deltas and flushes on approval boundaries with a new segment after approval', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
@@ -107,6 +142,7 @@ describe('ProviderRuntimeIngestion', () => {
         })
       })
     )
+    expect(engine.getThread('thread-1').activeTurn?.visibleIndicator).toBe('exploring')
   })
 
   it('resolves reasoning thinking when assistant_text streaming starts, before reasoning item completes', async () => {
@@ -201,6 +237,38 @@ describe('ProviderRuntimeIngestion', () => {
           decision: 'accept',
           args
         })
+      })
+    )
+  })
+
+  it('reconciles to exploring after approval resolves when no tools or streams are active', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: { requestType: 'command_execution_approval', detail: 'bun test' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'request.resolved',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: { requestType: 'unknown', decision: 'accept', resolution: {} }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activeTurn).toEqual(
+      expect.objectContaining({
+        phase: 'streaming',
+        visibleIndicator: 'exploring',
+        activeItemIds: []
       })
     )
   })
@@ -350,6 +418,39 @@ describe('ProviderRuntimeIngestion', () => {
         streaming: false
       })
     ])
+    expect(engine.getThread('thread-1').activeTurn?.visibleIndicator).toBe('exploring')
+  })
+
+  it('shows exploring after the last tool completes when no assistant stream is active', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'tool-1',
+        payload: { itemType: 'mcp_tool_call', title: 'Search' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.completed',
+        turnId: 'turn-1',
+        itemId: 'tool-1',
+        payload: { itemType: 'mcp_tool_call', status: 'completed' }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activeTurn).toEqual(
+      expect.objectContaining({
+        phase: 'streaming',
+        visibleIndicator: 'exploring',
+        activeItemIds: []
+      })
+    )
   })
 
   it('still creates a closed assistant message from a final snapshot without prior deltas', async () => {

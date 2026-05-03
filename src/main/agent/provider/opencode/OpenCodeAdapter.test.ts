@@ -4,6 +4,7 @@ const promptMock = vi.fn()
 const createMock = vi.fn()
 const deleteMock = vi.fn()
 const closeMock = vi.fn()
+const eventSubscribeMock = vi.fn()
 
 vi.mock('./opencodeRuntime', () => ({
   buildOpenCodePermissionRules: vi.fn(() => [{ permission: '*', pattern: '*', action: 'ask' }]),
@@ -17,6 +18,9 @@ vi.mock('./opencodeRuntime', () => ({
       create: createMock,
       prompt: promptMock,
       delete: deleteMock
+    },
+    event: {
+      subscribe: eventSubscribeMock
     }
   })),
   inventoryToModelInfos: vi.fn(() => [{ id: 'anthropic/claude-sonnet-4', providerId: 'opencode' }]),
@@ -39,6 +43,39 @@ vi.mock('./opencodeRuntime', () => ({
 }))
 
 import { OpenCodeAdapter, todoItemsFromOpenCodeToolPart, toolLifecycleTitle } from './OpenCodeAdapter'
+
+function createEventStream() {
+  const queue: unknown[] = []
+  let notify: (() => void) | undefined
+  let closed = false
+
+  return {
+    push(event: unknown): void {
+      queue.push(event)
+      notify?.()
+      notify = undefined
+    },
+    close(): void {
+      closed = true
+      notify?.()
+      notify = undefined
+    },
+    stream: {
+      async *[Symbol.asyncIterator](): AsyncGenerator<unknown> {
+        while (!closed) {
+          if (queue.length === 0) {
+            await new Promise<void>((resolve) => {
+              notify = resolve
+            })
+          }
+          while (queue.length > 0) {
+            yield queue.shift()
+          }
+        }
+      }
+    }
+  }
+}
 
 describe('OpenCodeAdapter.generateThreadTitle', () => {
   beforeEach(() => {
@@ -95,6 +132,70 @@ describe('OpenCodeAdapter.generateThreadTitle', () => {
 
     expect(title).toBe('Sidebar Layout')
     expect(promptMock.mock.calls[0]?.[0]).toHaveProperty('format')
+  })
+})
+
+describe('OpenCodeAdapter event mapping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    createMock.mockResolvedValue({ data: { id: 'session:events' } })
+    closeMock.mockReset()
+  })
+
+  it('does not emit tool lifecycle rows for OpenCode step markers', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await vi.waitFor(() => expect(eventSubscribeMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          id: 'step-start-1',
+          sessionID: 'session:events',
+          messageID: 'message-1',
+          type: 'step-start'
+        },
+        time: Date.now()
+      }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          id: 'step-finish-1',
+          sessionID: 'session:events',
+          messageID: 'message-1',
+          type: 'step-finish',
+          reason: 'done',
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+        },
+        time: Date.now()
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const lifecycle = events.filter(
+      (event) => event.type === 'item.started' || event.type === 'item.completed'
+    )
+    expect(lifecycle).toEqual([])
+
+    stream.close()
   })
 })
 

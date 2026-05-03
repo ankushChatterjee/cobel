@@ -200,6 +200,10 @@ export type ProviderRuntimeEvent =
       type: 'runtime.error' | 'runtime.warning'
       payload: { message: string; detail?: unknown }
     })
+  | (RuntimeEventBase & {
+      type: 'runtime.info'
+      payload: { kind?: string; message?: string; detail?: unknown }
+    })
 
 export interface ImageChatAttachment {
   type: 'image'
@@ -369,6 +373,37 @@ export interface OrchestrationLatestTurn {
   completedAt: string | null
 }
 
+export type TurnPhase =
+  | 'idle'
+  | 'queued'
+  | 'starting'
+  | 'thinking'
+  | 'streaming'
+  | 'tool_running'
+  | 'waiting_for_input'
+  | 'finalizing'
+  | 'completed'
+  | 'failed'
+  | 'interrupted'
+
+export type ActiveTurnVisibleIndicator =
+  | 'none'
+  | 'exploring'
+  | 'thinking'
+  | 'assistant_stream'
+  | 'tool'
+  | 'approval'
+  | 'plan'
+
+export interface ActiveTurnProjection {
+  turnId: string
+  phase: TurnPhase
+  activeItemIds: string[]
+  visibleIndicator: ActiveTurnVisibleIndicator
+  startedAt: string
+  updatedAt: string
+}
+
 export interface OrchestrationThread {
   id: string
   title: string
@@ -380,6 +415,8 @@ export interface OrchestrationThread {
   todoLists: OrchestrationTodoList[]
   session: OrchestrationSession | null
   latestTurn: OrchestrationLatestTurn | null
+  /** Canonical tail UI state for the active turn; owned by main-process ingestion. */
+  activeTurn: ActiveTurnProjection | null
   checkpoints: OrchestrationCheckpointSummary[]
   createdAt: string
   updatedAt: string
@@ -448,6 +485,13 @@ export type OrchestrationEvent =
       type: 'thread.latest-turn-set'
       threadId: string
       latestTurn: OrchestrationLatestTurn | null
+      createdAt: string
+    })
+  | (OrchestrationEventMeta & {
+      sequence: number
+      type: 'thread.active-turn-set'
+      threadId: string
+      activeTurn: ActiveTurnProjection | null
       createdAt: string
     })
   | (OrchestrationEventMeta & {

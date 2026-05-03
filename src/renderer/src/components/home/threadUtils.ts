@@ -1,4 +1,5 @@
 import type {
+  ActiveTurnVisibleIndicator,
   OrchestrationCheckpointSummary,
   OrchestrationEvent,
   OrchestrationMessage,
@@ -64,6 +65,7 @@ export function createEmptyThread(
     todoLists: [],
     session: null,
     latestTurn: null,
+    activeTurn: null,
     checkpoints: [],
     createdAt,
     updatedAt: createdAt,
@@ -119,6 +121,80 @@ export function workDurationForMessage(message: OrchestrationMessage): number | 
   return durationBetween(message.createdAt, message.updatedAt)
 }
 
+export function selectTailIndicator(
+  thread: OrchestrationThread | null
+): ActiveTurnVisibleIndicator {
+  if (!thread?.activeTurn) return 'none'
+  const phase = thread.activeTurn.phase
+  if (phase === 'completed' || phase === 'failed' || phase === 'interrupted' || phase === 'idle') {
+    return 'none'
+  }
+  return thread.activeTurn.visibleIndicator
+}
+
+/** TranscriptList tail row: hide for `none` and when assistant stream carries the signal. */
+export function selectTranscriptTailRowVisible(thread: OrchestrationThread | null): boolean {
+  const ind = selectTailIndicator(thread)
+  if (ind === 'tool' && threadHasInFlightWorkIndicator(thread)) return false
+  return ind !== 'none' && ind !== 'assistant_stream'
+}
+
+/** Open tool item ids (excludes approval slots in {@link ActiveTurnProjection.activeItemIds}). */
+export function selectRunningToolItemIds(thread: OrchestrationThread | null): string[] {
+  const slots = thread?.activeTurn?.activeItemIds ?? []
+  return slots.filter((id) => !id.startsWith('approval:'))
+}
+
+/** Pending approval request ids derived from active-turn slots (`approval:<requestId>`). */
+export function selectPendingRequestIds(thread: OrchestrationThread | null): string[] {
+  const prefix = 'approval:'
+  const slots = thread?.activeTurn?.activeItemIds ?? []
+  return slots.filter((id) => id.startsWith(prefix)).map((id) => id.slice(prefix.length))
+}
+
+export function labelForTranscriptTailIndicator(
+  indicator: ActiveTurnVisibleIndicator
+): { aria: string; text: string } {
+  switch (indicator) {
+    case 'none':
+    case 'assistant_stream':
+      return { aria: '', text: '' }
+    case 'exploring':
+      return { aria: 'Exploring', text: 'Exploring' }
+    case 'thinking':
+      return { aria: 'Thinking', text: 'Thinking…' }
+    case 'tool':
+      return { aria: 'Running tools', text: 'Running tools…' }
+    case 'approval':
+      return { aria: 'Waiting for approval', text: 'Waiting for approval…' }
+    case 'plan':
+      return { aria: 'Planning', text: 'Planning…' }
+    default: {
+      const _exhaustive: never = indicator
+      return _exhaustive
+    }
+  }
+}
+
+/** Tail row uses a spinner for waits that are not carried by visible streamed text (incl. Codex without reasoning_text). */
+export function transcriptTailShowsSpinner(indicator: ActiveTurnVisibleIndicator): boolean {
+  switch (indicator) {
+    case 'none':
+    case 'assistant_stream':
+      return false
+    case 'exploring':
+    case 'thinking':
+    case 'tool':
+    case 'approval':
+    case 'plan':
+      return true
+    default: {
+      const _exhaustive: never = indicator
+      return _exhaustive
+    }
+  }
+}
+
 export function durationBetween(start: string, end: string): number | null {
   const startMs = new Date(start).getTime()
   const endMs = new Date(end).getTime()
@@ -155,6 +231,8 @@ export function threadsForProject(
 
 export function buildTranscriptItems(thread: OrchestrationThread | null): TranscriptItem[] {
   if (!thread) return []
+  // Merge by time then sequence. Activity `createdAt` is first-seen time (see OrchestrationEngine.upsertActivity);
+  // later lifecycle upserts must not advance it or tools render after later assistant text.
   return [
     ...thread.messages.map((message): MessageTranscriptItem => ({
       id: `message:${message.id}`,
@@ -424,6 +502,8 @@ export function eventClearsPendingTurnWait(event: OrchestrationEvent): boolean {
       return true
     case 'thread.latest-turn-set':
       return event.latestTurn !== null && event.latestTurn.status !== 'running'
+    case 'thread.active-turn-set':
+      return false
     case 'thread.session-set': {
       if (event.session === null) {
         return true

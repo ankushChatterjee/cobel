@@ -94,6 +94,9 @@ export class ProjectionPipeline {
       case 'thread.latest-turn-set':
         this.applyLatestTurnSet(e)
         break
+      case 'thread.active-turn-set':
+        this.applyActiveTurnSet(e)
+        break
       case 'thread.turn-diff-completed':
         this.applyCheckpointUpserted(e)
         break
@@ -177,7 +180,7 @@ export class ProjectionPipeline {
       .prepare(
         `
         UPDATE projection_threads
-        SET title = ?, cwd = ?, branch = ?, updated_at = ?
+        SET title = ?, cwd = ?, branch = ?, active_turn_json = ?, updated_at = ?
         WHERE thread_id = ?
       `
       )
@@ -185,6 +188,7 @@ export class ProjectionPipeline {
         str(t['title']) ?? DEFAULT_THREAD_TITLE,
         str(t['cwd']) ?? null,
         str(t['branch']) ?? 'main',
+        t['activeTurn'] != null ? JSON.stringify(t['activeTurn']) : null,
         e.occurredAt,
         e.streamId
       )
@@ -369,7 +373,17 @@ export class ProjectionPipeline {
       .run(e.streamId, turnId)
     this.db
       .prepare(`UPDATE projection_threads SET updated_at = ? WHERE thread_id = ?`)
-      .run(e.occurredAt, e.streamId)
+        .run(e.occurredAt, e.streamId)
+  }
+
+  private applyActiveTurnSet(e: KnownEvent): void {
+    const at = e.payload['activeTurn']
+    const json = at == null ? null : JSON.stringify(at)
+    this.db
+      .prepare(
+        `UPDATE projection_threads SET active_turn_json = ?, updated_at = ? WHERE thread_id = ?`
+      )
+      .run(json, e.occurredAt, e.streamId)
   }
 
   private applyLatestTurnSet(e: KnownEvent): void {
@@ -534,7 +548,7 @@ export class ProjectionPipeline {
       )
       .run(e.occurredAt, e.streamId)
     this.db
-      .prepare(`UPDATE projection_threads SET updated_at = ? WHERE thread_id = ?`)
+      .prepare(`UPDATE projection_threads SET active_turn_json = NULL, updated_at = ? WHERE thread_id = ?`)
       .run(e.occurredAt, e.streamId)
   }
 

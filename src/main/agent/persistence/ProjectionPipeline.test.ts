@@ -303,4 +303,140 @@ describe('ProjectionPipeline', () => {
     const shellThread = snapshots.getShellSnapshot().threads.find((thread) => thread.id === 'thread-plan')
     expect(shellThread?.updatedAt).toBe(updatedAt)
   })
+
+  it('persists thread.active-turn-set and snapshot reads back activeTurn', () => {
+    const n = now()
+    const ts = eventStore.append({
+      eventId: 'at-thread',
+      aggregateKind: 'thread',
+      streamId: 'thread-active-turn',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-active-turn', projectId: 'proj-1', title: 'AT' }
+    })
+    projections.apply({
+      sequence: ts,
+      eventId: 'at-thread',
+      aggregateKind: 'thread',
+      streamId: 'thread-active-turn',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-active-turn', projectId: 'proj-1', title: 'AT' }
+    })
+
+    const activeTurn = {
+      turnId: 'turn-x',
+      phase: 'thinking' as const,
+      activeItemIds: ['item-1'],
+      visibleIndicator: 'thinking' as const,
+      startedAt: n,
+      updatedAt: n
+    }
+    const atSeq = eventStore.append({
+      eventId: 'at-set',
+      aggregateKind: 'thread',
+      streamId: 'thread-active-turn',
+      streamVersion: 2,
+      eventType: 'thread.active-turn-set',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { activeTurn }
+    })
+    projections.apply({
+      sequence: atSeq,
+      eventId: 'at-set',
+      aggregateKind: 'thread',
+      streamId: 'thread-active-turn',
+      streamVersion: 2,
+      eventType: 'thread.active-turn-set',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { activeTurn }
+    })
+
+    expect(snapshots.getThreadDetail('thread-active-turn')?.activeTurn).toEqual(activeTurn)
+  })
+
+  it('thread.active-turn-set with null clears active_turn_json', () => {
+    const n = now()
+    const ts = eventStore.append({
+      eventId: 'at2-thread',
+      aggregateKind: 'thread',
+      streamId: 'thread-active-null',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-active-null', projectId: 'proj-1', title: 'ATN' }
+    })
+    projections.apply({
+      sequence: ts,
+      eventId: 'at2-thread',
+      aggregateKind: 'thread',
+      streamId: 'thread-active-null',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-active-null', projectId: 'proj-1', title: 'ATN' }
+    })
+
+    const activeTurn = {
+      turnId: 't',
+      phase: 'starting' as const,
+      activeItemIds: [],
+      visibleIndicator: 'exploring' as const,
+      startedAt: n,
+      updatedAt: n
+    }
+    const s2 = eventStore.append({
+      eventId: 'at2-set',
+      aggregateKind: 'thread',
+      streamId: 'thread-active-null',
+      streamVersion: 2,
+      eventType: 'thread.active-turn-set',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { activeTurn }
+    })
+    projections.apply({
+      sequence: s2,
+      eventId: 'at2-set',
+      aggregateKind: 'thread',
+      streamId: 'thread-active-null',
+      streamVersion: 2,
+      eventType: 'thread.active-turn-set',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { activeTurn }
+    })
+
+    const s3 = eventStore.append({
+      eventId: 'at2-clear',
+      aggregateKind: 'thread',
+      streamId: 'thread-active-null',
+      streamVersion: 3,
+      eventType: 'thread.active-turn-set',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { activeTurn: null }
+    })
+    projections.apply({
+      sequence: s3,
+      eventId: 'at2-clear',
+      aggregateKind: 'thread',
+      streamId: 'thread-active-null',
+      streamVersion: 3,
+      eventType: 'thread.active-turn-set',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { activeTurn: null }
+    })
+
+    expect(snapshots.getThreadDetail('thread-active-null')?.activeTurn).toBeNull()
+  })
 })

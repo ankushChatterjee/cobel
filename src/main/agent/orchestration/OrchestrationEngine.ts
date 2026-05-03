@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import type {
+  ActiveTurnProjection,
   ChatAttachment,
   InteractionMode,
   OrchestrationEvent,
@@ -87,6 +88,7 @@ export class OrchestrationEngine {
       todoLists: [],
       session: null,
       latestTurn: null,
+      activeTurn: null,
       checkpoints: [],
       createdAt: now,
       updatedAt: now,
@@ -121,6 +123,7 @@ export class OrchestrationEngine {
       todoLists: [],
       session: null,
       latestTurn: null,
+      activeTurn: null,
       checkpoints: [],
       updatedAt: now,
       archivedAt: null
@@ -249,6 +252,11 @@ export class OrchestrationEngine {
       ?.thread.activities.find((candidate) => candidate.id === activity.id)
     const eventSequence = this.nextSequence()
     const activitySequence = existing?.sequence ?? eventSequence
+    const merged: OrchestrationThreadActivity = {
+      ...activity,
+      createdAt: existing?.createdAt ?? activity.createdAt,
+      sequence: activitySequence
+    }
     traceCommandEvent('ingestion.activity-upserted', {
       provider: this.threads.get(threadId)?.thread.session?.providerName ?? null,
       threadId,
@@ -266,7 +274,7 @@ export class OrchestrationEngine {
       sequence: eventSequence,
       type: 'thread.activity-upserted',
       threadId,
-      activity: { ...activity, sequence: activitySequence },
+      activity: merged,
       createdAt: activity.createdAt
     })
   }
@@ -312,6 +320,22 @@ export class OrchestrationEngine {
       threadId,
       latestTurn,
       createdAt: nowIso()
+    })
+  }
+
+  setActiveTurn(input: {
+    threadId: string
+    activeTurn: ActiveTurnProjection | null
+    createdAt?: string
+  }): void {
+    this.ensureThread({ threadId: input.threadId })
+    const now = input.createdAt ?? nowIso()
+    this.apply({
+      sequence: this.nextSequence(),
+      type: 'thread.active-turn-set',
+      threadId: input.threadId,
+      activeTurn: input.activeTurn,
+      createdAt: now
     })
   }
 
@@ -366,6 +390,7 @@ export class OrchestrationEngine {
       todoLists: [],
       session: null,
       latestTurn: null,
+      activeTurn: null,
       checkpoints: [],
       createdAt: now,
       updatedAt: now,
@@ -571,6 +596,7 @@ export class OrchestrationEngine {
       event.type === 'thread.created' ||
       event.type === 'thread.renamed' ||
       event.type === 'thread.session-set' ||
+      event.type === 'thread.active-turn-set' ||
       event.type === 'thread.latest-turn-set' ||
       event.type === 'thread.message-upserted' ||
       event.type === 'thread.turn-diff-completed' ||
@@ -652,6 +678,7 @@ function buildEventPayload(
   if ('todoList' in event) base['todoList'] = event.todoList
   if ('turnId' in event) base['turnId'] = event.turnId
   if ('latestTurn' in event) base['latestTurn'] = event.latestTurn
+  if ('activeTurn' in event) base['activeTurn'] = event.activeTurn
   if ('checkpoint' in event) base['checkpoint'] = event.checkpoint
   if ('turnCount' in event) base['turnCount'] = event.turnCount
   if ('revertedAt' in event) base['revertedAt'] = event.revertedAt

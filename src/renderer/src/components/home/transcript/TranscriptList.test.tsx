@@ -98,10 +98,10 @@ function renderTranscript(items: TranscriptItem[], turnInProgress: boolean): voi
   render(
     <TranscriptList
       items={items}
-      showPendingThinking={false}
+      showTranscriptTailRow={false}
+      transcriptTailLabel={{ aria: '', text: '' }}
+      transcriptTailSpinner={false}
       turnInProgress={turnInProgress}
-      activeTurnId={turnInProgress ? 'turn-1' : null}
-      latestTurnId="turn-1"
       providerName="codex"
       expandedToolIds={new Set()}
       checkpointByAssistantMessageId={new Map()}
@@ -132,7 +132,7 @@ describe('TranscriptList tool groups', () => {
 
     expect(screen.queryByLabelText('Thinking')).not.toBeInTheDocument()
     expect(screen.queryByText('thinking…')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Thought')).toBeInTheDocument()
+    expect(screen.getByLabelText('Model reasoning')).toBeInTheDocument()
   })
 
   it('shows the attachment count on sent user messages', () => {

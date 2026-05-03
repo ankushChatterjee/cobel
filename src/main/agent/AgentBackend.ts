@@ -229,6 +229,19 @@ export class AgentBackend {
           lastError: null,
           createdAt: input.createdAt
         })
+        this.engine.setActiveTurn({
+          threadId: input.threadId,
+          activeTurn: {
+            turnId: `pending:${input.commandId}`,
+            phase: 'queued',
+            activeItemIds: [],
+            visibleIndicator: 'exploring',
+            startedAt: input.createdAt,
+            updatedAt: input.createdAt
+          },
+          createdAt: input.createdAt
+        })
+        try {
         const resumeCursor = this.directory.getResumeCursor(input.threadId)
         await this.providers.startSession({
           provider: input.provider,
@@ -261,6 +274,21 @@ export class AgentBackend {
             resumeCursor: result.resumeCursor
           })
         }
+        {
+          const nowIso = new Date().toISOString()
+          const cur = this.engine.getThread(input.threadId).activeTurn
+          if (cur?.phase === 'queued') {
+            this.engine.setActiveTurn({
+              threadId: input.threadId,
+              activeTurn: {
+                ...cur,
+                turnId: result.turnId,
+                updatedAt: nowIso
+              },
+              createdAt: nowIso
+            })
+          }
+        }
         this.trackThreadNaming(this.autoRenameThreadFromFirstTurn({
           threadId: input.threadId,
           input: input.input,
@@ -276,6 +304,14 @@ export class AgentBackend {
           commandId: input.commandId,
           threadId: input.threadId,
           turnId: result.turnId
+        }
+        } catch (err) {
+          this.engine.setActiveTurn({
+            threadId: input.threadId,
+            activeTurn: null,
+            createdAt: new Date().toISOString()
+          })
+          throw err
         }
       }
 
