@@ -49,7 +49,6 @@ export class ProviderRuntimeIngestion {
   private readonly streamedAssistantItems = new Set<string>()
   private readonly planBuffers = new Map<string, PlanBufferState>()
   private readonly completedTurns = new Map<string, 'completed' | 'failed'>()
-  private readonly turnFinalizeOutcome = new Map<string, 'completed' | 'failed' | 'interrupted'>()
   private draining = false
   private drainPromise: Promise<void> = Promise.resolve()
 
@@ -209,30 +208,15 @@ export class ProviderRuntimeIngestion {
     if (!prev) return
 
     const mapped = mapTurnCompletedPhase(event.payload.state)
-    this.turnFinalizeOutcome.set(threadId, mapped)
-    const ids = [...prev.activeItemIds]
-    if (ids.length === 0) {
-      this.turnFinalizeOutcome.delete(threadId)
-      this.engine.setActiveTurn({
-        threadId,
-        activeTurn: {
-          ...prev,
-          phase: mapped,
-          visibleIndicator: 'none',
-          activeItemIds: [],
-          updatedAt: event.createdAt
-        },
-        createdAt: event.createdAt
-      })
-      return
-    }
+    // Do not enter `finalizing` waiting on `item.completed`: providers often omit matching completions
+    // for every `item.started`, which left "Running tools…" stuck forever after the turn ended.
     this.engine.setActiveTurn({
       threadId,
       activeTurn: {
         ...prev,
-        phase: 'finalizing',
-        visibleIndicator: 'tool',
-        activeItemIds: ids,
+        phase: mapped,
+        visibleIndicator: 'none',
+        activeItemIds: [],
         updatedAt: event.createdAt
       },
       createdAt: event.createdAt
@@ -290,17 +274,6 @@ export class ProviderRuntimeIngestion {
     ids: string[],
     createdAt: string
   ): ActiveTurnProjection {
-    const outcome = this.turnFinalizeOutcome.get(threadId)
-    if (prev.phase === 'finalizing' && ids.length === 0 && outcome) {
-      this.turnFinalizeOutcome.delete(threadId)
-      return {
-        ...prev,
-        phase: outcome,
-        visibleIndicator: 'none',
-        activeItemIds: [],
-        updatedAt: createdAt
-      }
-    }
     const draft: ActiveTurnProjection = {
       ...prev,
       activeItemIds: ids,
@@ -359,7 +332,6 @@ export class ProviderRuntimeIngestion {
         return
 
       case 'turn.started':
-        this.turnFinalizeOutcome.delete(event.threadId)
         {
           const turnId = event.turnId ?? event.eventId
           this.patchActiveTurn(
@@ -622,7 +594,6 @@ export class ProviderRuntimeIngestion {
           event.threadId
         )
         if (event.type === 'runtime.error' && this.shouldPromoteRuntimeError(event)) {
-          this.turnFinalizeOutcome.delete(event.threadId)
           this.engine.setActiveTurn({
             threadId: event.threadId,
             activeTurn: null,
@@ -1308,7 +1279,6 @@ export class ProviderRuntimeIngestion {
       startedAt: thread.latestTurn?.startedAt ?? event.createdAt,
       completedAt: event.createdAt
     })
-    this.turnFinalizeOutcome.delete(event.threadId)
     this.engine.setActiveTurn({
       threadId: event.threadId,
       activeTurn: null,

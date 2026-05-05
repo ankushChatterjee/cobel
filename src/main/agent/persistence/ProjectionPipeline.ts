@@ -43,8 +43,10 @@ export class ProjectionPipeline {
   }
 
   apply(event: StoredOrchestrationEvent): void {
-    this.applyInternal(event)
-    if (event.sequence !== undefined) this.saveSequence(event.sequence)
+    this.db.transaction(() => {
+      this.applyInternal(event)
+      if (event.sequence !== undefined) this.saveSequence(event.sequence)
+    })()
   }
 
   private applyInternal(event: StoredOrchestrationEvent): void {
@@ -176,11 +178,13 @@ export class ProjectionPipeline {
     const thread = e.payload['thread']
     if (!thread || typeof thread !== 'object') return
     const t = thread as Record<string, unknown>
+    const latestTurn = asRecord(t['latestTurn'])
+    const latestTurnId = str(latestTurn['id'])
     this.db
       .prepare(
         `
         UPDATE projection_threads
-        SET title = ?, cwd = ?, branch = ?, active_turn_json = ?, updated_at = ?
+        SET title = ?, cwd = ?, branch = ?, latest_turn_id = ?, active_turn_json = ?, updated_at = ?
         WHERE thread_id = ?
       `
       )
@@ -188,14 +192,26 @@ export class ProjectionPipeline {
         str(t['title']) ?? DEFAULT_THREAD_TITLE,
         str(t['cwd']) ?? null,
         str(t['branch']) ?? 'main',
+        latestTurnId,
         t['activeTurn'] != null ? JSON.stringify(t['activeTurn']) : null,
         e.occurredAt,
         e.streamId
       )
+
+    this.replaceSnapshotDetails(e)
   }
 
   private applySessionSet(e: KnownEvent): void {
-    const session = asRecord(e.payload['session'])
+    const rawSession = e.payload['session']
+    if (rawSession == null) {
+      this.db.prepare(`DELETE FROM projection_thread_sessions WHERE thread_id = ?`).run(e.streamId)
+      this.db
+        .prepare(`UPDATE projection_threads SET updated_at = ? WHERE thread_id = ?`)
+        .run(e.occurredAt, e.streamId)
+      return
+    }
+
+    const session = asRecord(rawSession)
     this.db
       .prepare(
         `
@@ -373,7 +389,7 @@ export class ProjectionPipeline {
       .run(e.streamId, turnId)
     this.db
       .prepare(`UPDATE projection_threads SET updated_at = ? WHERE thread_id = ?`)
-        .run(e.occurredAt, e.streamId)
+      .run(e.occurredAt, e.streamId)
   }
 
   private applyActiveTurnSet(e: KnownEvent): void {
@@ -390,6 +406,11 @@ export class ProjectionPipeline {
     const latestTurn = e.payload['latestTurn']
     if (!latestTurn || typeof latestTurn !== 'object') {
       this.db.prepare(`DELETE FROM projection_latest_turns WHERE thread_id = ?`).run(e.streamId)
+      this.db
+        .prepare(
+          `UPDATE projection_threads SET latest_turn_id = NULL, updated_at = ? WHERE thread_id = ?`
+        )
+        .run(e.occurredAt, e.streamId)
       return
     }
     const turn = latestTurn as Record<string, unknown>
@@ -548,7 +569,9 @@ export class ProjectionPipeline {
       )
       .run(e.occurredAt, e.streamId)
     this.db
-      .prepare(`UPDATE projection_threads SET active_turn_json = NULL, updated_at = ? WHERE thread_id = ?`)
+      .prepare(
+        `UPDATE projection_threads SET active_turn_json = NULL, updated_at = ? WHERE thread_id = ?`
+      )
       .run(e.occurredAt, e.streamId)
   }
 
@@ -560,10 +583,65 @@ export class ProjectionPipeline {
   private saveSequence(sequence: number): void {
     this.upsertCursor.run({ projector: 'main', seq: sequence, now: new Date().toISOString() })
   }
+
+  private replaceSnapshotDetails(e: KnownEvent): void {
+    const thread = asRecord(e.payload['thread'])
+    this.deleteThreadDetails(e.streamId)
+
+    for (const message of arrayOfRecords(thread['messages'])) {
+      this.applyMessageUpserted({ ...e, payload: { message } })
+    }
+    for (const activity of arrayOfRecords(thread['activities'])) {
+      this.applyActivityUpserted({ ...e, payload: { activity } })
+    }
+    for (const proposedPlan of arrayOfRecords(thread['proposedPlans'])) {
+      this.applyProposedPlanUpserted({ ...e, payload: { proposedPlan } })
+    }
+    for (const todoList of arrayOfRecords(thread['todoLists'])) {
+      this.applyTodoListUpserted({ ...e, payload: { todoList } })
+    }
+
+    this.applySessionSet({ ...e, payload: { session: thread['session'] ?? null } })
+    this.applyLatestTurnSet({ ...e, payload: { latestTurn: thread['latestTurn'] ?? null } })
+
+    for (const checkpoint of arrayOfRecords(thread['checkpoints'])) {
+      this.applyCheckpointUpserted({ ...e, payload: { checkpoint } })
+    }
+
+    this.db
+      .prepare(
+        `UPDATE projection_threads SET active_turn_json = ?, updated_at = ? WHERE thread_id = ?`
+      )
+      .run(
+        thread['activeTurn'] != null ? JSON.stringify(thread['activeTurn']) : null,
+        e.occurredAt,
+        e.streamId
+      )
+  }
+
+  private deleteThreadDetails(threadId: string): void {
+    this.db.prepare(`DELETE FROM projection_thread_messages WHERE thread_id = ?`).run(threadId)
+    this.db.prepare(`DELETE FROM projection_thread_activities WHERE thread_id = ?`).run(threadId)
+    this.db
+      .prepare(`DELETE FROM projection_thread_proposed_plans WHERE thread_id = ?`)
+      .run(threadId)
+    this.db.prepare(`DELETE FROM projection_thread_todo_lists WHERE thread_id = ?`).run(threadId)
+    this.db.prepare(`DELETE FROM projection_thread_sessions WHERE thread_id = ?`).run(threadId)
+    this.db.prepare(`DELETE FROM projection_latest_turns WHERE thread_id = ?`).run(threadId)
+    this.db.prepare(`DELETE FROM projection_thread_checkpoints WHERE thread_id = ?`).run(threadId)
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+}
+
+function arrayOfRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Record<string, unknown> => typeof item === 'object' && item !== null
+      )
+    : []
 }
 
 function str(value: unknown): string | null {

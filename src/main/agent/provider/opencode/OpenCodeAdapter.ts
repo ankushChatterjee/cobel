@@ -1,11 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import type {
-  OpencodeClient,
-  Part,
-  PermissionRequest,
-  QuestionRequest
-} from '@opencode-ai/sdk/v2'
+import type { OpencodeClient, Part, PermissionRequest, QuestionRequest } from '@opencode-ai/sdk/v2'
 import type {
   CanonicalItemType,
   CanonicalRequestType,
@@ -135,7 +130,11 @@ function toToolLifecycleItemType(toolName: string): CanonicalItemType {
   if (normalized.includes('web')) return 'web_search'
   if (normalized.includes('mcp')) return 'mcp_tool_call'
   if (normalized.includes('image')) return 'image_view'
-  if (normalized.includes('task') || normalized.includes('agent') || normalized.includes('subtask')) {
+  if (
+    normalized.includes('task') ||
+    normalized.includes('agent') ||
+    normalized.includes('subtask')
+  ) {
     return 'collab_agent_tool_call'
   }
   return 'dynamic_tool_call'
@@ -232,7 +231,12 @@ export function fileEditChangesFromOpenCodeToolPart(part: Part): FileEditChange[
   }
   const fallbacks: string[] = []
   const { state } = part
-  if (state.status !== 'pending' && 'input' in state && state.input && typeof state.input === 'object') {
+  if (
+    state.status !== 'pending' &&
+    'input' in state &&
+    state.input &&
+    typeof state.input === 'object'
+  ) {
     const fp = (state.input as Record<string, unknown>).filePath
     if (typeof fp === 'string' && fp.trim()) fallbacks.push(fp)
   }
@@ -273,11 +277,13 @@ function basenamePath(filePath: string): string {
 }
 
 /** OpenCode read tool wraps path/type/content in pseudo-tags on stdout. */
-function parseOpenCodeReadTaggedOutput(output: string): {
-  path: string
-  resourceType?: string
-  content: string
-} | undefined {
+function parseOpenCodeReadTaggedOutput(output: string):
+  | {
+      path: string
+      resourceType?: string
+      content: string
+    }
+  | undefined {
   const pathMatch = output.match(/<path>([\s\S]*?)<\/path>/i)
   const typeMatch = output.match(/<type>([\s\S]*?)<\/type>/i)
   const contentMatch = output.match(/<content>([\s\S]*?)<\/content>/i)
@@ -295,7 +301,9 @@ function readInputFilePath(state: Extract<Part, { type: 'tool' }>['state']): str
   return typeof fp === 'string' && fp.trim() ? fp.trim() : undefined
 }
 
-function fileReadPreviewFromOpenCodeReadTool(part: Extract<Part, { type: 'tool' }>): FileReadPreview | undefined {
+function fileReadPreviewFromOpenCodeReadTool(
+  part: Extract<Part, { type: 'tool' }>
+): FileReadPreview | undefined {
   if (part.tool.toLowerCase() !== 'read') return undefined
   const { state } = part
   let path = readInputFilePath(state) ?? ''
@@ -327,9 +335,7 @@ function fileReadPreviewFromOpenCodeReadTool(part: Extract<Part, { type: 'tool' 
   return { path: path || '(file)', content, resourceType, truncated }
 }
 
-export function todoItemsFromOpenCodeToolPart(
-  part: Extract<Part, { type: 'tool' }>
-): Array<{
+export function todoItemsFromOpenCodeToolPart(part: Extract<Part, { type: 'tool' }>): Array<{
   id?: string
   text: string
   status: 'pending' | 'in_progress' | 'completed'
@@ -352,22 +358,14 @@ export function todoItemsFromOpenCodeToolPart(
   return []
 }
 
-function readTodoItems(
-  value: unknown
-): Array<{
+function readTodoItems(value: unknown): Array<{
   id?: string
   text: string
   status: 'pending' | 'in_progress' | 'completed'
 }> {
   const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : null
   if (!record) return []
-  const candidates = [
-    record.todos,
-    record.items,
-    record.steps,
-    record.tasks,
-    record.plan
-  ]
+  const candidates = [record.todos, record.items, record.steps, record.tasks, record.plan]
   for (const candidate of candidates) {
     const items = readTodoItemsArray(candidate)
     if (items.length > 0) return items
@@ -375,9 +373,7 @@ function readTodoItems(
   return []
 }
 
-function readTodoItemsArray(
-  value: unknown
-): Array<{
+function readTodoItemsArray(value: unknown): Array<{
   id?: string
   text: string
   status: 'pending' | 'in_progress' | 'completed'
@@ -401,11 +397,7 @@ function readTodoItemsArray(
         status: normalizeOpenCodeTodoStatus(record.status)
       }
     })
-    .filter(
-      (
-        item
-      ): item is NonNullable<typeof item> => item !== null
-    )
+    .filter((item): item is NonNullable<typeof item> => item !== null)
 }
 
 function normalizeOpenCodeTodoStatus(value: unknown): 'pending' | 'in_progress' | 'completed' {
@@ -446,7 +438,8 @@ export function toolLifecycleTitle(part: Extract<Part, { type: 'tool' }>): strin
 
   if (toolLower === 'grep' && 'input' in st && st.input && typeof st.input === 'object') {
     const input = st.input as Record<string, unknown>
-    const pattern = typeof input.pattern === 'string' && input.pattern.trim() ? input.pattern.trim() : ''
+    const pattern =
+      typeof input.pattern === 'string' && input.pattern.trim() ? input.pattern.trim() : ''
     if (pattern) {
       const include =
         typeof input.include === 'string' && input.include.trim() ? input.include.trim() : ''
@@ -463,7 +456,9 @@ function sessionErrorMessage(error: unknown): string {
   if (!error || typeof error !== 'object') return 'OpenCode session failed.'
   const data = 'data' in error && error.data && typeof error.data === 'object' ? error.data : null
   const message = data && 'message' in data ? data.message : null
-  return typeof message === 'string' && message.trim().length > 0 ? message : 'OpenCode session failed.'
+  return typeof message === 'string' && message.trim().length > 0
+    ? message
+    : 'OpenCode session failed.'
 }
 
 function normalizeQuestionRequest(request: QuestionRequest): UserInputQuestion[] {
@@ -749,7 +744,9 @@ export class OpenCodeAdapter implements ProviderAdapter {
     const modelSlug = (input.model ?? ctx.session.model ?? '').trim()
     const parsed = parseOpenCodeModelSlug(modelSlug)
     if (!parsed) {
-      throw new Error("OpenCode requires model id in the form 'upstream/model-id' (e.g. anthropic/claude-sonnet-4-20250514).")
+      throw new Error(
+        "OpenCode requires model id in the form 'upstream/model-id' (e.g. anthropic/claude-sonnet-4-20250514)."
+      )
     }
     const text = input.input?.trim() ?? ''
     const fileParts = toOpenCodeFileParts({
@@ -950,8 +947,14 @@ export class OpenCodeAdapter implements ProviderAdapter {
             : null
           : (readTracePayloadString(event.payload, 'itemType') ?? null),
       streamKind: event.type === 'content.delta' ? event.payload.streamKind : null,
-      title: event.type === 'content.delta' ? null : (readTracePayloadString(event.payload, 'title') ?? null),
-      detail: event.type === 'content.delta' ? null : (readTracePayloadString(event.payload, 'detail') ?? null),
+      title:
+        event.type === 'content.delta'
+          ? null
+          : (readTracePayloadString(event.payload, 'title') ?? null),
+      detail:
+        event.type === 'content.delta'
+          ? null
+          : (readTracePayloadString(event.payload, 'detail') ?? null),
       runtimeType: event.type
     })
     this.bus.emit(event)
@@ -980,10 +983,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         for await (const rawEvent of subscription.stream) {
           dumpOpenCodeSubscribeRawMessage(rawEvent, { threadId: context.session.threadId })
           const event = rawEvent as SdkEvent
-          // One Cobel thread ↔ one bound OpenCode session id (`openCodeSessionId`). Nested explore/task
-          // sessions use a different `sessionID` on the wire; those events are not ingested here.
-          const payloadSessionId = event.properties?.sessionID as string | undefined
-          if (payloadSessionId !== context.openCodeSessionId) continue
+          if (!this.eventBelongsToContext(context, event)) continue
           await this.dispatchSdkEvent(context, event)
         }
       } catch (error) {
@@ -1059,6 +1059,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
 
   private async dispatchSdkEvent(context: OpenCodeSessionContext, event: SdkEvent): Promise<void> {
     const turnId = context.activeTurnId
+    const wireSessionId = event.properties?.sessionID as string | undefined
+    const sessionOwnsTurnLifecycle = wireSessionId === context.openCodeSessionId
     switch (event.type) {
       case 'message.updated': {
         const info = event.properties.info as { id?: string; role?: 'user' | 'assistant' }
@@ -1140,9 +1142,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         if (part.type === 'tool') {
           const callID = part.callID
           if (callID) {
-            const terminal =
-              part.state.status === 'completed' ||
-              part.state.status === 'error'
+            const terminal = part.state.status === 'completed' || part.state.status === 'error'
             if (terminal) {
               context.terminalToolCallIds.add(callID)
             } else if (context.terminalToolCallIds.has(callID)) {
@@ -1270,7 +1270,9 @@ export class OpenCodeAdapter implements ProviderAdapter {
             raw: event
           }),
           type: 'user-input.requested',
-          payload: { questions: normalizeQuestionRequest(event.properties as unknown as QuestionRequest) }
+          payload: {
+            questions: normalizeQuestionRequest(event.properties as unknown as QuestionRequest)
+          }
         })
         break
       }
@@ -1314,8 +1316,13 @@ export class OpenCodeAdapter implements ProviderAdapter {
       }
       case 'session.status': {
         const status = event.properties.status as { type?: string; message?: string }
-        if (status.type === 'busy') {
-          context.session = { ...context.session, status: 'running', activeTurnId: turnId, updatedAt: nowIso() }
+        if (status.type === 'busy' && sessionOwnsTurnLifecycle) {
+          context.session = {
+            ...context.session,
+            status: 'running',
+            activeTurnId: turnId,
+            updatedAt: nowIso()
+          }
         }
         if (status.type === 'retry') {
           this.emit({
@@ -1325,7 +1332,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
           })
           break
         }
-        if (status.type === 'idle' && turnId) {
+        if (status.type === 'idle' && turnId && sessionOwnsTurnLifecycle) {
           context.activeTurnId = undefined
           context.session = {
             ...context.session,
@@ -1345,9 +1352,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         const fileEditChanges = fileEditChangesFromSessionDiff(diff)
         if (fileEditChanges && fileEditChanges.length > 0) {
           const title =
-            fileEditChanges.length === 1
-              ? basenamePath(fileEditChanges[0].path)
-              : 'file changes'
+            fileEditChanges.length === 1 ? basenamePath(fileEditChanges[0].path) : 'file changes'
           this.emit({
             ...buildEventBase({
               threadId: context.session.threadId,
@@ -1379,7 +1384,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         break
       case 'session.idle': {
         const active = context.activeTurnId
-        if (active) {
+        if (active && sessionOwnsTurnLifecycle) {
           context.activeTurnId = undefined
           context.session = {
             ...context.session,
@@ -1397,15 +1402,21 @@ export class OpenCodeAdapter implements ProviderAdapter {
       case 'session.error': {
         const message = sessionErrorMessage(event.properties.error)
         const activeTurn = context.activeTurnId
-        context.activeTurnId = undefined
+        if (sessionOwnsTurnLifecycle) {
+          context.activeTurnId = undefined
+        }
         this.emit({
           ...buildEventBase({ threadId: context.session.threadId, turnId: activeTurn, raw: event }),
           type: 'runtime.error',
           payload: { message, detail: event.properties.error }
         })
-        if (activeTurn) {
+        if (activeTurn && sessionOwnsTurnLifecycle) {
           this.emit({
-            ...buildEventBase({ threadId: context.session.threadId, turnId: activeTurn, raw: event }),
+            ...buildEventBase({
+              threadId: context.session.threadId,
+              turnId: activeTurn,
+              raw: event
+            }),
             type: 'turn.completed',
             payload: { state: 'failed', errorMessage: message }
           })
@@ -1508,13 +1519,62 @@ export class OpenCodeAdapter implements ProviderAdapter {
     }
     return context.partTurnIdById.get(partId)
   }
+
+  private eventBelongsToContext(context: OpenCodeSessionContext, event: SdkEvent): boolean {
+    const sessionId = event.properties?.sessionID as string | undefined
+    if (sessionId) return sessionId === context.openCodeSessionId
+
+    switch (event.type) {
+      case 'message.updated': {
+        const info = event.properties.info as { id?: string } | undefined
+        const messageId = info?.id
+        if (!messageId) return false
+        if (context.messageRoleById.has(messageId)) return true
+        for (const part of context.partById.values()) {
+          if (part.messageID === messageId) return true
+        }
+        return false
+      }
+      case 'message.removed': {
+        const messageId = event.properties.messageID as string | undefined
+        return Boolean(messageId && context.messageRoleById.has(messageId))
+      }
+      case 'message.part.removed':
+      case 'message.part.delta': {
+        const partId = event.properties.partID as string | undefined
+        return Boolean(
+          partId && (context.partById.has(partId) || context.pendingPartTextDeltas.has(partId))
+        )
+      }
+      case 'message.part.updated': {
+        const part = event.properties.part as Part | undefined
+        if (!part) return false
+        if (context.partById.has(part.id)) return true
+        if (context.messageRoleById.has(part.messageID)) return true
+        return false
+      }
+      case 'permission.replied': {
+        const requestId = event.properties.requestID as string | undefined
+        return Boolean(requestId && context.pendingPermissions.has(requestId))
+      }
+      case 'question.replied':
+      case 'question.rejected': {
+        const requestId = event.properties.requestID as string | undefined
+        return Boolean(requestId && context.pendingQuestions.has(requestId))
+      }
+      default:
+        return false
+    }
+  }
 }
 
 async function stopOpenCodeContext(context: OpenCodeSessionContext): Promise<void> {
   context.stopped = true
   context.eventsAbortController.abort()
   try {
-    await context.client.session.abort({ sessionID: context.openCodeSessionId }).catch(() => undefined)
+    await context.client.session
+      .abort({ sessionID: context.openCodeSessionId })
+      .catch(() => undefined)
   } catch {
     // ignore
   }

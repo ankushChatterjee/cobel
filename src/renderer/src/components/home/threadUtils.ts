@@ -126,7 +126,7 @@ export function selectTailIndicator(
 ): ActiveTurnVisibleIndicator {
   if (!thread?.activeTurn) return 'none'
   const phase = thread.activeTurn.phase
-  if (phase === 'completed' || phase === 'failed' || phase === 'interrupted' || phase === 'idle') {
+  if (phase === 'completed' || phase === 'failed' || phase === 'interrupted' || phase === 'idle' || phase === 'finalizing') {
     return 'none'
   }
   return thread.activeTurn.visibleIndicator

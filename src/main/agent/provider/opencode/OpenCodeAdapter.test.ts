@@ -5,6 +5,7 @@ const createMock = vi.fn()
 const deleteMock = vi.fn()
 const closeMock = vi.fn()
 const eventSubscribeMock = vi.fn()
+const promptAsyncMock = vi.fn()
 
 vi.mock('./opencodeRuntime', () => ({
   buildOpenCodePermissionRules: vi.fn(() => [{ permission: '*', pattern: '*', action: 'ask' }]),
@@ -17,6 +18,7 @@ vi.mock('./opencodeRuntime', () => ({
     session: {
       create: createMock,
       prompt: promptMock,
+      promptAsync: promptAsyncMock,
       delete: deleteMock
     },
     event: {
@@ -30,7 +32,11 @@ vi.mock('./opencodeRuntime', () => ({
     const [providerID, modelID] = slug.split('/')
     return providerID && modelID ? { providerID, modelID } : null
   }),
-  readOpenCodeConfigFromEnv: vi.fn(() => ({ binaryPath: 'opencode', serverUrl: '', serverPassword: '' })),
+  readOpenCodeConfigFromEnv: vi.fn(() => ({
+    binaryPath: 'opencode',
+    serverUrl: '',
+    serverPassword: ''
+  })),
   resolveOpenCodeBinaryPath: vi.fn((value: string) => value),
   appendOpenCodeAssistantTextDelta: vi.fn(),
   mergeOpenCodeAssistantText: vi.fn(),
@@ -42,7 +48,12 @@ vi.mock('./opencodeRuntime', () => ({
   toOpenCodeQuestionAnswers: vi.fn()
 }))
 
-import { OpenCodeAdapter, todoItemsFromOpenCodeToolPart, toolLifecycleTitle } from './OpenCodeAdapter'
+import { mergeOpenCodeAssistantText } from './opencodeRuntime'
+import {
+  OpenCodeAdapter,
+  todoItemsFromOpenCodeToolPart,
+  toolLifecycleTitle
+} from './OpenCodeAdapter'
 
 function createEventStream() {
   const queue: unknown[] = []
@@ -139,6 +150,11 @@ describe('OpenCodeAdapter event mapping', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     createMock.mockResolvedValue({ data: { id: 'session:events' } })
+    promptAsyncMock.mockResolvedValue({})
+    vi.mocked(mergeOpenCodeAssistantText).mockImplementation((previous, text) => ({
+      latestText: text,
+      deltaToEmit: previous === undefined ? text : text.slice(previous.length)
+    }))
     closeMock.mockReset()
   })
 
@@ -194,6 +210,204 @@ describe('OpenCodeAdapter event mapping', () => {
       (event) => event.type === 'item.started' || event.type === 'item.completed'
     )
     expect(lifecycle).toEqual([])
+
+    stream.close()
+  })
+
+  it('ignores events tagged for another OpenCode session', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await vi.waitFor(() => expect(eventSubscribeMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:other',
+        part: {
+          id: 'part-other',
+          messageID: 'message-other',
+          type: 'text',
+          text: 'Wrong thread'
+        }
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events.some((event) => event.type === 'content.delta')).toBe(false)
+
+    stream.close()
+  })
+
+  it('ignores untagged events that cannot be correlated to this session', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await vi.waitFor(() => expect(eventSubscribeMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'part-unknown',
+          messageID: 'message-unknown',
+          type: 'text',
+          text: 'Untagged stranger'
+        }
+      }
+    })
+    stream.push({
+      type: 'permission.asked',
+      properties: {
+        id: 'permission-unknown',
+        permission: 'bash',
+        patterns: ['bun test']
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events.some((event) => event.type === 'content.delta')).toBe(false)
+    expect(events.some((event) => event.type === 'request.opened')).toBe(false)
+
+    stream.close()
+  })
+
+  it('accepts untagged updates for known message and request ids', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await vi.waitFor(() => expect(eventSubscribeMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'message.updated',
+      properties: {
+        sessionID: 'session:events',
+        info: { id: 'message-1', role: 'assistant' }
+      }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'part-1',
+          messageID: 'message-1',
+          type: 'text',
+          text: 'Known message'
+        }
+      }
+    })
+    stream.push({
+      type: 'permission.asked',
+      properties: {
+        sessionID: 'session:events',
+        id: 'permission-1',
+        permission: 'bash',
+        patterns: ['bun test']
+      }
+    })
+    stream.push({
+      type: 'permission.replied',
+      properties: {
+        requestID: 'permission-1',
+        reply: 'once'
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'content.delta',
+          payload: expect.objectContaining({ delta: 'Known message' })
+        }),
+        expect.objectContaining({
+          type: 'request.opened',
+          requestId: 'permission-1'
+        }),
+        expect.objectContaining({
+          type: 'request.resolved',
+          requestId: 'permission-1'
+        })
+      ])
+    )
+
+    stream.close()
+  })
+
+  it('does not let untagged session lifecycle events complete an active turn', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await adapter.sendTurn({
+      threadId: 'thread-1',
+      input: 'hello',
+      model: 'anthropic/claude-sonnet-4',
+      interactionMode: 'default'
+    })
+    await vi.waitFor(() => expect(promptAsyncMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'session.status',
+      properties: {
+        status: { type: 'idle' }
+      }
+    })
+    stream.push({
+      type: 'session.error',
+      properties: {
+        error: { message: 'wrong lifecycle' }
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const turnCompletions = events.filter((event) => event.type === 'turn.completed')
+    const runtimeErrors = events.filter((event) => event.type === 'runtime.error')
+    expect(turnCompletions).toEqual([])
+    expect(runtimeErrors).toEqual([])
 
     stream.close()
   })

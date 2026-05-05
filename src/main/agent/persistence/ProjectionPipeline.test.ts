@@ -34,7 +34,17 @@ describe('ProjectionPipeline', () => {
       actorKind: 'system',
       payload: { projectId: 'proj-1', name: 'My Project', path: '/home/user/proj' }
     })
-    projections.apply({ sequence: seq, eventId: 'p1', aggregateKind: 'project', streamId: 'proj-1', streamVersion: 1, eventType: 'project.created', occurredAt: n, actorKind: 'system', payload: { projectId: 'proj-1', name: 'My Project', path: '/home/user/proj' } })
+    projections.apply({
+      sequence: seq,
+      eventId: 'p1',
+      aggregateKind: 'project',
+      streamId: 'proj-1',
+      streamVersion: 1,
+      eventType: 'project.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { projectId: 'proj-1', name: 'My Project', path: '/home/user/proj' }
+    })
     const shell = snapshots.getShellSnapshot()
     expect(shell.projects).toHaveLength(1)
     expect(shell.projects[0]!.name).toBe('My Project')
@@ -44,14 +54,91 @@ describe('ProjectionPipeline', () => {
   it('projects thread.created and thread.message-upserted', () => {
     const n = now()
     // project first
-    const ps = eventStore.append({ eventId: 'p1', aggregateKind: 'project', streamId: 'proj-1', streamVersion: 1, eventType: 'project.created', occurredAt: n, actorKind: 'system', payload: { projectId: 'proj-1', name: 'P', path: '/p' } })
-    projections.apply({ sequence: ps, eventId: 'p1', aggregateKind: 'project', streamId: 'proj-1', streamVersion: 1, eventType: 'project.created', occurredAt: n, actorKind: 'system', payload: { projectId: 'proj-1', name: 'P', path: '/p' } })
+    const ps = eventStore.append({
+      eventId: 'p1',
+      aggregateKind: 'project',
+      streamId: 'proj-1',
+      streamVersion: 1,
+      eventType: 'project.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { projectId: 'proj-1', name: 'P', path: '/p' }
+    })
+    projections.apply({
+      sequence: ps,
+      eventId: 'p1',
+      aggregateKind: 'project',
+      streamId: 'proj-1',
+      streamVersion: 1,
+      eventType: 'project.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { projectId: 'proj-1', name: 'P', path: '/p' }
+    })
 
-    const ts = eventStore.append({ eventId: 't1', aggregateKind: 'thread', streamId: 'thread-1', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-1', projectId: 'proj-1', title: 'My chat' } })
-    projections.apply({ sequence: ts, eventId: 't1', aggregateKind: 'thread', streamId: 'thread-1', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-1', projectId: 'proj-1', title: 'My chat' } })
+    const ts = eventStore.append({
+      eventId: 't1',
+      aggregateKind: 'thread',
+      streamId: 'thread-1',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-1', projectId: 'proj-1', title: 'My chat' }
+    })
+    projections.apply({
+      sequence: ts,
+      eventId: 't1',
+      aggregateKind: 'thread',
+      streamId: 'thread-1',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-1', projectId: 'proj-1', title: 'My chat' }
+    })
 
-    const ms = eventStore.append({ eventId: 'm1', aggregateKind: 'thread', streamId: 'thread-1', streamVersion: 2, eventType: 'thread.message-upserted', occurredAt: n, actorKind: 'system', payload: { message: { id: 'msg-1', role: 'user', text: 'Hello', turnId: null, streaming: false, createdAt: n, updatedAt: n } } })
-    projections.apply({ sequence: ms, eventId: 'm1', aggregateKind: 'thread', streamId: 'thread-1', streamVersion: 2, eventType: 'thread.message-upserted', occurredAt: n, actorKind: 'system', payload: { message: { id: 'msg-1', role: 'user', text: 'Hello', turnId: null, streaming: false, createdAt: n, updatedAt: n } } })
+    const ms = eventStore.append({
+      eventId: 'm1',
+      aggregateKind: 'thread',
+      streamId: 'thread-1',
+      streamVersion: 2,
+      eventType: 'thread.message-upserted',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: {
+        message: {
+          id: 'msg-1',
+          role: 'user',
+          text: 'Hello',
+          turnId: null,
+          streaming: false,
+          createdAt: n,
+          updatedAt: n
+        }
+      }
+    })
+    projections.apply({
+      sequence: ms,
+      eventId: 'm1',
+      aggregateKind: 'thread',
+      streamId: 'thread-1',
+      streamVersion: 2,
+      eventType: 'thread.message-upserted',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: {
+        message: {
+          id: 'msg-1',
+          role: 'user',
+          text: 'Hello',
+          turnId: null,
+          streaming: false,
+          createdAt: n,
+          updatedAt: n
+        }
+      }
+    })
 
     const detail = snapshots.getThreadDetail('thread-1')
     expect(detail).not.toBeNull()
@@ -63,8 +150,26 @@ describe('ProjectionPipeline', () => {
   it('bootstrap() replays missed events from event store', () => {
     const n = now()
     // Write events directly to the event store (simulating a crash before projection ran)
-    eventStore.append({ eventId: 'p2', aggregateKind: 'project', streamId: 'proj-2', streamVersion: 1, eventType: 'project.created', occurredAt: n, actorKind: 'system', payload: { projectId: 'proj-2', name: 'Recovered', path: '/r' } })
-    eventStore.append({ eventId: 't2', aggregateKind: 'thread', streamId: 'thread-2', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-2', projectId: 'proj-2', title: 'Recovered thread' } })
+    eventStore.append({
+      eventId: 'p2',
+      aggregateKind: 'project',
+      streamId: 'proj-2',
+      streamVersion: 1,
+      eventType: 'project.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { projectId: 'proj-2', name: 'Recovered', path: '/r' }
+    })
+    eventStore.append({
+      eventId: 't2',
+      aggregateKind: 'thread',
+      streamId: 'thread-2',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-2', projectId: 'proj-2', title: 'Recovered thread' }
+    })
 
     // Create a fresh pipeline (projection_state cursor at 0) and bootstrap
     const freshProjections = new ProjectionPipeline(db, eventStore)
@@ -78,8 +183,27 @@ describe('ProjectionPipeline', () => {
 
   it('bootstrap() is idempotent when projection_state cursor is current', () => {
     const n = now()
-    const ps = eventStore.append({ eventId: 'p3', aggregateKind: 'project', streamId: 'proj-3', streamVersion: 1, eventType: 'project.created', occurredAt: n, actorKind: 'system', payload: { projectId: 'proj-3', name: 'Idempotent', path: '/i' } })
-    projections.apply({ sequence: ps, eventId: 'p3', aggregateKind: 'project', streamId: 'proj-3', streamVersion: 1, eventType: 'project.created', occurredAt: n, actorKind: 'system', payload: { projectId: 'proj-3', name: 'Idempotent', path: '/i' } })
+    const ps = eventStore.append({
+      eventId: 'p3',
+      aggregateKind: 'project',
+      streamId: 'proj-3',
+      streamVersion: 1,
+      eventType: 'project.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { projectId: 'proj-3', name: 'Idempotent', path: '/i' }
+    })
+    projections.apply({
+      sequence: ps,
+      eventId: 'p3',
+      aggregateKind: 'project',
+      streamId: 'proj-3',
+      streamVersion: 1,
+      eventType: 'project.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { projectId: 'proj-3', name: 'Idempotent', path: '/i' }
+    })
 
     // Run bootstrap again — should not duplicate
     projections.bootstrap()
@@ -89,11 +213,71 @@ describe('ProjectionPipeline', () => {
 
   it('projects thread.session-set into projection_thread_sessions', () => {
     const n = now()
-    const ts = eventStore.append({ eventId: 'tc1', aggregateKind: 'thread', streamId: 'thread-s', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-s', projectId: 'proj-1', title: 'Session test' } })
-    projections.apply({ sequence: ts, eventId: 'tc1', aggregateKind: 'thread', streamId: 'thread-s', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-s', projectId: 'proj-1', title: 'Session test' } })
+    const ts = eventStore.append({
+      eventId: 'tc1',
+      aggregateKind: 'thread',
+      streamId: 'thread-s',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-s', projectId: 'proj-1', title: 'Session test' }
+    })
+    projections.apply({
+      sequence: ts,
+      eventId: 'tc1',
+      aggregateKind: 'thread',
+      streamId: 'thread-s',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-s', projectId: 'proj-1', title: 'Session test' }
+    })
 
-    const ss = eventStore.append({ eventId: 'ss1', aggregateKind: 'thread', streamId: 'thread-s', streamVersion: 2, eventType: 'thread.session-set', occurredAt: n, actorKind: 'system', payload: { session: { status: 'ready', providerName: 'codex', runtimeMode: 'auto-accept-edits', interactionMode: 'default', model: 'gpt-5.4', effort: 'high', activeTurnId: null, lastError: null } } })
-    projections.apply({ sequence: ss, eventId: 'ss1', aggregateKind: 'thread', streamId: 'thread-s', streamVersion: 2, eventType: 'thread.session-set', occurredAt: n, actorKind: 'system', payload: { session: { status: 'ready', providerName: 'codex', runtimeMode: 'auto-accept-edits', interactionMode: 'default', model: 'gpt-5.4', effort: 'high', activeTurnId: null, lastError: null } } })
+    const ss = eventStore.append({
+      eventId: 'ss1',
+      aggregateKind: 'thread',
+      streamId: 'thread-s',
+      streamVersion: 2,
+      eventType: 'thread.session-set',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: {
+        session: {
+          status: 'ready',
+          providerName: 'codex',
+          runtimeMode: 'auto-accept-edits',
+          interactionMode: 'default',
+          model: 'gpt-5.4',
+          effort: 'high',
+          activeTurnId: null,
+          lastError: null
+        }
+      }
+    })
+    projections.apply({
+      sequence: ss,
+      eventId: 'ss1',
+      aggregateKind: 'thread',
+      streamId: 'thread-s',
+      streamVersion: 2,
+      eventType: 'thread.session-set',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: {
+        session: {
+          status: 'ready',
+          providerName: 'codex',
+          runtimeMode: 'auto-accept-edits',
+          interactionMode: 'default',
+          model: 'gpt-5.4',
+          effort: 'high',
+          activeTurnId: null,
+          lastError: null
+        }
+      }
+    })
 
     const detail = snapshots.getThreadDetail('thread-s')
     expect(detail?.session?.status).toBe('ready')
@@ -103,10 +287,125 @@ describe('ProjectionPipeline', () => {
     expect(detail?.session?.effort).toBe('high')
   })
 
+  it('deletes persisted sessions when thread.session-set carries null', () => {
+    const n = now()
+    const ts = eventStore.append({
+      eventId: 'null-session-thread',
+      aggregateKind: 'thread',
+      streamId: 'thread-null-session',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-null-session', projectId: 'proj-1', title: 'Null session test' }
+    })
+    projections.apply({
+      sequence: ts,
+      eventId: 'null-session-thread',
+      aggregateKind: 'thread',
+      streamId: 'thread-null-session',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-null-session', projectId: 'proj-1', title: 'Null session test' }
+    })
+
+    const ss = eventStore.append({
+      eventId: 'null-session-set',
+      aggregateKind: 'thread',
+      streamId: 'thread-null-session',
+      streamVersion: 2,
+      eventType: 'thread.session-set',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: {
+        session: {
+          status: 'ready',
+          providerName: 'codex',
+          runtimeMode: 'auto-accept-edits',
+          interactionMode: 'default',
+          activeTurnId: null,
+          activePlanId: null,
+          lastError: null
+        }
+      }
+    })
+    projections.apply({
+      sequence: ss,
+      eventId: 'null-session-set',
+      aggregateKind: 'thread',
+      streamId: 'thread-null-session',
+      streamVersion: 2,
+      eventType: 'thread.session-set',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: {
+        session: {
+          status: 'ready',
+          providerName: 'codex',
+          runtimeMode: 'auto-accept-edits',
+          interactionMode: 'default',
+          activeTurnId: null,
+          activePlanId: null,
+          lastError: null
+        }
+      }
+    })
+
+    expect(snapshots.getThreadDetail('thread-null-session')?.session?.status).toBe('ready')
+
+    const clearedAt = now()
+    const clearSeq = eventStore.append({
+      eventId: 'null-session-clear',
+      aggregateKind: 'thread',
+      streamId: 'thread-null-session',
+      streamVersion: 3,
+      eventType: 'thread.session-set',
+      occurredAt: clearedAt,
+      actorKind: 'system',
+      payload: { session: null }
+    })
+    projections.apply({
+      sequence: clearSeq,
+      eventId: 'null-session-clear',
+      aggregateKind: 'thread',
+      streamId: 'thread-null-session',
+      streamVersion: 3,
+      eventType: 'thread.session-set',
+      occurredAt: clearedAt,
+      actorKind: 'system',
+      payload: { session: null }
+    })
+
+    const detail = snapshots.getThreadDetail('thread-null-session')
+    expect(detail?.session).toBeNull()
+    expect(detail?.updatedAt).toBe(clearedAt)
+  })
+
   it('persists and reloads thread todo lists', () => {
     const n = now()
-    const ts = eventStore.append({ eventId: 'todo-thread', aggregateKind: 'thread', streamId: 'thread-todo', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-todo', projectId: 'proj-1', title: 'Todo test' } })
-    projections.apply({ sequence: ts, eventId: 'todo-thread', aggregateKind: 'thread', streamId: 'thread-todo', streamVersion: 1, eventType: 'thread.created', occurredAt: n, actorKind: 'system', payload: { threadId: 'thread-todo', projectId: 'proj-1', title: 'Todo test' } })
+    const ts = eventStore.append({
+      eventId: 'todo-thread',
+      aggregateKind: 'thread',
+      streamId: 'thread-todo',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-todo', projectId: 'proj-1', title: 'Todo test' }
+    })
+    projections.apply({
+      sequence: ts,
+      eventId: 'todo-thread',
+      aggregateKind: 'thread',
+      streamId: 'thread-todo',
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: n,
+      actorKind: 'system',
+      payload: { threadId: 'thread-todo', projectId: 'proj-1', title: 'Todo test' }
+    })
 
     const ls = eventStore.append({
       eventId: 'todo-list-1',
@@ -300,7 +599,9 @@ describe('ProjectionPipeline', () => {
       })
     ])
 
-    const shellThread = snapshots.getShellSnapshot().threads.find((thread) => thread.id === 'thread-plan')
+    const shellThread = snapshots
+      .getShellSnapshot()
+      .threads.find((thread) => thread.id === 'thread-plan')
     expect(shellThread?.updatedAt).toBe(updatedAt)
   })
 
@@ -438,5 +739,308 @@ describe('ProjectionPipeline', () => {
     })
 
     expect(snapshots.getThreadDetail('thread-active-null')?.activeTurn).toBeNull()
+  })
+
+  it('replaces all persisted thread detail rows from thread.snapshot.changed', () => {
+    const staleAt = '2026-04-19T00:00:00.000Z'
+    const snapshotAt = '2026-04-19T00:01:00.000Z'
+    const threadId = 'thread-snapshot-replace'
+    const createSeq = eventStore.append({
+      eventId: 'snapshot-thread',
+      aggregateKind: 'thread',
+      streamId: threadId,
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: staleAt,
+      actorKind: 'system',
+      payload: { threadId, projectId: 'proj-1', title: 'Stale title' }
+    })
+    projections.apply({
+      sequence: createSeq,
+      eventId: 'snapshot-thread',
+      aggregateKind: 'thread',
+      streamId: threadId,
+      streamVersion: 1,
+      eventType: 'thread.created',
+      occurredAt: staleAt,
+      actorKind: 'system',
+      payload: { threadId, projectId: 'proj-1', title: 'Stale title' }
+    })
+
+    const staleEvents = [
+      {
+        eventId: 'snapshot-stale-message',
+        eventType: 'thread.message-upserted',
+        payload: {
+          message: {
+            id: 'message-stale',
+            role: 'assistant',
+            text: 'stale',
+            turnId: 'turn-stale',
+            streaming: false,
+            createdAt: staleAt,
+            updatedAt: staleAt
+          }
+        }
+      },
+      {
+        eventId: 'snapshot-stale-activity',
+        eventType: 'thread.activity-upserted',
+        payload: {
+          activity: {
+            id: 'activity-stale',
+            kind: 'tool.completed',
+            tone: 'tool',
+            summary: 'stale tool',
+            turnId: 'turn-stale',
+            resolved: true,
+            createdAt: staleAt
+          }
+        }
+      },
+      {
+        eventId: 'snapshot-stale-plan',
+        eventType: 'thread.proposed-plan-upserted',
+        payload: {
+          proposedPlan: {
+            id: 'plan-stale',
+            turnId: 'turn-stale',
+            text: 'stale plan',
+            status: 'proposed',
+            createdAt: staleAt,
+            updatedAt: staleAt
+          }
+        }
+      },
+      {
+        eventId: 'snapshot-stale-todo',
+        eventType: 'thread.todo-list-upserted',
+        payload: {
+          todoList: {
+            id: 'todo-stale',
+            turnId: 'turn-stale',
+            source: 'todo',
+            items: [{ id: 'todo-stale-1', text: 'stale todo', status: 'pending', order: 0 }],
+            createdAt: staleAt,
+            updatedAt: staleAt
+          }
+        }
+      },
+      {
+        eventId: 'snapshot-stale-session',
+        eventType: 'thread.session-set',
+        payload: {
+          session: {
+            status: 'running',
+            providerName: 'codex',
+            runtimeMode: 'auto-accept-edits',
+            interactionMode: 'default',
+            activeTurnId: 'turn-stale',
+            activePlanId: null,
+            lastError: null
+          }
+        }
+      },
+      {
+        eventId: 'snapshot-stale-latest',
+        eventType: 'thread.latest-turn-set',
+        payload: {
+          latestTurn: {
+            id: 'turn-stale',
+            status: 'running',
+            startedAt: staleAt,
+            completedAt: null
+          }
+        }
+      },
+      {
+        eventId: 'snapshot-stale-active',
+        eventType: 'thread.active-turn-set',
+        payload: {
+          activeTurn: {
+            turnId: 'turn-stale',
+            phase: 'tool_running',
+            activeItemIds: ['tool-stale'],
+            visibleIndicator: 'tool',
+            startedAt: staleAt,
+            updatedAt: staleAt
+          }
+        }
+      },
+      {
+        eventId: 'snapshot-stale-checkpoint',
+        eventType: 'thread.turn-diff-completed',
+        payload: {
+          checkpoint: {
+            id: 'checkpoint-stale',
+            turnId: 'turn-stale',
+            checkpointTurnCount: 1,
+            status: 'ready',
+            files: [],
+            completedAt: staleAt
+          }
+        }
+      }
+    ]
+    staleEvents.forEach((event, index) => {
+      const seq = eventStore.append({
+        eventId: event.eventId,
+        aggregateKind: 'thread',
+        streamId: threadId,
+        streamVersion: index + 2,
+        eventType: event.eventType,
+        occurredAt: staleAt,
+        actorKind: 'system',
+        payload: event.payload
+      })
+      projections.apply({
+        sequence: seq,
+        eventId: event.eventId,
+        aggregateKind: 'thread',
+        streamId: threadId,
+        streamVersion: index + 2,
+        eventType: event.eventType,
+        occurredAt: staleAt,
+        actorKind: 'system',
+        payload: event.payload
+      })
+    })
+
+    const replacementThread = {
+      id: threadId,
+      title: 'Replacement title',
+      cwd: '/replacement',
+      branch: 'feature/replacement',
+      messages: [
+        {
+          id: 'message-new',
+          role: 'assistant',
+          text: 'new',
+          turnId: 'turn-new',
+          streaming: false,
+          sequence: 50,
+          createdAt: snapshotAt,
+          updatedAt: snapshotAt
+        }
+      ],
+      activities: [
+        {
+          id: 'activity-new',
+          kind: 'task.completed',
+          tone: 'thinking',
+          summary: 'new thought',
+          turnId: 'turn-new',
+          resolved: true,
+          createdAt: snapshotAt
+        }
+      ],
+      proposedPlans: [
+        {
+          id: 'plan-new',
+          turnId: 'turn-new',
+          text: 'new plan',
+          status: 'proposed',
+          createdAt: snapshotAt,
+          updatedAt: snapshotAt
+        }
+      ],
+      todoLists: [
+        {
+          id: 'todo-new',
+          turnId: 'turn-new',
+          source: 'todo',
+          items: [{ id: 'todo-new-1', text: 'new todo', status: 'completed', order: 0 }],
+          createdAt: snapshotAt,
+          updatedAt: snapshotAt
+        }
+      ],
+      session: {
+        threadId,
+        status: 'ready',
+        providerName: 'opencode',
+        runtimeMode: 'approval-required',
+        interactionMode: 'plan',
+        model: 'anthropic/claude-sonnet-4',
+        activeTurnId: null,
+        activePlanId: 'plan-new',
+        lastError: null,
+        updatedAt: snapshotAt
+      },
+      latestTurn: {
+        id: 'turn-new',
+        status: 'completed',
+        startedAt: snapshotAt,
+        completedAt: snapshotAt
+      },
+      activeTurn: {
+        turnId: 'turn-new',
+        phase: 'completed',
+        activeItemIds: [],
+        visibleIndicator: 'none',
+        startedAt: snapshotAt,
+        updatedAt: snapshotAt
+      },
+      checkpoints: [
+        {
+          id: 'checkpoint-new',
+          turnId: 'turn-new',
+          assistantMessageId: 'message-new',
+          checkpointTurnCount: 2,
+          status: 'ready',
+          files: [{ path: 'src/app.ts', kind: 'modified', additions: 1, deletions: 1 }],
+          completedAt: snapshotAt
+        }
+      ],
+      createdAt: staleAt,
+      updatedAt: snapshotAt,
+      archivedAt: null
+    }
+    const snapshotSeq = eventStore.append({
+      eventId: 'snapshot-replacement',
+      aggregateKind: 'thread',
+      streamId: threadId,
+      streamVersion: 10,
+      eventType: 'thread.snapshot.changed',
+      occurredAt: snapshotAt,
+      actorKind: 'system',
+      payload: { thread: replacementThread }
+    })
+    projections.apply({
+      sequence: snapshotSeq,
+      eventId: 'snapshot-replacement',
+      aggregateKind: 'thread',
+      streamId: threadId,
+      streamVersion: 10,
+      eventType: 'thread.snapshot.changed',
+      occurredAt: snapshotAt,
+      actorKind: 'system',
+      payload: { thread: replacementThread }
+    })
+
+    const detail = snapshots.getThreadDetail(threadId)
+    expect(detail).toEqual(
+      expect.objectContaining({
+        title: 'Replacement title',
+        cwd: '/replacement',
+        branch: 'feature/replacement',
+        updatedAt: snapshotAt,
+        session: expect.objectContaining({
+          providerName: 'opencode',
+          activePlanId: 'plan-new'
+        }),
+        latestTurn: expect.objectContaining({ id: 'turn-new' }),
+        activeTurn: replacementThread.activeTurn
+      })
+    )
+    expect(detail?.messages.map((message) => message.id)).toEqual(['message-new'])
+    expect(detail?.activities.map((activity) => activity.id)).toEqual(['activity-new'])
+    expect(detail?.proposedPlans.map((plan) => plan.id)).toEqual(['plan-new'])
+    expect(detail?.todoLists.map((todoList) => todoList.id)).toEqual(['todo-new'])
+    expect(detail?.checkpoints.map((checkpoint) => checkpoint.id)).toEqual(['checkpoint-new'])
+
+    const shellThread = snapshots
+      .getShellSnapshot()
+      .threads.find((thread) => thread.id === threadId)
+    expect(shellThread?.latestTurnId).toBe('turn-new')
   })
 })

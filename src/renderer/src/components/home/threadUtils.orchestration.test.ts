@@ -716,7 +716,7 @@ describe('activeTurn selectors', () => {
   })
 
   it('selectTailIndicator returns none for terminal phases', () => {
-    for (const phase of ['completed', 'failed', 'interrupted', 'idle'] as const) {
+    for (const phase of ['completed', 'failed', 'interrupted', 'idle', 'finalizing'] as const) {
       expect(
         selectTailIndicator(
           threadWithActiveTurn({
