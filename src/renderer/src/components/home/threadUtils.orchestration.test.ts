@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { OrchestrationThread } from '../../../../shared/agent'
+import type { OrchestrationThread, OrchestrationThreadActivity } from '../../../../shared/agent'
 import {
+  buildTranscriptItems,
   createEmptyThread,
   eventClearsPendingTurnWait,
   groupTranscriptItems,
@@ -130,6 +131,65 @@ describe('isOrchestrationModelTurnInProgress', () => {
       }
     }
     expect(isOrchestrationModelTurnInProgress(thread)).toBe(false)
+  })
+})
+
+describe('buildTranscriptItems', () => {
+  const visibleActivity: OrchestrationThreadActivity = {
+    id: 'activity:visible',
+    kind: 'task.progress',
+    tone: 'info',
+    summary: 'Running command',
+    payload: { itemType: 'command_execution' },
+    turnId: 'turn-1',
+    resolved: false,
+    createdAt: t0
+  }
+  const diffUpdateActivity: OrchestrationThreadActivity = {
+    id: 'activity:diff-update',
+    kind: 'task.progress',
+    tone: 'info',
+    summary: 'turn.diff.updated',
+    payload: { kind: 'turn.diff.updated', detail: { files: ['src/App.tsx'] } },
+    turnId: 'turn-1',
+    resolved: true,
+    createdAt: t0
+  }
+  const legacyDiffUpdateActivity: OrchestrationThreadActivity = {
+    id: 'activity:legacy-diff-update',
+    kind: 'task.progress',
+    tone: 'info',
+    summary: 'turn.diff.updated',
+    payload: {},
+    turnId: 'turn-1',
+    resolved: true,
+    createdAt: t0
+  }
+
+  it('filters diff update activities from transcript output', () => {
+    const thread = {
+      ...createEmptyThread('th', t0),
+      activities: [visibleActivity, diffUpdateActivity]
+    }
+
+    const activitySummaries = buildTranscriptItems(thread)
+      .filter((item) => item.kind === 'activity')
+      .map((item) => item.activity.summary)
+
+    expect(activitySummaries).toEqual(['Running command'])
+  })
+
+  it('filters legacy summary-only diff update activities from transcript output', () => {
+    const thread = {
+      ...createEmptyThread('th', t0),
+      activities: [visibleActivity, legacyDiffUpdateActivity]
+    }
+
+    const activitySummaries = buildTranscriptItems(thread)
+      .filter((item) => item.kind === 'activity')
+      .map((item) => item.activity.summary)
+
+    expect(activitySummaries).toEqual(['Running command'])
   })
 })
 
@@ -796,6 +856,44 @@ describe('activeTurn selectors', () => {
             summary: 'Shell',
             payload: { itemType: 'command_execution', status: 'inProgress' },
             turnId: 't1',
+            createdAt: t0
+          }
+        ]
+      })
+    ).toBe(false)
+  })
+
+  it('does not show the tail row when active reasoning is already visible', () => {
+    expect(
+      selectTranscriptTailRowVisible({
+        ...threadWithActiveTurn({
+          turnId: 't1',
+          phase: 'thinking',
+          activeItemIds: [],
+          visibleIndicator: 'exploring',
+          startedAt: t0,
+          updatedAt: t0
+        }),
+        session: {
+          threadId: 'th',
+          status: 'running',
+          providerName: 'codex',
+          runtimeMode: 'auto-accept-edits',
+          interactionMode: 'default',
+          activeTurnId: 't1',
+          activePlanId: null,
+          lastError: null,
+          updatedAt: t0
+        },
+        activities: [
+          {
+            id: 'thinking:t1',
+            kind: 'task.progress',
+            tone: 'thinking',
+            summary: 'Reasoning',
+            payload: { itemType: 'reasoning', reasoningText: 'checking state' },
+            turnId: 't1',
+            resolved: false,
             createdAt: t0
           }
         ]

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { TranscriptList } from './TranscriptList'
 import type { ActivityTranscriptItem, TranscriptItem } from '../types'
@@ -24,6 +24,41 @@ function toolItem(id: string, sequence: number): ActivityTranscriptItem {
       },
       turnId: 'turn-1',
       sequence,
+      createdAt: t0
+    }
+  }
+}
+
+function fileChangeItem({
+  id,
+  sequence,
+  status,
+  diff
+}: {
+  id: string
+  sequence: number
+  status: 'inProgress' | 'completed'
+  diff?: string
+}): ActivityTranscriptItem {
+  return {
+    id: `activity:${id}`,
+    kind: 'activity',
+    sequence,
+    createdAt: t0,
+    activity: {
+      id,
+      kind: status === 'completed' ? 'tool.completed' : 'tool.updated',
+      tone: 'tool',
+      summary: 'src/app.ts',
+      payload: {
+        itemType: 'file_change',
+        status,
+        title: 'src/app.ts',
+        ...(diff ? { fileEditChanges: [{ path: 'src/app.ts', diff }] } : {})
+      },
+      turnId: 'turn-1',
+      sequence,
+      resolved: status === 'completed',
       createdAt: t0
     }
   }
@@ -74,7 +109,11 @@ function userMessageWithAttachments(sequence: number, count: number): Transcript
   }
 }
 
-function thinkingItem(id: string, sequence: number, turnId: string | null = null): ActivityTranscriptItem {
+function thinkingItem(
+  id: string,
+  sequence: number,
+  turnId: string | null = null
+): ActivityTranscriptItem {
   return {
     id: `activity:${id}`,
     kind: 'activity',
@@ -94,8 +133,11 @@ function thinkingItem(id: string, sequence: number, turnId: string | null = null
   }
 }
 
-function renderTranscript(items: TranscriptItem[], turnInProgress: boolean): void {
-  render(
+function renderTranscript(
+  items: TranscriptItem[],
+  turnInProgress: boolean
+): ReturnType<typeof render> {
+  return render(
     <TranscriptList
       items={items}
       showTranscriptTailRow={false}
@@ -133,6 +175,59 @@ describe('TranscriptList tool groups', () => {
     expect(screen.queryByLabelText('Thinking')).not.toBeInTheDocument()
     expect(screen.queryByText('thinking…')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Model reasoning')).toBeInTheDocument()
+  })
+
+  it('does not open an empty reasoning body for active Codex thinking without text', () => {
+    const { container } = renderTranscript([thinkingItem('thinking:codex', 1, 'turn-1')], true)
+
+    expect(screen.getByLabelText('Model reasoning')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /reasoning/i })).toBeInTheDocument()
+    expect(container.querySelector('.transcript-reasoning-shell')).toBeNull()
+  })
+
+  it('shows an in-progress file change as a closed tile with a spinner', () => {
+    const { container } = renderTranscript(
+      [
+        fileChangeItem({
+          id: 'tool:file-change',
+          sequence: 1,
+          status: 'inProgress',
+          diff: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n'
+        })
+      ],
+      true
+    )
+
+    const diffToggle = screen.getByRole('button', { name: /app\.ts/i })
+    expect(diffToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(diffToggle).toHaveAttribute('aria-disabled', 'true')
+    expect(container.querySelector('.tool-line-spinner')).toBeInTheDocument()
+    expect(screen.queryByText('+new')).not.toBeInTheDocument()
+  })
+
+  it('keeps completed file changes closed by default while showing diff stats', async () => {
+    const { container } = renderTranscript(
+      [
+        fileChangeItem({
+          id: 'tool:file-change',
+          sequence: 1,
+          status: 'completed',
+          diff: 'not a parseable patch\n-old\n+new\n'
+        })
+      ],
+      false
+    )
+
+    const diffToggle = screen.getByRole('button', { name: /app\.ts/i })
+    expect(diffToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByText('+1')).toBeInTheDocument()
+    expect(screen.getByText('-1')).toBeInTheDocument()
+    expect(screen.queryByText('+new')).not.toBeInTheDocument()
+
+    fireEvent.click(diffToggle)
+
+    expect(await screen.findByText('+new')).toBeInTheDocument()
+    expect(container.querySelector('.tool-line-spinner')).not.toBeInTheDocument()
   })
 
   it('shows the attachment count on sent user messages', () => {

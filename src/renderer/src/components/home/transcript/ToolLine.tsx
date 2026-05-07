@@ -44,6 +44,7 @@ export const ToolLine = memo(function ToolLine({
   const fileReadPreview = readCanonicalFileReadPreview(payload)
 
   if (readPayloadString(payload, 'itemType') === 'file_change' && fileChange) {
+    const lockedCollapsed = isRunning
     return (
       <article
         className={`tool-line embedded-tool-line ${statusTone}`}
@@ -53,6 +54,9 @@ export const ToolLine = memo(function ToolLine({
           diff={fileChange.diff}
           title={fileChange.title}
           compactTitle
+          defaultCollapsed
+          lockedCollapsed={lockedCollapsed}
+          busy={lockedCollapsed}
           status={<span>{statusLabel(status)}</span>}
         />
       </article>

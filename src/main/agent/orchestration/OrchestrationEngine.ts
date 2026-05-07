@@ -252,8 +252,9 @@ export class OrchestrationEngine {
       ?.thread.activities.find((candidate) => candidate.id === activity.id)
     const eventSequence = this.nextSequence()
     const activitySequence = existing?.sequence ?? eventSequence
+    const nextActivity = preserveTerminalActivity(existing, activity)
     const merged: OrchestrationThreadActivity = {
-      ...activity,
+      ...nextActivity,
       createdAt: existing?.createdAt ?? activity.createdAt,
       sequence: activitySequence
     }
@@ -705,6 +706,36 @@ function readPayloadString(payload: unknown, key: string): string | null {
   if (!payload || typeof payload !== 'object') return null
   const value = (payload as Record<string, unknown>)[key]
   return typeof value === 'string' ? value : null
+}
+
+function preserveTerminalActivity(
+  existing: OrchestrationThreadActivity | undefined,
+  incoming: OrchestrationThreadActivity
+): OrchestrationThreadActivity {
+  if (!existing) return incoming
+  if (!activityIsTerminal(existing) || activityIsTerminal(incoming)) return incoming
+  if (!activityIsNonTerminal(incoming)) return incoming
+  return {
+    ...existing,
+    payload: {
+      ...incoming.payload,
+      ...existing.payload,
+      status: readPayloadString(existing.payload, 'status') ?? 'completed'
+    }
+  }
+}
+
+function activityIsTerminal(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind === 'tool.completed' || activity.kind === 'task.completed') return true
+  const status = readPayloadString(activity.payload, 'status')
+  return status === 'completed' || status === 'success' || status === 'failed' || status === 'declined'
+}
+
+function activityIsNonTerminal(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind === 'tool.started' || activity.kind === 'tool.updated') return true
+  if (activity.kind === 'task.started' || activity.kind === 'task.progress') return true
+  const status = readPayloadString(activity.payload, 'status')
+  return status === 'inProgress' || status === 'running'
 }
 
 const COBEL_DEBUG_EVENTS_ENABLED = /^(1|true|yes|on)$/i.test(

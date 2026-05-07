@@ -51,6 +51,7 @@ vi.mock('./opencodeRuntime', () => ({
 import { mergeOpenCodeAssistantText } from './opencodeRuntime'
 import {
   OpenCodeAdapter,
+  fileEditChangesFromOpenCodeToolPart,
   todoItemsFromOpenCodeToolPart,
   toolLifecycleTitle
 } from './OpenCodeAdapter'
@@ -367,6 +368,102 @@ describe('OpenCodeAdapter event mapping', () => {
     stream.close()
   })
 
+  it('uses the tool part id when OpenCode omits callID so running edits can complete', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await adapter.sendTurn({
+      threadId: 'thread-1',
+      input: 'edit the file',
+      model: 'anthropic/claude-sonnet-4',
+      interactionMode: 'default'
+    })
+    await vi.waitFor(() => expect(promptAsyncMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'message.updated',
+      properties: {
+        sessionID: 'session:events',
+        info: { id: 'message-1', role: 'assistant' }
+      }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          id: 'part-edit-1',
+          messageID: 'message-1',
+          type: 'tool',
+          tool: 'edit',
+          metadata: {},
+          state: {
+            status: 'running',
+            title: 'Edited edit',
+            input: { filePath: 'src/lib/themes.ts' },
+            time: { start: Date.now() },
+            metadata: {}
+          }
+        }
+      }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          id: 'part-edit-1',
+          messageID: 'message-1',
+          type: 'tool',
+          tool: 'edit',
+          metadata: {},
+          state: {
+            status: 'completed',
+            title: 'themes.ts',
+            input: { filePath: 'src/lib/themes.ts' },
+            output: 'done',
+            time: { end: Date.now() },
+            metadata: {
+              diff: 'diff --git a/src/lib/themes.ts b/src/lib/themes.ts\n@@ -1 +1 @@\n-old\n+new\n'
+            }
+          }
+        }
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const toolEvents = events.filter(
+      (event) =>
+        (event.type === 'item.updated' || event.type === 'item.completed') &&
+        event.itemId === 'part-edit-1'
+    )
+    expect(toolEvents).toEqual([
+      expect.objectContaining({
+        type: 'item.updated',
+        itemId: 'part-edit-1',
+        payload: expect.objectContaining({ status: 'inProgress' })
+      }),
+      expect.objectContaining({
+        type: 'item.completed',
+        itemId: 'part-edit-1',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    ])
+
+    stream.close()
+  })
+
   it('does not let untagged session lifecycle events complete an active turn', async () => {
     const stream = createEventStream()
     eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
@@ -463,6 +560,53 @@ describe('todoItemsFromOpenCodeToolPart', () => {
         }
       } as never)
     ).toEqual([{ id: 'todo-1', text: 'Add persistence model', status: 'completed' }])
+  })
+})
+
+describe('fileEditChangesFromOpenCodeToolPart', () => {
+  it('returns no diff while an OpenCode edit is still running', () => {
+    expect(
+      fileEditChangesFromOpenCodeToolPart({
+        id: 'part-1',
+        callID: 'call-1',
+        messageID: 'message-1',
+        type: 'tool',
+        tool: 'edit',
+        metadata: {},
+        state: {
+          status: 'running',
+          title: 'Editing src/app.ts',
+          input: { filePath: 'src/app.ts' },
+          metadata: {}
+        }
+      } as never)
+    ).toBeUndefined()
+  })
+
+  it('extracts file edit changes from completed OpenCode edit metadata', () => {
+    expect(
+      fileEditChangesFromOpenCodeToolPart({
+        id: 'part-1',
+        callID: 'call-1',
+        messageID: 'message-1',
+        type: 'tool',
+        tool: 'edit',
+        metadata: {},
+        state: {
+          status: 'completed',
+          title: 'Edited src/app.ts',
+          input: { filePath: 'src/app.ts' },
+          metadata: {
+            diff: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n'
+          }
+        }
+      } as never)
+    ).toEqual([
+      {
+        path: 'src/app.ts',
+        diff: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new'
+      }
+    ])
   })
 })
 

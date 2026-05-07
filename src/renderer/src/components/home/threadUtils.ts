@@ -135,7 +135,7 @@ export function selectTailIndicator(
 /** TranscriptList tail row: hide for `none` and when assistant stream carries the signal. */
 export function selectTranscriptTailRowVisible(thread: OrchestrationThread | null): boolean {
   const ind = selectTailIndicator(thread)
-  if (ind === 'tool' && threadHasInFlightWorkIndicator(thread)) return false
+  if (threadHasActiveVisibleProgressIndicator(thread, ind)) return false
   return ind !== 'none' && ind !== 'assistant_stream'
 }
 
@@ -375,6 +375,29 @@ function currentInFlightTurnId(thread: OrchestrationThread | null): string | nul
   return (
     thread.session?.activeTurnId ??
     (thread.latestTurn?.status === 'running' ? thread.latestTurn.id : null)
+  )
+}
+
+function threadHasActiveVisibleProgressIndicator(
+  thread: OrchestrationThread | null,
+  indicator: ActiveTurnVisibleIndicator
+): boolean {
+  if (indicator === 'tool' && threadHasInFlightWorkIndicator(thread)) return true
+  if (indicator === 'thinking' || indicator === 'exploring') {
+    return threadHasActiveVisibleThinkingActivity(thread)
+  }
+  return false
+}
+
+function threadHasActiveVisibleThinkingActivity(thread: OrchestrationThread | null): boolean {
+  const activeTurnId = currentInFlightTurnId(thread)
+  if (!thread || !activeTurnId) return false
+  return thread.activities.some(
+    (activity) =>
+      activity.turnId === activeTurnId &&
+      activity.resolved !== true &&
+      isThinkingActivity(activity) &&
+      !isHiddenActivity(activity)
   )
 }
 

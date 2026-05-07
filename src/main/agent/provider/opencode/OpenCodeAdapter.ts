@@ -218,6 +218,10 @@ function toolStateCreatedAt(part: Extract<Part, { type: 'tool' }>): string | und
   }
 }
 
+function toolPartItemId(part: Extract<Part, { type: 'tool' }>): string {
+  return part.callID || part.id
+}
+
 export function fileEditChangesFromOpenCodeToolPart(part: Part): FileEditChange[] | undefined {
   if (part.type !== 'tool') return undefined
   const toolName = part.tool.toLowerCase()
@@ -1140,14 +1144,12 @@ export class OpenCodeAdapter implements ProviderAdapter {
           await this.emitAssistantTextDelta(context, part, partTurnId, event)
         }
         if (part.type === 'tool') {
-          const callID = part.callID
-          if (callID) {
-            const terminal = part.state.status === 'completed' || part.state.status === 'error'
-            if (terminal) {
-              context.terminalToolCallIds.add(callID)
-            } else if (context.terminalToolCallIds.has(callID)) {
-              break
-            }
+          const itemId = toolPartItemId(part)
+          const terminal = part.state.status === 'completed' || part.state.status === 'error'
+          if (terminal) {
+            context.terminalToolCallIds.add(itemId)
+          } else if (context.terminalToolCallIds.has(itemId)) {
+            break
           }
           const todoItems = todoItemsFromOpenCodeToolPart(part)
           if (todoItems.length > 0) {
@@ -1155,7 +1157,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
               ...buildEventBase({
                 threadId: context.session.threadId,
                 turnId: partTurnId,
-                itemId: part.callID,
+                itemId,
                 createdAt: toolStateCreatedAt(part),
                 raw: event
               }),
@@ -1200,7 +1202,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
             ...buildEventBase({
               threadId: context.session.threadId,
               turnId: partTurnId,
-              itemId: part.callID,
+              itemId,
               createdAt: toolStateCreatedAt(part),
               raw: event
             }),
@@ -1316,7 +1318,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       }
       case 'session.status': {
         const status = event.properties.status as { type?: string; message?: string }
-        if (status.type === 'busy' && sessionOwnsTurnLifecycle) {
+        if (status.type === 'busy' && turnId && sessionOwnsTurnLifecycle) {
           context.session = {
             ...context.session,
             status: 'running',

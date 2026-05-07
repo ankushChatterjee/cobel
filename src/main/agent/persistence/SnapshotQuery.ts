@@ -161,7 +161,7 @@ export class SnapshotQuery {
         .all(threadId) as MessageRow[]
     ).map(messageRowToMessage)
 
-    const activities = (
+    const rawActivities = (
       this.db
         .prepare(
           `SELECT * FROM projection_thread_activities WHERE thread_id = ? ORDER BY sequence ASC, created_at ASC`
@@ -198,6 +198,8 @@ export class SnapshotQuery {
     const latestTurn: OrchestrationLatestTurn | null = latestTurnRow
       ? latestTurnRowToTurn(latestTurnRow)
       : null
+    const activeTurn = parseActiveTurnProjection(threadRow.active_turn_json)
+    const activities = closeStaleRunningActivities(rawActivities, session, latestTurn, activeTurn)
 
     const checkpoints = (
       this.db
@@ -218,13 +220,48 @@ export class SnapshotQuery {
       todoLists,
       session,
       latestTurn,
-      activeTurn: parseActiveTurnProjection(threadRow.active_turn_json),
+      activeTurn,
       checkpoints,
       createdAt: threadRow.created_at,
       updatedAt: threadRow.updated_at,
       archivedAt: threadRow.archived_at ?? null
     }
   }
+}
+
+function closeStaleRunningActivities(
+  activities: OrchestrationThreadActivity[],
+  session: OrchestrationSession | null,
+  latestTurn: OrchestrationLatestTurn | null,
+  activeTurn: ActiveTurnProjection | null
+): OrchestrationThreadActivity[] {
+  const sessionRunning = session?.status === 'starting' || session?.status === 'running'
+  const activeTurnId =
+    sessionRunning
+      ? (session?.activeTurnId ?? activeTurn?.turnId ?? (latestTurn?.status === 'running' ? latestTurn.id : null))
+      : null
+  return activities.map((activity) => {
+    if (!activityIsNonTerminal(activity)) return activity
+    if (activeTurnId && activity.turnId === activeTurnId) return activity
+    const payload = { ...activity.payload, status: 'completed' }
+    if (activity.tone === 'thinking' || activity.kind.startsWith('task.')) {
+      return { ...activity, kind: 'task.completed', payload, resolved: true }
+    }
+    if (activity.kind.startsWith('tool.')) {
+      return { ...activity, kind: 'tool.completed', payload }
+    }
+    return activity
+  })
+}
+
+function activityIsNonTerminal(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind === 'tool.started' || activity.kind === 'tool.updated') return true
+  if (activity.kind === 'task.started' || activity.kind === 'task.progress') return true
+  const status =
+    activity.payload && typeof activity.payload === 'object'
+      ? (activity.payload as Record<string, unknown>)['status']
+      : undefined
+  return status === 'inProgress' || status === 'running'
 }
 
 function parseActiveTurnProjection(json: string | null | undefined): ActiveTurnProjection | null {

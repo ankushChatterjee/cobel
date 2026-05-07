@@ -31,6 +31,23 @@ describe('mapProviderEvent', () => {
     )
   })
 
+  it('maps Codex thread start events', () => {
+    expect(
+      mapProviderEvent({
+        ...baseEvent,
+        id: 'event-thread-started',
+        method: 'thread/started',
+        payload: { providerThreadId: 'provider-thread-1' }
+      })
+    ).toEqual(
+      expect.objectContaining({
+        type: 'thread.started',
+        threadId: 'thread-1',
+        payload: { providerThreadId: 'provider-thread-1' }
+      })
+    )
+  })
+
   it('normalizes nested tool item payloads', () => {
     const event = mapProviderEvent({
       ...baseEvent,
@@ -62,6 +79,71 @@ describe('mapProviderEvent', () => {
               detail: 'bun test'
             })
           })
+        })
+      })
+    )
+  })
+
+  it('emits file change items as soon as Codex reports the edit starting', () => {
+    const event = mapProviderEvent({
+      ...baseEvent,
+      id: 'event-file-change-started',
+      method: 'item/started',
+      itemId: 'edit-1',
+      payload: {
+        item: {
+          type: 'file_change',
+          path: 'src/app.ts',
+          status: 'inProgress'
+        }
+      }
+    })
+
+    expect(event).toEqual(
+      expect.objectContaining({
+        type: 'item.started',
+        itemId: 'edit-1',
+        payload: expect.objectContaining({
+          itemType: 'file_change',
+          status: 'inProgress'
+        })
+      })
+    )
+  })
+
+  it('attaches canonical file edit changes when Codex completes an edit', () => {
+    const event = mapProviderEvent({
+      ...baseEvent,
+      id: 'event-file-change-completed',
+      method: 'item/completed',
+      itemId: 'edit-1',
+      payload: {
+        item: {
+          type: 'file_change',
+          status: 'completed',
+          changes: [
+            {
+              path: 'src/app.ts',
+              diff: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n'
+            }
+          ]
+        }
+      }
+    })
+
+    expect(event).toEqual(
+      expect.objectContaining({
+        type: 'item.completed',
+        itemId: 'edit-1',
+        payload: expect.objectContaining({
+          itemType: 'file_change',
+          status: 'completed',
+          fileEditChanges: [
+            {
+              path: 'src/app.ts',
+              diff: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new'
+            }
+          ]
         })
       })
     )

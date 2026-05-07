@@ -94,6 +94,9 @@ interface EmbeddedDiffViewProps {
   actions?: ReactNode
   status?: ReactNode
   compactTitle?: boolean
+  defaultCollapsed?: boolean
+  lockedCollapsed?: boolean
+  busy?: boolean
 }
 
 interface DiffToolbarPillProps {
@@ -653,13 +656,17 @@ export const EmbeddedDiffView = memo(function EmbeddedDiffView({
   subtitle,
   actions,
   status,
-  compactTitle = false
+  compactTitle = false,
+  defaultCollapsed = false,
+  lockedCollapsed = false,
+  busy = false
 }: EmbeddedDiffViewProps): React.JSX.Element {
   const files = useMemo(() => parsePatch(diff, null), [diff])
   const lineCount = useMemo(() => diff.split('\n').length, [diff])
   const totals = useMemo(
-    () =>
-      files.reduce(
+    () => {
+      if (files.length === 0) return summarizeRawDiffText(diff)
+      return files.reduce(
         (sum, file) => {
           const fileTotals = summarizeFileDiff(file)
           return {
@@ -668,30 +675,38 @@ export const EmbeddedDiffView = memo(function EmbeddedDiffView({
           }
         },
         { additions: 0, deletions: 0 }
-      ),
-    [files]
+      )
+    },
+    [diff, files]
   )
   const autoCollapsed = lineCount > 400 || files.length > 5 || diff.length > 80_000
   const displayFileCount = files.length || 1
   const displayTitle = compactTitle ? basename(title) : title
   const minimalSingleFile = compactTitle && files.length === 1
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(defaultCollapsed || lockedCollapsed)
 
   useEffect(() => {
-    setCollapsed(false)
-  }, [diff])
+    setCollapsed(defaultCollapsed || lockedCollapsed)
+  }, [defaultCollapsed, diff, lockedCollapsed])
+
+  const effectivelyCollapsed = collapsed || lockedCollapsed
 
   return (
-    <section className={`embedded-diff-card ${collapsed ? 'collapsed' : ''}`}>
+    <section className={`embedded-diff-card ${effectivelyCollapsed ? 'collapsed' : ''}`}>
       <div className="embedded-diff-header">
         <button
           type="button"
           className="embedded-diff-toggle"
-          aria-expanded={!collapsed}
-          onClick={() => setCollapsed((value) => !value)}
+          aria-expanded={!effectivelyCollapsed}
+          aria-disabled={lockedCollapsed || undefined}
+          onClick={lockedCollapsed ? undefined : () => setCollapsed((value) => !value)}
           title={title}
         >
-          <ChevronDown size={13} strokeWidth={1.8} aria-hidden="true" />
+          {busy ? (
+            <span className="tool-line-spinner" aria-hidden="true" />
+          ) : (
+            <ChevronDown size={13} strokeWidth={1.8} aria-hidden="true" />
+          )}
           <span className="embedded-diff-title">{displayTitle}</span>
           {!compactTitle ? (
             <>
@@ -701,7 +716,7 @@ export const EmbeddedDiffView = memo(function EmbeddedDiffView({
               <DiffStats additions={totals.additions} deletions={totals.deletions} />
               {autoCollapsed ? <span className="embedded-diff-meta">large</span> : null}
             </>
-          ) : minimalSingleFile ? (
+          ) : minimalSingleFile || totals.additions > 0 || totals.deletions > 0 ? (
             <DiffStats additions={totals.additions} deletions={totals.deletions} />
           ) : null}
         </button>
@@ -709,7 +724,7 @@ export const EmbeddedDiffView = memo(function EmbeddedDiffView({
         {actions ? <div className="embedded-diff-actions">{actions}</div> : null}
       </div>
       {subtitle ? <p className="embedded-diff-subtitle">{subtitle}</p> : null}
-      {!collapsed ? (
+      {!effectivelyCollapsed ? (
         <div className="embedded-diff-body">
           {files.length > 0 ? (
             <WorkerPoolContextProvider {...diffWorkerPool}>
@@ -759,6 +774,18 @@ function RawEmbeddedDiff({ diff }: { diff: string }): React.JSX.Element {
         </span>
       ))}
     </pre>
+  )
+}
+
+function summarizeRawDiffText(diff: string): { additions: number; deletions: number } {
+  return diff.split('\n').reduce(
+    (totals, line) => {
+      if (line.startsWith('+++') || line.startsWith('---')) return totals
+      if (line.startsWith('+')) return { ...totals, additions: totals.additions + 1 }
+      if (line.startsWith('-')) return { ...totals, deletions: totals.deletions + 1 }
+      return totals
+    },
+    { additions: 0, deletions: 0 }
   )
 }
 

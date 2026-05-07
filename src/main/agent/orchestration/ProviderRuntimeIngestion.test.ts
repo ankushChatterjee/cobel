@@ -311,6 +311,50 @@ describe('ProviderRuntimeIngestion', () => {
     )
   })
 
+  it('closes the active turn when an approval is declined without waiting for provider idle', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: { requestType: 'command_execution_approval', detail: 'bun test' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'request.resolved',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: {
+          requestType: 'unknown',
+          decision: 'decline',
+          resolution: { decision: 'decline' }
+        }
+      })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.activeTurn).toBeNull()
+    expect(thread.session).toEqual(
+      expect.objectContaining({
+        status: 'interrupted',
+        activeTurnId: null,
+        lastError: 'Approval declined.'
+      })
+    )
+    expect(thread.latestTurn).toEqual(
+      expect.objectContaining({
+        id: 'turn-1',
+        status: 'interrupted'
+      })
+    )
+  })
+
   it('streams assistant deltas into one visible message and closes it at turn completion', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
@@ -494,6 +538,70 @@ describe('ProviderRuntimeIngestion', () => {
     const thread = engine.getThread('thread-1')
     expect(thread.session?.status).toBe('running')
     expect(thread.session?.activeTurnId).toBe('turn-active')
+  })
+
+  it('ignores late running session states after a turn has completed', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'session.state.changed',
+        turnId: 'turn-1',
+        payload: { state: 'running' }
+      })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn).toEqual(
+      expect.objectContaining({
+        id: 'turn-1',
+        status: 'completed'
+      })
+    )
+    expect(thread.session).toEqual(
+      expect.objectContaining({
+        status: 'ready',
+        activeTurnId: null
+      })
+    )
+  })
+
+  it('ignores running session states that have no active turn to own them', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'session.state.changed', payload: { state: 'running' } }))
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').session).toBeNull()
+  })
+
+  it('ignores late turn starts for a completed turn', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn).toEqual(
+      expect.objectContaining({
+        id: 'turn-1',
+        status: 'completed'
+      })
+    )
+    expect(thread.session?.status).toBe('ready')
+    expect(thread.session?.activeTurnId).toBeNull()
   })
 
   it('records an active turn runtime error and marks the session errored', async () => {

@@ -1043,4 +1043,114 @@ describe('ProjectionPipeline', () => {
       .threads.find((thread) => thread.id === threadId)
     expect(shellThread?.latestTurnId).toBe('turn-new')
   })
+
+  it('does not surface stale running tool rows for a completed thread snapshot', () => {
+    const threadId = 'thread-stale-tool'
+    const createdAt = '2026-05-05T19:42:43.000Z'
+    const completedAt = '2026-05-05T19:42:44.000Z'
+    const staleAt = '2026-05-05T19:42:45.000Z'
+
+    const events = [
+      {
+        eventId: 'thread-create',
+        eventType: 'thread.created',
+        occurredAt: createdAt,
+        payload: { threadId, projectId: 'proj-1', title: 'Thread' }
+      },
+      {
+        eventId: 'tool-completed',
+        eventType: 'thread.activity-upserted',
+        occurredAt: completedAt,
+        payload: {
+          activity: {
+            id: 'tool:call-1',
+            kind: 'tool.completed',
+            tone: 'tool',
+            summary: 'globals.css',
+            payload: { itemType: 'file_change', status: 'completed' },
+            turnId: 'turn-1',
+            createdAt
+          }
+        }
+      },
+      {
+        eventId: 'tool-stale-running',
+        eventType: 'thread.activity-upserted',
+        occurredAt: staleAt,
+        payload: {
+          activity: {
+            id: 'tool:call-1',
+            kind: 'tool.updated',
+            tone: 'tool',
+            summary: 'Edited edit',
+            payload: { itemType: 'file_change', status: 'inProgress' },
+            turnId: 'turn-1',
+            createdAt
+          }
+        }
+      },
+      {
+        eventId: 'latest-turn',
+        eventType: 'thread.latest-turn-set',
+        occurredAt: staleAt,
+        payload: {
+          latestTurn: {
+            id: 'turn-1',
+            status: 'completed',
+            startedAt: createdAt,
+            completedAt: staleAt
+          }
+        }
+      },
+      {
+        eventId: 'session-ready',
+        eventType: 'thread.session-set',
+        occurredAt: staleAt,
+        payload: {
+          session: {
+            status: 'ready',
+            providerName: 'opencode',
+            runtimeMode: 'auto-accept-edits',
+            interactionMode: 'default',
+            activeTurnId: null,
+            activePlanId: null,
+            lastError: null
+          }
+        }
+      }
+    ]
+
+    events.forEach((event, index) => {
+      const seq = eventStore.append({
+        eventId: event.eventId,
+        aggregateKind: 'thread',
+        streamId: threadId,
+        streamVersion: index + 1,
+        eventType: event.eventType,
+        occurredAt: event.occurredAt,
+        actorKind: 'system',
+        payload: event.payload
+      })
+      projections.apply({
+        sequence: seq,
+        eventId: event.eventId,
+        aggregateKind: 'thread',
+        streamId: threadId,
+        streamVersion: index + 1,
+        eventType: event.eventType,
+        occurredAt: event.occurredAt,
+        actorKind: 'system',
+        payload: event.payload
+      })
+    })
+
+    const activity = snapshots.getThreadDetail(threadId)?.activities[0]
+    expect(activity).toEqual(
+      expect.objectContaining({
+        id: 'tool:call-1',
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+  })
 })

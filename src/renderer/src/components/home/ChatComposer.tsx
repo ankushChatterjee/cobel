@@ -1046,7 +1046,7 @@ export const ChatComposer = memo(function ChatComposer({
           <button
             type={isRunning ? 'button' : 'submit'}
             className={`send-button${isRunning ? ' streaming' : ''}`}
-            disabled={!enabled || (!isRunning && (isBusy || !canSubmit))}
+            disabled={isRunning ? false : !enabled || isBusy || !canSubmit}
             title={isRunning ? 'Stop' : 'Send (↵)'}
             aria-label={isRunning ? 'Stop' : 'Send'}
             aria-busy={isRunning}

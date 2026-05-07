@@ -401,7 +401,7 @@ describe('renderer app', () => {
     expect(window.agentApi.stopSession).not.toHaveBeenCalled()
   })
 
-  it('keeps the composer as send during ready-state orchestration gaps', async () => {
+  it('keeps stop available during ready-state orchestration gaps', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
 
@@ -452,24 +452,21 @@ describe('renderer app', () => {
     const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
     await user.click(openFolderButtons[0])
 
-    const composer = await screen.findByRole('textbox', { name: /ask codex/i })
-    await user.type(composer, 'Follow up after tooling')
+    const stopButton = await screen.findByRole('button', { name: /^stop$/i })
+    expect(stopButton).toBeEnabled()
+    expect(stopButton).toHaveAttribute('title', 'Stop')
+    expect(stopButton).toHaveClass('streaming')
+    expect(screen.queryByRole('button', { name: /^send$/i })).not.toBeInTheDocument()
 
-    const sendButton = screen.getByRole('button', { name: /^send$/i })
-    expect(sendButton).toBeEnabled()
-    expect(sendButton).toHaveAttribute('title', 'Send (↵)')
-    expect(sendButton).not.toHaveClass('streaming')
-    expect(screen.queryByRole('button', { name: /^stop$/i })).not.toBeInTheDocument()
+    await user.click(stopButton)
 
-    await user.click(sendButton)
-
-    expect(window.agentApi.dispatchCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'thread.turn.start',
-        input: 'Follow up after tooling'
-      })
+    expect(window.agentApi.interruptTurn).toHaveBeenCalledWith({
+      threadId: expect.any(String),
+      turnId: 'turn-1'
+    })
+    expect(window.agentApi.dispatchCommand).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'thread.turn.start' })
     )
-    expect(window.agentApi.interruptTurn).not.toHaveBeenCalled()
   })
 
   it('keeps Exploring visible when a late previous-turn activity arrives during a follow-up send', async () => {
@@ -845,6 +842,84 @@ describe('renderer app', () => {
 
     await user.click(screen.getByRole('button', { name: /open workspace diff/i }))
     expect(await screen.findByRole('tab', { name: 'Review' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('refreshes workspace diff for hidden turn diff update events', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    let threadListener: ((item: OrchestrationThreadStreamItem) => void) | null = null
+    let subscribedThreadId = ''
+
+    window.agentApi.subscribeThread = vi.fn((_input, listener) => {
+      subscribedThreadId = _input.threadId
+      threadListener = listener
+      listener({
+        kind: 'snapshot',
+        snapshot: {
+          snapshotSequence: 1,
+          thread: createTestThread({
+            id: _input.threadId,
+            session: {
+              threadId: _input.threadId,
+              status: 'running',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: 'turn-1',
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:00.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'running',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: null
+            }
+          })
+        }
+      })
+      return vi.fn()
+    })
+
+    render(<RouterProvider router={router} />)
+
+    const openFolderButtons = await screen.findAllByRole('button', { name: /add project/i })
+    await user.click(openFolderButtons[0])
+
+    await waitFor(() => {
+      expect(window.agentApi.getWorkspaceDiff).toHaveBeenCalled()
+    })
+    const initialDiffRequestCount = vi.mocked(window.agentApi.getWorkspaceDiff).mock.calls.length
+
+    act(() => {
+      threadListener?.({
+        kind: 'event',
+        event: {
+          sequence: 2,
+          type: 'thread.activity-upserted',
+          threadId: subscribedThreadId,
+          activity: {
+            id: 'runtime-info:diff-update',
+            kind: 'task.progress',
+            tone: 'info',
+            summary: 'turn.diff.updated',
+            payload: { kind: 'turn.diff.updated', detail: { files: ['src/styles/globals.css'] } },
+            turnId: 'turn-1',
+            resolved: true,
+            createdAt: '2026-04-19T00:00:01.000Z'
+          },
+          createdAt: '2026-04-19T00:00:01.000Z'
+        }
+      })
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(window.agentApi.getWorkspaceDiff).mock.calls.length).toBeGreaterThan(
+        initialDiffRequestCount
+      )
+    })
+    expect(screen.queryByText('turn.diff.updated')).not.toBeInTheDocument()
   })
 
   it('persists model and runtime mode per thread', async () => {

@@ -305,6 +305,11 @@ export class ProviderRuntimeIngestion {
     switch (event.type) {
       case 'session.state.changed':
         this.closeTurnForTerminalSession(event)
+        if (event.payload.state === 'running') {
+          const activeTurnId =
+            event.turnId ?? this.engine.getThread(event.threadId).session?.activeTurnId ?? null
+          if (!activeTurnId || this.isCompletedTurn(event.threadId, activeTurnId)) return
+        }
         this.engine.setSession({
           threadId: event.threadId,
           status: mapSessionStatus(event.payload.state),
@@ -334,6 +339,7 @@ export class ProviderRuntimeIngestion {
       case 'turn.started':
         {
           const turnId = event.turnId ?? event.eventId
+          if (this.isCompletedTurn(event.threadId, turnId)) return
           this.patchActiveTurn(
             event.threadId,
             (prev) => ({
@@ -461,6 +467,7 @@ export class ProviderRuntimeIngestion {
       case 'request.resolved': {
         const existing = this.findApprovalForResolution(event)
         const resolvedApprovalId = existing?.id ?? `approval:${event.requestId ?? event.eventId}`
+        const resolvedTurnId = event.turnId ?? existing?.turnId ?? null
         this.engine.upsertActivity(
           {
             id: resolvedApprovalId,
@@ -477,12 +484,34 @@ export class ProviderRuntimeIngestion {
               decision: event.payload.decision,
               resolution: event.payload.resolution
             },
-            turnId: event.turnId ?? existing?.turnId ?? null,
+            turnId: resolvedTurnId,
             resolved: true,
             createdAt: event.createdAt
           },
           event.threadId
         )
+        if (event.payload.decision === 'decline') {
+          const interruptedTurnId =
+            resolvedTurnId ??
+            this.engine.getThread(event.threadId).session?.activeTurnId ??
+            this.engine.getThread(event.threadId).activeTurn?.turnId ??
+            event.eventId
+          this.closeActiveTurn({
+            ...event,
+            type: 'turn.completed',
+            turnId: interruptedTurnId,
+            payload: {
+              state: 'interrupted',
+              errorMessage: 'Approval declined.'
+            }
+          })
+          this.engine.setActiveTurn({
+            threadId: event.threadId,
+            activeTurn: null,
+            createdAt: event.createdAt
+          })
+          return
+        }
         this.patchActiveTurn(
           event.threadId,
           (prev) => {
@@ -1410,6 +1439,10 @@ export class ProviderRuntimeIngestion {
   ): 'completed' | 'failed' | undefined {
     if (!event.turnId) return undefined
     return this.completedTurns.get(this.turnCompletionKey(event.threadId, event.turnId))
+  }
+
+  private isCompletedTurn(threadId: string, turnId: string): boolean {
+    return this.completedTurns.has(this.turnCompletionKey(threadId, turnId))
   }
 
   private turnCompletionKey(threadId: string, turnId: string): string {

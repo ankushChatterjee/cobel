@@ -26,6 +26,10 @@ export function isThinkingActivity(activity: OrchestrationThreadActivity): boole
   return activity.tone === 'thinking'
 }
 
+export function isDiffUpdateActivity(activity: OrchestrationThreadActivity): boolean {
+  return activity.payload?.kind === 'turn.diff.updated' || activity.summary === 'turn.diff.updated'
+}
+
 export function readPayloadString(
   payload: Record<string, unknown> | undefined,
   key: string
@@ -41,6 +45,7 @@ function hasReasoningTranscriptText(activity: OrchestrationThreadActivity): bool
 }
 
 export function isHiddenActivity(activity: OrchestrationThreadActivity): boolean {
+  if (isDiffUpdateActivity(activity)) return true
   if (!isThinkingActivity(activity) || activity.resolved !== true) return false
   if (hasReasoningTranscriptText(activity)) return false
   return true

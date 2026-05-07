@@ -53,7 +53,6 @@ export const ThinkingRow = memo(function ThinkingRow({
 
   const reasoningText = combinedReasoningText(activities)
   const hasReasoningBody = reasoningText.trim().length > 0
-  // Item-only reasoning (e.g. Codex) often has no `reasoning_text` deltas — show a spinner since the stream carries no text.
   const showReasoningHeaderSpinner = !isComplete && !hasReasoningBody
   const contentId = useId()
   const reasoningBodyRef = useRef<HTMLDivElement | null>(null)
@@ -64,7 +63,7 @@ export const ThinkingRow = memo(function ThinkingRow({
   }, [isComplete])
 
   // Open while streaming; after streaming ends, stay collapsed until the user expands again.
-  const expanded = !isComplete || userExpandedAfterComplete
+  const expanded = hasReasoningBody && (!isComplete || userExpandedAfterComplete)
 
   useLayoutEffect(() => {
     if (isComplete || !expanded) return
@@ -82,33 +81,37 @@ export const ThinkingRow = memo(function ThinkingRow({
       <button
         type="button"
         className="transcript-reasoning-toggle"
-        aria-expanded={expanded}
-        aria-controls={contentId}
+        aria-expanded={hasReasoningBody ? expanded : undefined}
+        aria-controls={hasReasoningBody ? contentId : undefined}
         onClick={() => {
-          if (isComplete) setUserExpandedAfterComplete((open) => !open)
+          if (isComplete && hasReasoningBody) setUserExpandedAfterComplete((open) => !open)
         }}
       >
         {showReasoningHeaderSpinner ? (
           <span className="thinking-spinner" aria-hidden="true" />
         ) : null}
         <span className="transcript-reasoning-toggle-label">Reasoning</span>
-        <ChevronDown
-          size={13}
-          strokeWidth={1.85}
-          className={`transcript-reasoning-chevron${expanded ? ' is-open' : ''}`}
-          aria-hidden
-        />
+        {hasReasoningBody ? (
+          <ChevronDown
+            size={13}
+            strokeWidth={1.85}
+            className={`transcript-reasoning-chevron${expanded ? ' is-open' : ''}`}
+            aria-hidden
+          />
+        ) : null}
       </button>
-      <div
-        id={contentId}
-        className={`transcript-reasoning-shell${expanded ? ' is-expanded' : ''}`}
-      >
-        <div className="transcript-reasoning-measure">
-          <div ref={reasoningBodyRef} className="transcript-reasoning-body">
-            {reasoningText}
+      {hasReasoningBody ? (
+        <div
+          id={contentId}
+          className={`transcript-reasoning-shell${expanded ? ' is-expanded' : ''}`}
+        >
+          <div className="transcript-reasoning-measure">
+            <div ref={reasoningBodyRef} className="transcript-reasoning-body">
+              {reasoningText}
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </article>
   )
 })
@@ -156,7 +159,9 @@ export const MessageRow = memo(function MessageRow({
           {checkpointSummary ? (
             <ChangedFilePills
               summary={checkpointSummary}
-              onPreview={(file: CheckpointFileChange, rect: DOMRect) => onPreviewDiff(checkpointSummary, file, rect)}
+              onPreview={(file: CheckpointFileChange, rect: DOMRect) =>
+                onPreviewDiff(checkpointSummary, file, rect)
+              }
               onOpenDiff={(filePath?: string) => onOpenDiff(checkpointSummary.turnId, filePath)}
               revertTurnCount={
                 checkpointSummary.status === 'ready'
@@ -170,7 +175,10 @@ export const MessageRow = memo(function MessageRow({
       ) : (
         <div className="message-user-bubble">
           {userAttachmentCount > 0 ? (
-            <div className="message-user-attachments" aria-label={attachmentCountLabel(userAttachmentCount)}>
+            <div
+              className="message-user-attachments"
+              aria-label={attachmentCountLabel(userAttachmentCount)}
+            >
               <span className="message-user-attachment-dot" aria-hidden="true" />
               <span>{attachmentCountLabel(userAttachmentCount)}</span>
             </div>

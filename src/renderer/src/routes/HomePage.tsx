@@ -47,7 +47,11 @@ import { FloatingTodoPanel, FloatingTodoPill } from '../components/home/TodoPane
 import { ThreadSidebar, PlanSidebarPanel } from '../components/home/ThreadSidebar'
 import { TranscriptList } from '../components/home/transcript'
 import { SessionErrorBanner } from '../components/home/transcript'
-import { isPendingPrompt, listPendingRequests } from '../components/home/activityUtils'
+import {
+  isDiffUpdateActivity,
+  isPendingPrompt,
+  listPendingRequests
+} from '../components/home/activityUtils'
 import { errorMessageForDisplay } from '../components/home/formatUtils'
 import {
   filterModelsForProvider,
@@ -206,6 +210,7 @@ export function HomePage(): React.JSX.Element {
   const isBusy = sessionStatus === 'starting' || sessionStatus === 'running'
   const isRunning = sessionStatus === 'running'
   const turnInProgress = useMemo(() => isOrchestrationModelTurnInProgress(thread), [thread])
+  const canInterruptTurn = turnInProgress
   const activeSidebarState = activeSidebarScopeKey
     ? threadSidebarState[activeSidebarScopeKey]
     : undefined
@@ -580,6 +585,12 @@ export function HomePage(): React.JSX.Element {
       }
       if (item.event.type === 'thread.message-upserted') {
         pendingUserMessagesRef.current.delete(item.event.message.id)
+      }
+      if (
+        item.event.type === 'thread.activity-upserted' &&
+        isDiffUpdateActivity(item.event.activity)
+      ) {
+        setWorkspaceDiffVersion((version) => version + 1)
       }
       const currentThread =
         threadRef.current ?? createEmptyThread(item.event.threadId, item.event.createdAt)
@@ -1417,7 +1428,7 @@ export function HomePage(): React.JSX.Element {
                   key={composerResetToken}
                   enabled={Boolean(activeProject)}
                   isBusy={isBusy}
-                  isRunning={isRunning}
+                  isRunning={canInterruptTurn}
                   interactionMode={interactionMode}
                   runtimeMode={runtimeMode}
                   catalogModels={allCatalogModels}

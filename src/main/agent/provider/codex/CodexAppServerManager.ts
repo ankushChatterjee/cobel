@@ -231,6 +231,12 @@ export class CodexAppServerManager {
         updatedAt: nowIso()
       }
       this.emitSession(input.threadId, 'session/ready', { providerThreadId })
+      this.emitRaw({
+        kind: 'notification',
+        threadId: input.threadId,
+        method: 'thread/started',
+        payload: { providerThreadId }
+      })
       return context.session
     } catch (error) {
       context.session = {
@@ -350,11 +356,15 @@ export class CodexAppServerManager {
       await this.sendRequest(context, 'initialize', buildCodexInitializeParams())
       this.writeMessage(context, { method: 'initialized' })
       const mode = mapCodexRuntimeMode('approval-required')
-      const threadResult = await this.sendRequest<Record<string, unknown>>(context, 'thread/start', {
-        cwd: input.cwd,
-        ...optionalModel(input.model),
-        ...mode
-      })
+      const threadResult = await this.sendRequest<Record<string, unknown>>(
+        context,
+        'thread/start',
+        {
+          cwd: input.cwd,
+          ...optionalModel(input.model),
+          ...mode
+        }
+      )
       const providerThreadId = readProviderThreadId(threadResult)
       if (!providerThreadId) throw new Error('Codex did not return a provider thread id.')
       await this.sendRequest<TurnStartResponse>(
@@ -914,9 +924,7 @@ export function buildThreadTitleTurnParams(input: {
   }
 }
 
-export function parseCodexStderr(
-  chunk: string
-): Array<{
+export function parseCodexStderr(chunk: string): Array<{
   level: 'error' | 'warning' | 'ignore'
   message: string
   detail?: unknown
@@ -1179,12 +1187,12 @@ function readReasoningEffort(
     : undefined
 }
 
-function readReasoningEffortOptions(
-  value: unknown
-): Array<{
-  reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
-  description?: string
-}> | undefined {
+function readReasoningEffortOptions(value: unknown):
+  | Array<{
+      reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
+      description?: string
+    }>
+  | undefined {
   const candidate = readRecord(value).supportedReasoningEfforts
   if (!Array.isArray(candidate)) return undefined
   const options = candidate
