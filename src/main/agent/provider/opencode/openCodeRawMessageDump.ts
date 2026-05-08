@@ -2,6 +2,8 @@ import { appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+let dumpWriteQueue = Promise.resolve()
+
 function dumpOpenCodeMessagesEnabled(): boolean {
   const v = process.env.DUMP_OPENCODE_MESSAGES?.trim()
   if (!v) return false
@@ -37,8 +39,10 @@ export function dumpOpenCodeSubscribeRawMessage(raw: unknown, context: { threadI
       raw: '[unserializable OpenCode event]'
     })
   }
-  void appendFile(resolveDumpFilePath(), `${serialized}\n`, 'utf8').catch((err: unknown) => {
-    const msg = err instanceof Error ? err.message : String(err)
-    console.error('[DUMP_OPENCODE_MESSAGES] append failed:', msg)
-  })
+  dumpWriteQueue = dumpWriteQueue
+    .then(() => appendFile(resolveDumpFilePath(), `${serialized}\n`, 'utf8'))
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[DUMP_OPENCODE_MESSAGES] append failed:', msg)
+    })
 }

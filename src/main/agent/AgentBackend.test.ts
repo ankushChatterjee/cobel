@@ -312,6 +312,90 @@ describe('AgentBackend', () => {
     expect(cursor === undefined || cursor !== null).toBe(true)
   })
 
+  it('marks persisted OpenCode running state stopped on app restart', async () => {
+    const db = openInMemoryDatabase()
+    const threadId = 'thread:stale-opencode-running'
+    const projectId = 'project:stale-opencode-running'
+    const createdAt = '2026-04-19T00:00:00.000Z'
+    const backendA = new AgentBackend({ db })
+
+    await backendA.dispatchCommand({
+      type: 'project.create',
+      commandId: 'cmd-project',
+      projectId,
+      name: 'Restart Project',
+      path: '/tmp/project',
+      createdAt
+    })
+    await backendA.dispatchCommand({
+      type: 'thread.create',
+      commandId: 'cmd-thread',
+      threadId,
+      projectId,
+      title: 'Stale OpenCode',
+      cwd: '/tmp/project',
+      createdAt
+    })
+    backendA.engine.setSession({
+      threadId,
+      status: 'running',
+      providerName: 'opencode',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'opencode/free',
+      effort: 'low',
+      activeTurnId: 'turn-1',
+      activePlanId: null,
+      lastError: null,
+      createdAt
+    })
+    backendA.engine.setLatestTurn(threadId, {
+      id: 'turn-1',
+      status: 'running',
+      startedAt: createdAt,
+      completedAt: null
+    })
+    backendA.engine.setActiveTurn({
+      threadId,
+      activeTurn: {
+        turnId: 'turn-1',
+        phase: 'tool_running',
+        activeItemIds: ['tool:glob'],
+        visibleIndicator: 'tool',
+        startedAt: createdAt,
+        updatedAt: createdAt
+      },
+      createdAt
+    })
+    backendA.engine.upsertActivity(
+      {
+        id: 'tool:glob',
+        kind: 'tool.updated',
+        tone: 'tool',
+        summary: 'glob',
+        payload: { status: 'running', title: 'glob' },
+        turnId: 'turn-1',
+        createdAt
+      },
+      threadId
+    )
+
+    const backendB = new AgentBackend({ db })
+    const thread = backendB.engine.getThread(threadId)
+
+    expect(thread.session?.status).toBe('stopped')
+    expect(thread.session?.activeTurnId).toBeNull()
+    expect(thread.activeTurn).toBeNull()
+    expect(thread.latestTurn?.status).toBe('interrupted')
+    expect(thread.activities.find((activity) => activity.id === 'tool:glob')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'failed' }),
+        resolved: true
+      })
+    )
+  })
+
   it('re-establishes a persisted provider session before responding to user input after restart', async () => {
     const db = openInMemoryDatabase()
     const threadId = 'thread:resume-before-user-input'

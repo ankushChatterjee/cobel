@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { OrchestrationThread, OrchestrationThreadActivity } from '../../../../shared/agent'
 import {
   buildTranscriptItems,
+  buildCheckpointByAssistantMessageId,
   createEmptyThread,
   eventClearsPendingTurnWait,
   groupTranscriptItems,
@@ -16,6 +17,63 @@ import {
 } from './threadUtils'
 
 const t0 = '2020-01-01T00:00:00.000Z'
+
+describe('buildCheckpointByAssistantMessageId', () => {
+  it('attaches a checkpoint to its explicit assistant message id', () => {
+    const checkpoint = {
+      id: 'checkpoint:1',
+      turnId: 'turn-1',
+      assistantMessageId: 'assistant:explicit',
+      checkpointTurnCount: 1,
+      status: 'ready' as const,
+      files: [],
+      completedAt: t0
+    }
+
+    expect(buildCheckpointByAssistantMessageId([checkpoint]).get('assistant:explicit')).toBe(
+      checkpoint
+    )
+  })
+
+  it('falls back to the latest assistant message for the checkpoint turn', () => {
+    const checkpoint = {
+      id: 'checkpoint:1',
+      turnId: 'turn-1',
+      checkpointTurnCount: 1,
+      status: 'ready' as const,
+      files: [],
+      completedAt: t0
+    }
+    const map = buildCheckpointByAssistantMessageId(
+      [checkpoint],
+      [
+        {
+          id: 'assistant:first',
+          role: 'assistant',
+          text: 'first',
+          turnId: 'turn-1',
+          streaming: false,
+          sequence: 1,
+          createdAt: t0,
+          updatedAt: t0
+        },
+        {
+          id: 'assistant:last',
+          role: 'assistant',
+          text: 'last',
+          turnId: 'turn-1',
+          streaming: false,
+          sequence: 2,
+          createdAt: t0,
+          updatedAt: t0
+        }
+      ]
+    )
+
+    expect(map.get('assistant:last')).toBe(checkpoint)
+    expect(map.has('assistant:first')).toBe(false)
+  })
+})
 
 describe('isOrchestrationModelTurnInProgress', () => {
   it('is false when the latest turn has finished', () => {
@@ -792,19 +850,60 @@ describe('activeTurn selectors', () => {
     }
   })
 
-  it('selectTailIndicator returns visibleIndicator for in-flight phases', () => {
+  it('selectTailIndicator returns visibleIndicator for generic in-flight phases', () => {
+    expect(
+      selectTailIndicator(
+        threadWithActiveTurn({
+          turnId: 't1',
+          phase: 'streaming',
+          activeItemIds: [],
+          visibleIndicator: 'exploring',
+          startedAt: t0,
+          updatedAt: t0
+        })
+      )
+    ).toBe('exploring')
+  })
+
+  it('selectTailIndicator derives stable indicators from specific phases', () => {
     expect(
       selectTailIndicator(
         threadWithActiveTurn({
           turnId: 't1',
           phase: 'thinking',
           activeItemIds: [],
-          visibleIndicator: 'thinking',
+          visibleIndicator: 'exploring',
           startedAt: t0,
           updatedAt: t0
         })
       )
     ).toBe('thinking')
+
+    expect(
+      selectTailIndicator(
+        threadWithActiveTurn({
+          turnId: 't1',
+          phase: 'tool_running',
+          activeItemIds: [],
+          visibleIndicator: 'exploring',
+          startedAt: t0,
+          updatedAt: t0
+        })
+      )
+    ).toBe('tool')
+
+    expect(
+      selectTailIndicator(
+        threadWithActiveTurn({
+          turnId: 't1',
+          phase: 'waiting_for_input',
+          activeItemIds: [],
+          visibleIndicator: 'exploring',
+          startedAt: t0,
+          updatedAt: t0
+        })
+      )
+    ).toBe('approval')
   })
 
   it('selectRunningToolItemIds excludes approval slots', () => {
@@ -899,5 +998,31 @@ describe('activeTurn selectors', () => {
         ]
       })
     ).toBe(false)
+  })
+
+  it('shows the exploring tail when there is no visible active progress row', () => {
+    expect(
+      selectTranscriptTailRowVisible({
+        ...threadWithActiveTurn({
+          turnId: 't1',
+          phase: 'streaming',
+          activeItemIds: [],
+          visibleIndicator: 'exploring',
+          startedAt: t0,
+          updatedAt: t0
+        }),
+        session: {
+          threadId: 'th',
+          status: 'running',
+          providerName: 'opencode',
+          runtimeMode: 'auto-accept-edits',
+          interactionMode: 'default',
+          activeTurnId: 't1',
+          activePlanId: null,
+          lastError: null,
+          updatedAt: t0
+        }
+      })
+    ).toBe(true)
   })
 })

@@ -43,21 +43,22 @@ export const ToolLine = memo(function ToolLine({
   const fileChange = extractFileChangeDiff(payload)
   const fileReadPreview = readCanonicalFileReadPreview(payload)
 
-  if (readPayloadString(payload, 'itemType') === 'file_change' && fileChange) {
+  if (readPayloadString(payload, 'itemType') === 'file_change') {
     const lockedCollapsed = isRunning
+    const fileChangeTitle = fileChange?.title ?? fileChangeTitleFromPayload(payload, title)
     return (
       <article
         className={`tool-line embedded-tool-line ${statusTone}`}
         data-item-type="file_change"
       >
         <EmbeddedDiffView
-          diff={fileChange.diff}
-          title={fileChange.title}
+          diff={fileChange?.diff ?? ''}
+          title={fileChangeTitle}
           compactTitle
           defaultCollapsed
           lockedCollapsed={lockedCollapsed}
           busy={lockedCollapsed}
-          status={<span>{statusLabel(status)}</span>}
+          status={lockedCollapsed ? undefined : <span>{statusLabel(status)}</span>}
         />
       </article>
     )
@@ -186,4 +187,15 @@ function formatPayload(payload: Record<string, unknown>): string {
   } catch {
     return String(payload)
   }
+}
+
+function fileChangeTitleFromPayload(payload: Record<string, unknown>, fallback: string): string {
+  const directTitle = readPayloadString(payload, 'title')
+  if (directTitle && directTitle.toLowerCase() !== 'edited edit') return directTitle
+
+  const data = readPayloadRecord(payload, 'data')
+  const state = readPayloadRecord(data, 'state')
+  const input = readPayloadRecord(state, 'input')
+  const filePath = readPayloadString(input, 'filePath')
+  return filePath ?? directTitle ?? fallback
 }

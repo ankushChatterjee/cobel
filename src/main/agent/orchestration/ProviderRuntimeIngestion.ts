@@ -305,6 +305,7 @@ export class ProviderRuntimeIngestion {
     switch (event.type) {
       case 'session.state.changed':
         this.closeTurnForTerminalSession(event)
+        this.closeTurnForReadySession(event)
         if (event.payload.state === 'running') {
           const activeTurnId =
             event.turnId ?? this.engine.getThread(event.threadId).session?.activeTurnId ?? null
@@ -401,6 +402,7 @@ export class ProviderRuntimeIngestion {
       case 'item.updated':
       case 'item.completed':
         this.ingestItem(event)
+        if (event.type === 'item.completed') this.resolvePendingApprovalForTool(event)
         if (event.type === 'item.completed' && event.payload.itemType !== 'reasoning')
           this.flushAssistant(event, { closeSegment: true })
         return
@@ -436,6 +438,7 @@ export class ProviderRuntimeIngestion {
               summary: event.payload.detail ?? titleForRequest(event.payload.requestType),
               payload: {
                 requestType: event.payload.requestType,
+                toolCallId: event.payload.toolCallId,
                 args: event.payload.args,
                 ...(approvalFileEdit.length > 0 ? { fileEditChanges: approvalFileEdit } : {})
               },
@@ -1274,6 +1277,11 @@ export class ProviderRuntimeIngestion {
       lastError: event.payload.errorMessage ?? null,
       createdAt: event.createdAt
     })
+    this.engine.setActiveTurn({
+      threadId: event.threadId,
+      activeTurn: null,
+      createdAt: event.createdAt
+    })
   }
 
   private closeTurnForTerminalSession(
@@ -1307,6 +1315,31 @@ export class ProviderRuntimeIngestion {
       status: state,
       startedAt: thread.latestTurn?.startedAt ?? event.createdAt,
       completedAt: event.createdAt
+    })
+    this.engine.setActiveTurn({
+      threadId: event.threadId,
+      activeTurn: null,
+      createdAt: event.createdAt
+    })
+  }
+
+  private closeTurnForReadySession(
+    event: Extract<ProviderRuntimeEvent, { type: 'session.state.changed' }>
+  ): void {
+    if (event.payload.state !== 'ready') return
+    const thread = this.engine.getThread(event.threadId)
+    const activeTurnId =
+      event.turnId ??
+      thread.session?.activeTurnId ??
+      (thread.latestTurn?.status === 'running' ? thread.latestTurn.id : null)
+    if (!activeTurnId) return
+    if (this.isCompletedTurn(event.threadId, activeTurnId)) return
+
+    this.closeActiveTurn({
+      ...event,
+      type: 'turn.completed',
+      turnId: activeTurnId,
+      payload: { state: 'completed' }
     })
     this.engine.setActiveTurn({
       threadId: event.threadId,
@@ -1405,6 +1438,28 @@ export class ProviderRuntimeIngestion {
           summary: `${activity.summary} (cleared by turn end)`,
           resolved: true,
           createdAt: activity.createdAt
+        },
+        event.threadId
+      )
+    }
+  }
+
+  private resolvePendingApprovalForTool(event: ProviderRuntimeEvent): void {
+    if (event.type !== 'item.completed') return
+    if (!event.itemId) return
+    const thread = this.engine.getThread(event.threadId)
+    for (const activity of thread.activities) {
+      if (activity.kind !== 'approval.requested' || activity.resolved === true) continue
+      if (readPayloadString(activity.payload, 'toolCallId') !== event.itemId) continue
+      this.engine.upsertActivity(
+        {
+          ...activity,
+          kind: 'approval.resolved',
+          tone: 'info',
+          summary: `${activity.summary} (cleared by tool completion)`,
+          payload: { ...activity.payload, decision: 'accept' },
+          resolved: true,
+          createdAt: event.createdAt
         },
         event.threadId
       )

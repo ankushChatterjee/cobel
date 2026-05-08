@@ -67,19 +67,195 @@ interface OpenCodeSessionContext {
   /** Maps composer effort → OpenCode `variant` for this session's model (from catalog). */
   variantByEffort: Partial<Record<ReasoningEffort, string>>
   readonly pendingPermissions: Map<string, PermissionRequest>
+  readonly permissionRequestState: OpenCodeRequestFsm
   readonly pendingQuestions: Map<string, QuestionRequest>
   readonly messageRoleById: Map<string, 'user' | 'assistant'>
+  readonly messageTurnIdById: Map<string, string>
   readonly partById: Map<string, Part>
   readonly partTurnIdById: Map<string, string>
   readonly emittedTextByPartId: Map<string, string>
-  readonly completedAssistantPartIds: Set<string>
+  readonly streamState: OpenCodeStreamState
+  readonly turnFsm: OpenCodeTurnFsm
   /** Delta bytes received before `partById` / message role is known */
   readonly pendingPartTextDeltas: Map<string, string>
-  /** callIDs that have already reached a terminal tool state (SDK may emit an extra `running` after `completed`). */
-  readonly terminalToolCallIds: Set<string>
-  activeTurnId: string | undefined
   stopped: boolean
   readonly eventsAbortController: AbortController
+}
+
+type OpenCodeTurnPhase = 'idle' | 'running' | 'awaiting-idle' | 'completed' | 'failed'
+
+type OpenCodeTurnTransition =
+  | { effect: 'none' }
+  | { effect: 'started'; turnId: string }
+  | { effect: 'completed'; turnId: string }
+  | { effect: 'failed'; turnId: string; message: string }
+
+class OpenCodeTurnFsm {
+  private phase: OpenCodeTurnPhase = 'idle'
+  private active: string | undefined
+  private last: string | undefined
+
+  get state(): OpenCodeTurnPhase {
+    return this.phase
+  }
+
+  get activeTurnId(): string | undefined {
+    return this.active
+  }
+
+  get lastTurnId(): string | undefined {
+    return this.last
+  }
+
+  start(turnId: string): OpenCodeTurnTransition {
+    if (this.phase === 'running' || this.phase === 'awaiting-idle') return { effect: 'none' }
+    this.phase = 'running'
+    this.active = turnId
+    this.last = turnId
+    return { effect: 'started', turnId }
+  }
+
+  busy(): OpenCodeTurnTransition {
+    if (this.phase !== 'running' && this.phase !== 'awaiting-idle') return { effect: 'none' }
+    if (this.active) this.last = this.active
+    return { effect: 'none' }
+  }
+
+  assistantFinish(finish: unknown): OpenCodeTurnTransition {
+    if (this.phase !== 'running' && this.phase !== 'awaiting-idle') return { effect: 'none' }
+    if (finish === 'tool-calls') {
+      this.phase = 'running'
+      return { effect: 'none' }
+    }
+    if (finish === 'stop') {
+      this.phase = 'awaiting-idle'
+      return { effect: 'none' }
+    }
+    return { effect: 'none' }
+  }
+
+  idle(): OpenCodeTurnTransition {
+    if (this.phase !== 'running' && this.phase !== 'awaiting-idle') return { effect: 'none' }
+    const turnId = this.active
+    if (!turnId) return { effect: 'none' }
+    this.phase = 'completed'
+    this.active = undefined
+    this.last = turnId
+    return { effect: 'completed', turnId }
+  }
+
+  fail(message: string): OpenCodeTurnTransition {
+    if (this.phase !== 'running' && this.phase !== 'awaiting-idle') return { effect: 'none' }
+    const turnId = this.active
+    if (!turnId) return { effect: 'none' }
+    this.phase = 'failed'
+    this.active = undefined
+    this.last = turnId
+    return { effect: 'failed', turnId, message }
+  }
+
+  abortActive(): void {
+    this.active = undefined
+    this.phase = 'failed'
+  }
+}
+
+type OpenCodeRequestPhase = 'idle' | 'open' | 'replying' | 'resolved'
+
+type OpenCodeRequestTransition =
+  | { effect: 'none' }
+  | {
+      effect: 'resolved'
+      requestId: string
+      decision: ProviderApprovalDecision
+      requestType: CanonicalRequestType
+    }
+type OpenCodeResolvedRequestTransition = Extract<OpenCodeRequestTransition, { effect: 'resolved' }>
+
+class OpenCodeRequestFsm {
+  private readonly phaseById = new Map<string, OpenCodeRequestPhase>()
+  private readonly requestTypeById = new Map<string, CanonicalRequestType>()
+  private readonly requestIdByToolKey = new Map<string, string>()
+
+  open(input: {
+    requestId: string
+    requestType: CanonicalRequestType
+    toolKey?: string
+  }): void {
+    if (this.phaseById.get(input.requestId) === 'resolved') return
+    this.phaseById.set(input.requestId, 'open')
+    this.requestTypeById.set(input.requestId, input.requestType)
+    if (input.toolKey) this.requestIdByToolKey.set(input.toolKey, input.requestId)
+  }
+
+  markReplying(requestId: string): OpenCodeRequestTransition {
+    const phase = this.phaseById.get(requestId)
+    if (phase === 'resolved') return { effect: 'none' }
+    if (!phase) return { effect: 'none' }
+    this.phaseById.set(requestId, 'replying')
+    return { effect: 'none' }
+  }
+
+  resolve(
+    requestId: string,
+    decision: ProviderApprovalDecision = 'accept'
+  ): OpenCodeRequestTransition {
+    const phase = this.phaseById.get(requestId)
+    if (!phase || phase === 'resolved') return { effect: 'none' }
+    this.phaseById.set(requestId, 'resolved')
+    return {
+      effect: 'resolved',
+      requestId,
+      decision,
+      requestType: this.requestTypeById.get(requestId) ?? 'unknown'
+    }
+  }
+
+  resolveForTool(
+    toolKey: string,
+    decision: ProviderApprovalDecision = 'cancel'
+  ): OpenCodeRequestTransition {
+    const requestId = this.requestIdByToolKey.get(toolKey)
+    if (!requestId) return { effect: 'none' }
+    return this.resolve(requestId, decision)
+  }
+
+  resolveAllOpen(
+    decision: ProviderApprovalDecision = 'cancel'
+  ): OpenCodeResolvedRequestTransition[] {
+    const transitions: OpenCodeResolvedRequestTransition[] = []
+    for (const [requestId, phase] of this.phaseById) {
+      if (phase !== 'open' && phase !== 'replying') continue
+      const transition = this.resolve(requestId, decision)
+      if (transition.effect === 'resolved') transitions.push(transition)
+    }
+    return transitions
+  }
+}
+
+class OpenCodeStreamState {
+  private readonly terminalToolKeys = new Set<string>()
+  private readonly completedReasoningPartIds = new Set<string>()
+
+  resetForTurn(): void {
+    this.terminalToolKeys.clear()
+    this.completedReasoningPartIds.clear()
+  }
+
+  shouldEmitToolSnapshot(part: Extract<Part, { type: 'tool' }>, itemId: string): boolean {
+    const terminal = part.state.status === 'completed' || part.state.status === 'error'
+    if (terminal) {
+      this.terminalToolKeys.add(itemId)
+      return true
+    }
+    return !this.terminalToolKeys.has(itemId)
+  }
+
+  shouldCompleteReasoningPart(part: Extract<Part, { type: 'reasoning' }>): boolean {
+    if (part.time?.end === undefined || this.completedReasoningPartIds.has(part.id)) return false
+    this.completedReasoningPartIds.add(part.id)
+    return true
+  }
 }
 
 interface OpenCodeProbeResult {
@@ -153,7 +329,7 @@ function mapPermissionToRequestType(permission: string): CanonicalRequestType {
   }
 }
 
-function mapPermissionDecision(reply: 'once' | 'always' | 'reject'): string {
+function mapPermissionDecision(reply: 'once' | 'always' | 'reject'): ProviderApprovalDecision {
   switch (reply) {
     case 'once':
       return 'accept'
@@ -707,15 +883,16 @@ export class OpenCodeAdapter implements ProviderAdapter {
       openCodeSessionId,
       variantByEffort,
       pendingPermissions: new Map(),
+      permissionRequestState: new OpenCodeRequestFsm(),
       pendingQuestions: new Map(),
       messageRoleById: new Map(),
+      messageTurnIdById: new Map(),
       partById: new Map(),
       partTurnIdById: new Map(),
       emittedTextByPartId: new Map(),
-      completedAssistantPartIds: new Set(),
+      streamState: new OpenCodeStreamState(),
+      turnFsm: new OpenCodeTurnFsm(),
       pendingPartTextDeltas: new Map(),
-      terminalToolCallIds: new Set(),
-      activeTurnId: undefined,
       stopped: false,
       eventsAbortController: new AbortController()
     }
@@ -763,8 +940,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
     const variant = resolveOpenCodePromptVariant(ctx.variantByEffort, input.effort)
     const resolvedEffort = input.effort ?? 'medium'
     const agent = input.interactionMode === 'plan' ? 'plan' : undefined
-    ctx.activeTurnId = turnId
-    ctx.terminalToolCallIds.clear()
+    ctx.turnFsm.start(turnId)
+    ctx.streamState.resetForTurn()
     this.emit({
       ...buildEventBase({ threadId: input.threadId, turnId }),
       type: 'turn.started',
@@ -779,7 +956,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         parts: [...(text ? [{ type: 'text' as const, text }] : []), ...fileParts]
       })
     } catch (e) {
-      ctx.activeTurnId = undefined
+      ctx.turnFsm.abortActive()
       const msg = e instanceof Error ? e.message : String(e)
       this.emit({
         ...buildEventBase({ threadId: input.threadId, turnId }),
@@ -864,7 +1041,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     const ctx = this.sessions.get(input.threadId)
     if (!ctx) return
     await ctx.client.session.abort({ sessionID: ctx.openCodeSessionId }).catch(() => undefined)
-    const tid = input.turnId ?? ctx.activeTurnId
+    const tid = input.turnId ?? ctx.turnFsm.activeTurnId
     if (tid) {
       this.emit({
         ...buildEventBase({ threadId: input.threadId, turnId: tid }),
@@ -872,7 +1049,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         payload: { state: 'interrupted' }
       })
     }
-    ctx.activeTurnId = undefined
+    ctx.turnFsm.abortActive()
   }
 
   async rollbackConversation(input: { threadId: string; numTurns: number }): Promise<void> {
@@ -896,11 +1073,18 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }): Promise<void> {
     const ctx = this.requireSession(input.threadId)
     const perm = ctx.pendingPermissions.get(input.requestId)
-    if (!perm) throw new Error(`Unknown pending permission request: ${input.requestId}`)
+    if (!perm) return
+    ctx.permissionRequestState.markReplying(input.requestId)
     await ctx.client.permission.reply({
       requestID: input.requestId,
       reply: toOpenCodePermissionReply(input.decision)
     })
+    ctx.pendingPermissions.delete(input.requestId)
+    this.applyOpenCodeRequestTransition(
+      ctx,
+      ctx.permissionRequestState.resolve(input.requestId, input.decision),
+      undefined
+    )
   }
 
   async respondToUserInput(input: {
@@ -1016,7 +1200,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     } catch {
       // ignore
     }
-    const turnId = context.activeTurnId
+    const turnId = context.turnFsm.activeTurnId
     this.emit({
       ...buildEventBase({ threadId: context.session.threadId, turnId }),
       type: 'runtime.error',
@@ -1062,13 +1246,19 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   private async dispatchSdkEvent(context: OpenCodeSessionContext, event: SdkEvent): Promise<void> {
-    const turnId = context.activeTurnId
+    const turnId = context.turnFsm.activeTurnId
     const wireSessionId = event.properties?.sessionID as string | undefined
     const sessionOwnsTurnLifecycle = wireSessionId === context.openCodeSessionId
     switch (event.type) {
       case 'message.updated': {
-        const info = event.properties.info as { id?: string; role?: 'user' | 'assistant' }
+        const info = event.properties.info as {
+          id?: string
+          role?: 'user' | 'assistant'
+          finish?: unknown
+        }
         if (info.id && info.role) context.messageRoleById.set(info.id, info.role)
+        if (info.id && turnId) context.messageTurnIdById.set(info.id, turnId)
+        if (info.role === 'assistant') context.turnFsm.assistantFinish(info.finish)
         if (info.role === 'assistant' && info.id) {
           for (const part of context.partById.values()) {
             if (part.messageID !== info.id) continue
@@ -1092,6 +1282,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       case 'message.removed': {
         const messageID = event.properties.messageID as string
         context.messageRoleById.delete(messageID)
+        context.messageTurnIdById.delete(messageID)
         break
       }
       case 'message.part.removed': {
@@ -1137,6 +1328,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       case 'message.part.updated': {
         const part = event.properties.part as Part
         context.partById.set(part.id, part)
+        if (turnId) context.messageTurnIdById.set(part.messageID, turnId)
         const partTurnId = this.resolveTurnIdForPart(context, part.id, turnId)
         this.flushBufferedAssistantDelta(context, part, partTurnId, event)
         const messageRole = messageRoleForPart(context, part)
@@ -1145,12 +1337,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         }
         if (part.type === 'tool') {
           const itemId = toolPartItemId(part)
-          const terminal = part.state.status === 'completed' || part.state.status === 'error'
-          if (terminal) {
-            context.terminalToolCallIds.add(itemId)
-          } else if (context.terminalToolCallIds.has(itemId)) {
-            break
-          }
+          if (!context.streamState.shouldEmitToolSnapshot(part, itemId)) break
           const todoItems = todoItemsFromOpenCodeToolPart(part)
           if (todoItems.length > 0) {
             this.emit({
@@ -1209,6 +1396,16 @@ export class OpenCodeAdapter implements ProviderAdapter {
             type: evType,
             payload
           })
+          if (part.state.status === 'completed' || part.state.status === 'error') {
+            this.applyOpenCodeRequestTransition(
+              context,
+              context.permissionRequestState.resolveForTool(
+                itemId,
+                part.state.status === 'error' ? 'cancel' : 'accept'
+              ),
+              event
+            )
+          }
         }
         break
       }
@@ -1219,6 +1416,12 @@ export class OpenCodeAdapter implements ProviderAdapter {
           ? (event.properties.patterns as string[])
           : []
         const requestType = mapPermissionToRequestType(event.properties.permission as string)
+        const tool = event.properties.tool as { callID?: string } | undefined
+        context.permissionRequestState.open({
+          requestId: id,
+          requestType,
+          toolKey: tool?.callID
+        })
         const permissionFileEdit =
           requestType === 'file_change_approval'
             ? fileEditChangesFromOpenCodeMetadata(event.properties.metadata, patterns)
@@ -1231,11 +1434,12 @@ export class OpenCodeAdapter implements ProviderAdapter {
             raw: event
           }),
           type: 'request.opened',
-          payload: {
-            requestType,
-            detail:
-              Array.isArray(event.properties.patterns) && event.properties.patterns.length > 0
-                ? (event.properties.patterns as string[]).join('\n')
+            payload: {
+              requestType,
+              ...(tool?.callID ? { toolCallId: tool.callID } : {}),
+              detail:
+                Array.isArray(event.properties.patterns) && event.properties.patterns.length > 0
+                  ? (event.properties.patterns as string[]).join('\n')
                 : String(event.properties.permission ?? ''),
             args: event.properties.metadata,
             ...(permissionFileEdit ? { fileEditChanges: permissionFileEdit } : {})
@@ -1246,19 +1450,14 @@ export class OpenCodeAdapter implements ProviderAdapter {
       case 'permission.replied': {
         const requestID = event.properties.requestID as string
         context.pendingPermissions.delete(requestID)
-        this.emit({
-          ...buildEventBase({
-            threadId: context.session.threadId,
-            turnId,
-            requestId: requestID,
-            raw: event
-          }),
-          type: 'request.resolved',
-          payload: {
-            requestType: 'unknown',
-            decision: mapPermissionDecision(event.properties.reply as 'once' | 'always' | 'reject')
-          }
-        })
+        this.applyOpenCodeRequestTransition(
+          context,
+          context.permissionRequestState.resolve(
+            requestID,
+            mapPermissionDecision(event.properties.reply as 'once' | 'always' | 'reject')
+          ),
+          event
+        )
         break
       }
       case 'question.asked': {
@@ -1319,6 +1518,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       case 'session.status': {
         const status = event.properties.status as { type?: string; message?: string }
         if (status.type === 'busy' && turnId && sessionOwnsTurnLifecycle) {
+          context.turnFsm.busy()
           context.session = {
             ...context.session,
             status: 'running',
@@ -1335,16 +1535,24 @@ export class OpenCodeAdapter implements ProviderAdapter {
           break
         }
         if (status.type === 'idle' && turnId && sessionOwnsTurnLifecycle) {
-          context.activeTurnId = undefined
+          this.resolveOpenCodePendingRequests(context, event)
+          this.emit({
+            ...buildEventBase({ threadId: context.session.threadId, turnId, raw: event }),
+            type: 'session.state.changed',
+            payload: { state: 'ready' }
+          })
+          this.applyOpenCodeTurnTransition(context, context.turnFsm.idle(), event)
+        } else if (status.type === 'idle' && sessionOwnsTurnLifecycle) {
+          this.resolveOpenCodePendingRequests(context, event)
           context.session = {
             ...context.session,
             status: 'ready',
             updatedAt: nowIso()
           }
           this.emit({
-            ...buildEventBase({ threadId: context.session.threadId, turnId, raw: event }),
-            type: 'turn.completed',
-            payload: { state: 'completed' }
+            ...buildEventBase({ threadId: context.session.threadId, raw: event }),
+            type: 'session.state.changed',
+            payload: { state: 'ready' }
           })
         }
         break
@@ -1352,13 +1560,14 @@ export class OpenCodeAdapter implements ProviderAdapter {
       case 'session.diff': {
         const diff = event.properties.diff
         const fileEditChanges = fileEditChangesFromSessionDiff(diff)
+        const diffTurnId = turnId ?? context.turnFsm.lastTurnId
         if (fileEditChanges && fileEditChanges.length > 0) {
           const title =
             fileEditChanges.length === 1 ? basenamePath(fileEditChanges[0].path) : 'file changes'
           this.emit({
             ...buildEventBase({
               threadId: context.session.threadId,
-              turnId,
+              turnId: diffTurnId,
               itemId: 'opencode:session-diff',
               raw: event
             }),
@@ -1385,44 +1594,32 @@ export class OpenCodeAdapter implements ProviderAdapter {
         })
         break
       case 'session.idle': {
-        const active = context.activeTurnId
-        if (active && sessionOwnsTurnLifecycle) {
-          context.activeTurnId = undefined
-          context.session = {
-            ...context.session,
-            status: 'ready',
-            updatedAt: nowIso()
-          }
+        const active = context.turnFsm.activeTurnId
+        if (sessionOwnsTurnLifecycle) {
+          this.resolveOpenCodePendingRequests(context, event)
           this.emit({
             ...buildEventBase({ threadId: context.session.threadId, turnId: active, raw: event }),
-            type: 'turn.completed',
-            payload: { state: 'completed' }
+            type: 'session.state.changed',
+            payload: { state: 'ready' }
           })
+        }
+        if (active && sessionOwnsTurnLifecycle) {
+          this.applyOpenCodeTurnTransition(context, context.turnFsm.idle(), event)
         }
         break
       }
       case 'session.error': {
         const message = sessionErrorMessage(event.properties.error)
-        const activeTurn = context.activeTurnId
-        if (sessionOwnsTurnLifecycle) {
-          context.activeTurnId = undefined
-        }
+        const transition = sessionOwnsTurnLifecycle
+          ? context.turnFsm.fail(message)
+          : { effect: 'none' as const }
+        const activeTurn = transition.effect === 'failed' ? transition.turnId : context.turnFsm.activeTurnId
         this.emit({
           ...buildEventBase({ threadId: context.session.threadId, turnId: activeTurn, raw: event }),
           type: 'runtime.error',
           payload: { message, detail: event.properties.error }
         })
-        if (activeTurn && sessionOwnsTurnLifecycle) {
-          this.emit({
-            ...buildEventBase({
-              threadId: context.session.threadId,
-              turnId: activeTurn,
-              raw: event
-            }),
-            type: 'turn.completed',
-            payload: { state: 'failed', errorMessage: message }
-          })
-        }
+        this.applyOpenCodeTurnTransition(context, transition, event)
         break
       }
       default:
@@ -1463,35 +1660,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         }
       })
     }
-    if (
-      part.type === 'text' &&
-      part.time?.end !== undefined &&
-      !context.completedAssistantPartIds.has(part.id)
-    ) {
-      context.completedAssistantPartIds.add(part.id)
-      this.emit({
-        ...buildEventBase({
-          threadId: context.session.threadId,
-          turnId,
-          itemId: part.id,
-          createdAt: isoFromEpochMs(part.time.end),
-          raw
-        }),
-        type: 'item.completed',
-        payload: {
-          itemType: 'assistant_message',
-          status: 'completed',
-          title: 'Assistant message',
-          ...(latestText.length > 0 ? { detail: latestText } : {})
-        }
-      })
-    }
-    if (
-      part.type === 'reasoning' &&
-      part.time?.end !== undefined &&
-      !context.completedAssistantPartIds.has(part.id)
-    ) {
-      context.completedAssistantPartIds.add(part.id)
+    if (part.type === 'reasoning' && context.streamState.shouldCompleteReasoningPart(part)) {
       this.emit({
         ...buildEventBase({
           threadId: context.session.threadId,
@@ -1519,7 +1688,64 @@ export class OpenCodeAdapter implements ProviderAdapter {
       context.partTurnIdById.set(partId, currentTurnId)
       return currentTurnId
     }
-    return context.partTurnIdById.get(partId)
+    const mapped = context.partTurnIdById.get(partId)
+    if (mapped) return mapped
+    const part = context.partById.get(partId)
+    const messageTurnId = part ? context.messageTurnIdById.get(part.messageID) : undefined
+    if (messageTurnId) {
+      context.partTurnIdById.set(partId, messageTurnId)
+      return messageTurnId
+    }
+    return context.turnFsm.lastTurnId
+  }
+
+  private applyOpenCodeTurnTransition(
+    context: OpenCodeSessionContext,
+    transition: OpenCodeTurnTransition,
+    raw: unknown
+  ): void {
+    if (transition.effect !== 'completed' && transition.effect !== 'failed') return
+    context.session = {
+      ...context.session,
+      status: 'ready',
+      updatedAt: nowIso()
+    }
+    this.emit({
+      ...buildEventBase({ threadId: context.session.threadId, turnId: transition.turnId, raw }),
+      type: 'turn.completed',
+      payload:
+        transition.effect === 'failed'
+          ? { state: 'failed', errorMessage: transition.message }
+          : { state: 'completed' }
+    })
+  }
+
+  private applyOpenCodeRequestTransition(
+    context: OpenCodeSessionContext,
+    transition: OpenCodeRequestTransition,
+    raw: unknown
+  ): void {
+    if (transition.effect !== 'resolved') return
+    this.emit({
+      ...buildEventBase({
+        threadId: context.session.threadId,
+        turnId: context.turnFsm.activeTurnId ?? context.turnFsm.lastTurnId,
+        requestId: transition.requestId,
+        raw
+      }),
+      type: 'request.resolved',
+      payload: {
+        requestType: transition.requestType,
+        decision: transition.decision
+      }
+    })
+  }
+
+  private resolveOpenCodePendingRequests(context: OpenCodeSessionContext, raw: unknown): void {
+    for (const transition of context.permissionRequestState.resolveAllOpen('cancel')) {
+      context.pendingPermissions.delete(transition.requestId)
+      this.applyOpenCodeRequestTransition(context, transition, raw)
+    }
   }
 
   private eventBelongsToContext(context: OpenCodeSessionContext, event: SdkEvent): boolean {

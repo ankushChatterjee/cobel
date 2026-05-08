@@ -6,6 +6,7 @@ const deleteMock = vi.fn()
 const closeMock = vi.fn()
 const eventSubscribeMock = vi.fn()
 const promptAsyncMock = vi.fn()
+const permissionReplyMock = vi.fn()
 
 vi.mock('./opencodeRuntime', () => ({
   buildOpenCodePermissionRules: vi.fn(() => [{ permission: '*', pattern: '*', action: 'ask' }]),
@@ -23,6 +24,9 @@ vi.mock('./opencodeRuntime', () => ({
     },
     event: {
       subscribe: eventSubscribeMock
+    },
+    permission: {
+      reply: permissionReplyMock
     }
   })),
   inventoryToModelInfos: vi.fn(() => [{ id: 'anthropic/claude-sonnet-4', providerId: 'opencode' }]),
@@ -152,6 +156,7 @@ describe('OpenCodeAdapter event mapping', () => {
     vi.clearAllMocks()
     createMock.mockResolvedValue({ data: { id: 'session:events' } })
     promptAsyncMock.mockResolvedValue({})
+    permissionReplyMock.mockResolvedValue({})
     vi.mocked(mergeOpenCodeAssistantText).mockImplementation((previous, text) => ({
       latestText: text,
       deltaToEmit: previous === undefined ? text : text.slice(previous.length)
@@ -368,6 +373,170 @@ describe('OpenCodeAdapter event mapping', () => {
     stream.close()
   })
 
+  it('optimistically resolves OpenCode approvals and ignores duplicate approval responses', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await adapter.sendTurn({
+      threadId: 'thread-1',
+      input: 'run typecheck',
+      model: 'anthropic/claude-sonnet-4',
+      interactionMode: 'default'
+    })
+    await vi.waitFor(() => expect(promptAsyncMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'permission.asked',
+      properties: {
+        sessionID: 'session:events',
+        id: 'permission-1',
+        permission: 'bash',
+        patterns: ['bun run typecheck'],
+        metadata: {},
+        tool: { messageID: 'message-1', callID: 'tool-1' }
+      }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    await adapter.respondToApproval({
+      threadId: 'thread-1',
+      requestId: 'permission-1',
+      decision: 'accept'
+    })
+    await adapter.respondToApproval({
+      threadId: 'thread-1',
+      requestId: 'permission-1',
+      decision: 'accept'
+    })
+
+    expect(permissionReplyMock).toHaveBeenCalledTimes(1)
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'request.resolved',
+        requestId: 'permission-1',
+        payload: expect.objectContaining({ decision: 'accept' })
+      })
+    )
+
+    stream.close()
+  })
+
+  it('resolves abandoned OpenCode approvals when their tool is aborted after idle', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await adapter.sendTurn({
+      threadId: 'thread-1',
+      input: 'run lint',
+      model: 'anthropic/claude-sonnet-4',
+      interactionMode: 'default'
+    })
+    await vi.waitFor(() => expect(promptAsyncMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'message.updated',
+      properties: {
+        sessionID: 'session:events',
+        info: { id: 'message-1', sessionID: 'session:events', role: 'assistant' }
+      }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          id: 'part-bash-1',
+          sessionID: 'session:events',
+          messageID: 'message-1',
+          type: 'tool',
+          tool: 'bash',
+          callID: 'tool-bash-1',
+          state: {
+            status: 'running',
+            input: { command: 'bun run lint', description: 'Run linter' },
+            time: { start: 1 },
+            metadata: {}
+          }
+        }
+      }
+    })
+    stream.push({
+      type: 'permission.asked',
+      properties: {
+        sessionID: 'session:events',
+        id: 'permission-lint',
+        permission: 'bash',
+        patterns: ['bun run lint'],
+        metadata: {},
+        tool: { messageID: 'message-1', callID: 'tool-bash-1' }
+      }
+    })
+    stream.push({
+      type: 'session.idle',
+      properties: { sessionID: 'session:events' }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          id: 'part-bash-1',
+          sessionID: 'session:events',
+          messageID: 'message-1',
+          type: 'tool',
+          tool: 'bash',
+          callID: 'tool-bash-1',
+          state: {
+            status: 'error',
+            input: { command: 'bun run lint', description: 'Run linter' },
+            error: 'Tool execution aborted',
+            time: { start: 1, end: 2 },
+            metadata: { interrupted: true }
+          }
+        }
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'request.resolved',
+        requestId: 'permission-lint',
+        payload: expect.objectContaining({ decision: 'cancel' })
+      })
+    )
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'item.completed',
+        itemId: 'tool-bash-1',
+        payload: expect.objectContaining({ status: 'failed' })
+      })
+    )
+
+    stream.close()
+  })
+
   it('uses the tool part id when OpenCode omits callID so running edits can complete', async () => {
     const stream = createEventStream()
     eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
@@ -505,6 +674,362 @@ describe('OpenCodeAdapter event mapping', () => {
     const runtimeErrors = events.filter((event) => event.type === 'runtime.error')
     expect(turnCompletions).toEqual([])
     expect(runtimeErrors).toEqual([])
+
+    stream.close()
+  })
+
+  it('keeps an OpenCode turn running across assistant messages that finish with tool-calls', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await adapter.sendTurn({
+      threadId: 'thread-1',
+      input: 'work until done',
+      model: 'anthropic/claude-sonnet-4',
+      interactionMode: 'default'
+    })
+    await vi.waitFor(() => expect(promptAsyncMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'message.updated',
+      properties: {
+        sessionID: 'session:events',
+        info: { id: 'message-1', sessionID: 'session:events', role: 'assistant' }
+      }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          id: 'text-1',
+          sessionID: 'session:events',
+          messageID: 'message-1',
+          type: 'text',
+          text: 'I will read files.',
+          time: { start: 1, end: 2 }
+        }
+      }
+    })
+    stream.push({
+      type: 'message.updated',
+      properties: {
+        sessionID: 'session:events',
+        info: {
+          id: 'message-1',
+          sessionID: 'session:events',
+          role: 'assistant',
+          finish: 'tool-calls'
+        }
+      }
+    })
+    stream.push({
+      type: 'session.status',
+      properties: { sessionID: 'session:events', status: { type: 'busy' } }
+    })
+    stream.push({
+      type: 'message.updated',
+      properties: {
+        sessionID: 'session:events',
+        info: { id: 'message-2', sessionID: 'session:events', role: 'assistant' }
+      }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          id: 'text-2',
+          sessionID: 'session:events',
+          messageID: 'message-2',
+          type: 'text',
+          text: 'Now I will edit.',
+          time: { start: 3, end: 4 }
+        }
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events.filter((event) => event.type === 'turn.completed')).toEqual([])
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'item.completed' &&
+          event.payload.itemType === 'assistant_message'
+      )
+    ).toEqual([])
+    expect(events.filter((event) => event.type === 'content.delta')).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ delta: 'I will read files.' })
+      }),
+      expect.objectContaining({ payload: expect.objectContaining({ delta: 'Now I will edit.' }) })
+    ])
+
+    stream.push({
+      type: 'message.updated',
+      properties: {
+        sessionID: 'session:events',
+        info: {
+          id: 'message-2',
+          sessionID: 'session:events',
+          role: 'assistant',
+          finish: 'stop'
+        }
+      }
+    })
+    stream.push({
+      type: 'session.idle',
+      properties: { sessionID: 'session:events' }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(1)
+
+    stream.close()
+  })
+
+  it('ignores stale running tool snapshots after OpenCode reports the same tool completed', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await adapter.sendTurn({
+      threadId: 'thread-1',
+      input: 'edit the file',
+      model: 'anthropic/claude-sonnet-4',
+      interactionMode: 'default'
+    })
+    await vi.waitFor(() => expect(promptAsyncMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'message.updated',
+      properties: {
+        sessionID: 'session:events',
+        info: { id: 'message-1', sessionID: 'session:events', role: 'assistant' }
+      }
+    })
+    const basePart = {
+      id: 'part-edit-stale',
+      sessionID: 'session:events',
+      messageID: 'message-1',
+      type: 'tool' as const,
+      callID: 'call-edit-stale',
+      tool: 'edit',
+      metadata: {}
+    }
+    const input = {
+      filePath: 'src/app.ts',
+      oldString: 'old',
+      newString: 'new',
+      replaceAll: false
+    }
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          ...basePart,
+          state: { status: 'running', input, time: { start: 1 }, metadata: {} }
+        }
+      }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          ...basePart,
+          state: {
+            status: 'completed',
+            input,
+            output: 'Edit applied successfully.',
+            title: 'src/app.ts',
+            time: { start: 1, end: 2 },
+            metadata: { diff: 'diff --git a/src/app.ts b/src/app.ts\n@@\n-old\n+new\n' }
+          }
+        }
+      }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          ...basePart,
+          state: { status: 'running', input, time: { start: 1 }, metadata: {} }
+        }
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const toolEvents = events.filter((event) => event.itemId === 'call-edit-stale')
+    expect(toolEvents).toEqual([
+      expect.objectContaining({
+        type: 'item.updated',
+        payload: expect.objectContaining({ status: 'inProgress' })
+      }),
+      expect.objectContaining({
+        type: 'item.completed',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    ])
+
+    stream.close()
+  })
+
+  it('keeps late OpenCode reasoning completions attached to the completed turn', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    const turn = await adapter.sendTurn({
+      threadId: 'thread-1',
+      input: 'think and finish',
+      model: 'anthropic/claude-sonnet-4',
+      interactionMode: 'default'
+    })
+    await vi.waitFor(() => expect(promptAsyncMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'message.updated',
+      properties: {
+        sessionID: 'session:events',
+        info: { id: 'message-1', sessionID: 'session:events', role: 'assistant' }
+      }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          id: 'reasoning-1',
+          sessionID: 'session:events',
+          messageID: 'message-1',
+          type: 'reasoning',
+          text: 'Thinking',
+          time: { start: 1 }
+        }
+      }
+    })
+    stream.push({
+      type: 'session.idle',
+      properties: { sessionID: 'session:events' }
+    })
+    stream.push({
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session:events',
+        part: {
+          id: 'reasoning-1',
+          sessionID: 'session:events',
+          messageID: 'message-1',
+          type: 'reasoning',
+          text: 'Thinking',
+          time: { start: 1, end: 2 }
+        }
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'turn.completed',
+        turnId: turn.turnId,
+        payload: expect.objectContaining({ state: 'completed' })
+      })
+    )
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'item.completed',
+        turnId: turn.turnId,
+        itemId: 'reasoning-1',
+        payload: expect.objectContaining({ itemType: 'reasoning', status: 'completed' })
+      })
+    )
+
+    stream.close()
+  })
+
+  it('attaches OpenCode session diffs that arrive after idle to the just-completed turn', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    const turn = await adapter.sendTurn({
+      threadId: 'thread-1',
+      input: 'edit then report diff',
+      model: 'anthropic/claude-sonnet-4',
+      interactionMode: 'default'
+    })
+    await vi.waitFor(() => expect(promptAsyncMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'session.idle',
+      properties: { sessionID: 'session:events' }
+    })
+    stream.push({
+      type: 'session.diff',
+      properties: {
+        sessionID: 'session:events',
+        diff: [
+          {
+            file: 'src/app.ts',
+            patch: 'diff --git a/src/app.ts b/src/app.ts\n@@\n-old\n+new\n'
+          }
+        ]
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'item.completed',
+        turnId: turn.turnId,
+        itemId: 'opencode:session-diff',
+        payload: expect.objectContaining({ itemType: 'file_change', status: 'completed' })
+      })
+    )
 
     stream.close()
   })

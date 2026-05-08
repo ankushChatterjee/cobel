@@ -62,6 +62,7 @@ export class AgentBackend {
       this.engine = new OrchestrationEngine()
     }
 
+    this.clearRestartStaleOpenCodeTurns()
     this.clearRestartStaleUserInputs()
 
     this.providers = new ProviderService()
@@ -430,6 +431,59 @@ export class AgentBackend {
     }
   }
 
+  private clearRestartStaleOpenCodeTurns(): void {
+    const now = new Date().toISOString()
+    for (const shellThread of this.snapshots.getShellSnapshot().threads) {
+      const thread = this.engine.getThread(shellThread.id)
+      const session = thread.session
+      if (!session || session.providerName !== 'opencode') continue
+      if (session.status !== 'starting' && session.status !== 'running') continue
+
+      const activeTurnId =
+        session.activeTurnId ??
+        thread.activeTurn?.turnId ??
+        (thread.latestTurn?.status === 'running' ? thread.latestTurn.id : null)
+
+      this.engine.setSession({
+        threadId: thread.id,
+        status: 'stopped',
+        providerName: session.providerName,
+        runtimeMode: session.runtimeMode,
+        interactionMode: session.interactionMode,
+        model: session.model,
+        effort: session.effort,
+        activeTurnId: null,
+        activePlanId: session.activePlanId,
+        lastError: session.lastError,
+        createdAt: now
+      })
+      this.engine.setActiveTurn({ threadId: thread.id, activeTurn: null, createdAt: now })
+      if (activeTurnId && thread.latestTurn?.id === activeTurnId && thread.latestTurn.status === 'running') {
+        this.engine.setLatestTurn(thread.id, {
+          ...thread.latestTurn,
+          status: 'interrupted',
+          completedAt: now
+        })
+      }
+
+      for (const activity of thread.activities) {
+        if (activity.turnId !== activeTurnId || !restartActivityIsRunning(activity)) continue
+        this.engine.upsertActivity(
+          {
+            ...activity,
+            kind: activity.kind.startsWith('task.') ? 'task.completed' : 'tool.completed',
+            tone: activity.tone === 'thinking' ? 'thinking' : activity.tone,
+            summary: `${activity.summary} (interrupted on app restart)`,
+            payload: { ...activity.payload, status: 'failed' },
+            resolved: true,
+            createdAt: now
+          },
+          thread.id
+        )
+      }
+    }
+  }
+
   private providerForThread(threadId: string): ProviderId {
     return this.engine.getThread(threadId).session?.providerName ?? 'codex'
   }
@@ -583,6 +637,16 @@ function assertCommand(input: ClientOrchestrationCommand): void {
   if (input.type === 'thread.checkpoint.commit' && input.message.trim().length === 0) {
     throw new Error('Commit message is required.')
   }
+}
+
+function restartActivityIsRunning(activity: {
+  kind: string
+  payload?: Record<string, unknown>
+}): boolean {
+  if (activity.kind === 'tool.started' || activity.kind === 'tool.updated') return true
+  if (activity.kind === 'task.started' || activity.kind === 'task.progress') return true
+  const status = activity.payload?.['status']
+  return status === 'inProgress' || status === 'running'
 }
 
 function sanitizeOptionalString(value: unknown): string | undefined {

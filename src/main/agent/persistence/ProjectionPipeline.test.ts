@@ -1153,4 +1153,97 @@ describe('ProjectionPipeline', () => {
       })
     )
   })
+
+  it('does not let a stale running activity overwrite a completed projection row', () => {
+    const threadId = 'thread-terminal-activity'
+    const createdAt = '2026-05-07T18:15:13.604Z'
+    const staleAt = '2026-05-07T18:15:13.603Z'
+    const events = [
+      {
+        eventId: 'thread-create',
+        eventType: 'thread.created',
+        occurredAt: createdAt,
+        payload: { threadId, projectId: 'proj-1', title: 'Thread' }
+      },
+      {
+        eventId: 'tool-completed',
+        eventType: 'thread.activity-upserted',
+        occurredAt: createdAt,
+        payload: {
+          activity: {
+            id: 'tool:call-1',
+            kind: 'tool.completed',
+            tone: 'tool',
+            summary: 'package.json',
+            payload: {
+              itemType: 'dynamic_tool_call',
+              status: 'completed',
+              title: 'package.json'
+            },
+            turnId: 'turn-1',
+            createdAt
+          }
+        }
+      },
+      {
+        eventId: 'tool-stale-running',
+        eventType: 'thread.activity-upserted',
+        occurredAt: staleAt,
+        payload: {
+          activity: {
+            id: 'tool:call-1',
+            kind: 'tool.updated',
+            tone: 'tool',
+            summary: 'Read package.json',
+            payload: {
+              itemType: 'dynamic_tool_call',
+              status: 'inProgress',
+              title: 'Read package.json',
+              detail: '/Users/ankush/codespace/gensql/package.json'
+            },
+            turnId: 'turn-1',
+            createdAt: staleAt
+          }
+        }
+      }
+    ]
+
+    events.forEach((event, index) => {
+      const seq = eventStore.append({
+        eventId: event.eventId,
+        aggregateKind: 'thread',
+        streamId: threadId,
+        streamVersion: index + 1,
+        eventType: event.eventType,
+        occurredAt: event.occurredAt,
+        actorKind: 'system',
+        payload: event.payload
+      })
+      projections.apply({
+        sequence: seq,
+        eventId: event.eventId,
+        aggregateKind: 'thread',
+        streamId: threadId,
+        streamVersion: index + 1,
+        eventType: event.eventType,
+        occurredAt: event.occurredAt,
+        actorKind: 'system',
+        payload: event.payload
+      })
+    })
+
+    const activity = snapshots.getThreadDetail(threadId)?.activities[0]
+    expect(activity).toEqual(
+      expect.objectContaining({
+        id: 'tool:call-1',
+        kind: 'tool.completed',
+        summary: 'package.json',
+        payload: expect.objectContaining({
+          status: 'completed',
+          title: 'package.json',
+          detail: '/Users/ankush/codespace/gensql/package.json'
+        })
+      })
+    )
+  })
 })

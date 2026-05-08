@@ -20,7 +20,7 @@ export function applyOrchestrationEvent(
     case 'thread.activity-upserted':
       return {
         ...thread,
-        activities: upsertById(thread.activities, event.activity),
+        activities: upsertActivityById(thread.activities, event.activity),
         updatedAt: event.createdAt
       }
     case 'thread.proposed-plan-upserted':
@@ -103,6 +103,55 @@ function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
   const next = [...items]
   next[index] = item
   return next
+}
+
+function upsertActivityById<T extends { id: string; kind: string; payload?: Record<string, unknown> }>(
+  items: T[],
+  item: T
+): T[] {
+  const index = items.findIndex((candidate) => candidate.id === item.id)
+  if (index === -1) return [...items, item]
+  const existing = items[index]
+  const next = [...items]
+  next[index] = preserveTerminalActivity(existing, item)
+  return next
+}
+
+function preserveTerminalActivity<T extends { kind: string; payload?: Record<string, unknown> }>(
+  existing: T,
+  incoming: T
+): T {
+  if (!activityIsTerminal(existing) || activityIsTerminal(incoming)) return incoming
+  if (!activityIsNonTerminal(incoming)) return incoming
+  return {
+    ...existing,
+    payload: {
+      ...incoming.payload,
+      ...existing.payload,
+      status: readPayloadString(existing.payload, 'status') ?? 'completed'
+    }
+  }
+}
+
+function activityIsTerminal(activity: { kind: string; payload?: Record<string, unknown> }): boolean {
+  if (activity.kind === 'tool.completed' || activity.kind === 'task.completed') return true
+  const status = readPayloadString(activity.payload, 'status')
+  return status === 'completed' || status === 'success' || status === 'failed' || status === 'declined'
+}
+
+function activityIsNonTerminal(activity: {
+  kind: string
+  payload?: Record<string, unknown>
+}): boolean {
+  if (activity.kind === 'tool.started' || activity.kind === 'tool.updated') return true
+  if (activity.kind === 'task.started' || activity.kind === 'task.progress') return true
+  const status = readPayloadString(activity.payload, 'status')
+  return status === 'inProgress' || status === 'running'
+}
+
+function readPayloadString(payload: Record<string, unknown> | undefined, key: string): string | null {
+  const value = payload?.[key]
+  return typeof value === 'string' ? value : null
 }
 
 function upsertCheckpoint<

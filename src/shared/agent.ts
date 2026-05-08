@@ -175,6 +175,7 @@ export type ProviderRuntimeEvent =
       type: 'request.opened'
       payload: {
         requestType: CanonicalRequestType
+        toolCallId?: string
         detail?: string
         args?: unknown
         fileEditChanges?: FileEditChange[]

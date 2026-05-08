@@ -129,6 +129,9 @@ export function selectTailIndicator(
   if (phase === 'completed' || phase === 'failed' || phase === 'interrupted' || phase === 'idle' || phase === 'finalizing') {
     return 'none'
   }
+  if (phase === 'thinking') return 'thinking'
+  if (phase === 'tool_running') return 'tool'
+  if (phase === 'waiting_for_input') return 'approval'
   return thread.activeTurn.visibleIndicator
 }
 
@@ -319,11 +322,20 @@ export function groupTranscriptItems(
 }
 
 export function buildCheckpointByAssistantMessageId(
-  checkpoints: OrchestrationCheckpointSummary[]
+  checkpoints: OrchestrationCheckpointSummary[],
+  messages: OrchestrationMessage[] = []
 ): Map<string, OrchestrationCheckpointSummary> {
   const map = new Map<string, OrchestrationCheckpointSummary>()
+  const latestAssistantMessageIdByTurnId = new Map<string, string>()
+  for (const message of messages) {
+    if (message.role === 'assistant' && message.turnId) {
+      latestAssistantMessageIdByTurnId.set(message.turnId, message.id)
+    }
+  }
   for (const checkpoint of checkpoints) {
-    if (checkpoint.assistantMessageId) map.set(checkpoint.assistantMessageId, checkpoint)
+    const messageId =
+      checkpoint.assistantMessageId ?? latestAssistantMessageIdByTurnId.get(checkpoint.turnId)
+    if (messageId) map.set(messageId, checkpoint)
   }
   return map
 }

@@ -232,8 +232,8 @@ export function HomePage(): React.JSX.Element {
     [thread?.latestTurn?.id, thread?.proposedPlans]
   )
   const checkpointByAssistantMessageId = useMemo(
-    () => buildCheckpointByAssistantMessageId(thread?.checkpoints ?? []),
-    [thread?.checkpoints]
+    () => buildCheckpointByAssistantMessageId(thread?.checkpoints ?? [], thread?.messages ?? []),
+    [thread?.checkpoints, thread?.messages]
   )
   const sessionError = useMemo(() => readSessionErrorForDisplay(thread), [thread])
   const transcriptTailIndicator = useMemo(() => selectTailIndicator(thread), [thread])

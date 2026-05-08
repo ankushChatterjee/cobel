@@ -108,4 +108,60 @@ describe('applyOrchestrationEvent', () => {
     })
     expect(next.activeTurn?.turnId).toBe('snap')
   })
+
+  it('does not let a stale running tool event overwrite a completed tool activity', () => {
+    const thread = {
+      ...emptyThread('th1'),
+      activities: [
+        {
+          id: 'tool:call-1',
+          kind: 'tool.completed' as const,
+          tone: 'tool' as const,
+          summary: 'package.json',
+          payload: {
+            itemType: 'dynamic_tool_call',
+            status: 'completed',
+            title: 'package.json'
+          },
+          turnId: 'turn-1',
+          sequence: 1,
+          createdAt: t0
+        }
+      ]
+    }
+
+    const next = applyOrchestrationEvent(thread, {
+      sequence: 2,
+      type: 'thread.activity-upserted',
+      threadId: 'th1',
+      activity: {
+        id: 'tool:call-1',
+        kind: 'tool.updated',
+        tone: 'tool',
+        summary: 'Read package.json',
+        payload: {
+          itemType: 'dynamic_tool_call',
+          status: 'inProgress',
+          title: 'Read package.json',
+          detail: '/tmp/project/package.json'
+        },
+        turnId: 'turn-1',
+        sequence: 2,
+        createdAt: t0
+      },
+      createdAt: t0
+    })
+
+    expect(next.activities[0]).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        summary: 'package.json',
+        payload: expect.objectContaining({
+          status: 'completed',
+          title: 'package.json',
+          detail: '/tmp/project/package.json'
+        })
+      })
+    )
+  })
 })

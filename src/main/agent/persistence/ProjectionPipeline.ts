@@ -288,6 +288,48 @@ export class ProjectionPipeline {
     const activity = asRecord(e.payload['activity'])
     const activityId = str(activity['id'])
     if (!activityId) return
+    const existing = this.db
+      .prepare(
+        `SELECT kind, tone, summary, payload_json, turn_id, sequence, resolved, created_at
+         FROM projection_thread_activities WHERE thread_id = ? AND activity_id = ?`
+      )
+      .get(e.streamId, activityId) as
+      | {
+          kind: string
+          tone: string
+          summary: string
+          payload_json: string | null
+          turn_id: string | null
+          sequence: number | null
+          resolved: number
+          created_at: string
+        }
+      | undefined
+    const incomingProjection = {
+      kind: str(activity['kind']) ?? 'tool.started',
+      tone: str(activity['tone']) ?? 'tool',
+      summary: str(activity['summary']) ?? '',
+      payload: asOptionalRecord(activity['payload']),
+      turnId: str(activity['turnId']) ?? null,
+      sequence: typeof activity['sequence'] === 'number' ? activity['sequence'] : null,
+      resolved: activity['resolved'] ? 1 : 0,
+      createdAt: str(activity['createdAt']) ?? e.occurredAt
+    }
+    const nextProjection = existing
+      ? preserveTerminalActivityProjection(
+          {
+            kind: existing.kind,
+            tone: existing.tone,
+            summary: existing.summary,
+            payload: parseProjectionPayload(existing.payload_json),
+            turnId: existing.turn_id,
+            sequence: existing.sequence,
+            resolved: existing.resolved,
+            createdAt: existing.created_at
+          },
+          incomingProjection
+        )
+      : incomingProjection
     this.db
       .prepare(
         `
@@ -306,14 +348,14 @@ export class ProjectionPipeline {
       .run({
         activity_id: activityId,
         thread_id: e.streamId,
-        kind: str(activity['kind']) ?? 'tool.started',
-        tone: str(activity['tone']) ?? 'tool',
-        summary: str(activity['summary']) ?? '',
-        payload_json: activity['payload'] ? JSON.stringify(activity['payload']) : null,
-        turn_id: str(activity['turnId']) ?? null,
-        sequence: typeof activity['sequence'] === 'number' ? activity['sequence'] : null,
-        resolved: activity['resolved'] ? 1 : 0,
-        created_at: str(activity['createdAt']) ?? e.occurredAt
+        kind: nextProjection.kind,
+        tone: nextProjection.tone,
+        summary: nextProjection.summary,
+        payload_json: nextProjection.payload ? JSON.stringify(nextProjection.payload) : null,
+        turn_id: nextProjection.turnId,
+        sequence: nextProjection.sequence,
+        resolved: nextProjection.resolved,
+        created_at: nextProjection.createdAt
       })
   }
 
@@ -646,4 +688,60 @@ function arrayOfRecords(value: unknown): Record<string, unknown>[] {
 
 function str(value: unknown): string | null {
   return typeof value === 'string' ? value : null
+}
+
+function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined
+}
+
+function parseProjectionPayload(value: string | null): Record<string, unknown> | undefined {
+  if (!value) return undefined
+  try {
+    const parsed = JSON.parse(value)
+    return asOptionalRecord(parsed)
+  } catch {
+    return undefined
+  }
+}
+
+interface ActivityProjection {
+  kind: string
+  tone: string
+  summary: string
+  payload: Record<string, unknown> | undefined
+  turnId: string | null
+  sequence: number | null
+  resolved: number
+  createdAt: string
+}
+
+function preserveTerminalActivityProjection(
+  existing: ActivityProjection,
+  incoming: ActivityProjection
+): ActivityProjection {
+  if (!activityProjectionIsTerminal(existing) || activityProjectionIsTerminal(incoming)) {
+    return incoming
+  }
+  if (!activityProjectionIsNonTerminal(incoming)) return incoming
+  return {
+    ...existing,
+    payload: {
+      ...incoming.payload,
+      ...existing.payload,
+      status: str(existing.payload?.['status']) ?? 'completed'
+    }
+  }
+}
+
+function activityProjectionIsTerminal(activity: ActivityProjection): boolean {
+  if (activity.kind === 'tool.completed' || activity.kind === 'task.completed') return true
+  const status = str(activity.payload?.['status'])
+  return status === 'completed' || status === 'success' || status === 'failed' || status === 'declined'
+}
+
+function activityProjectionIsNonTerminal(activity: ActivityProjection): boolean {
+  if (activity.kind === 'tool.started' || activity.kind === 'tool.updated') return true
+  if (activity.kind === 'task.started' || activity.kind === 'task.progress') return true
+  const status = str(activity.payload?.['status'])
+  return status === 'inProgress' || status === 'running'
 }

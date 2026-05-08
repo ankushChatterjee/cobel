@@ -95,6 +95,86 @@ describe('ProviderRuntimeIngestion', () => {
     expect(thread.session?.model).toBe('gpt-5.4')
   })
 
+  it('clears command approval when the approved tool completes', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: {
+          requestType: 'command_execution_approval',
+          detail: 'bun run typecheck',
+          toolCallId: 'call-1'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.completed',
+        turnId: 'turn-1',
+        itemId: 'call-1',
+        payload: {
+          itemType: 'command_execution',
+          status: 'completed',
+          title: 'Run TypeScript type checking'
+        }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'approval:approval-1',
+          kind: 'approval.resolved',
+          resolved: true
+        })
+      ])
+    )
+  })
+
+  it('keeps unrelated command approvals open when a different tool completes', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: {
+          requestType: 'command_execution_approval',
+          detail: 'bun run typecheck',
+          toolCallId: 'call-1'
+        }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.completed',
+        turnId: 'turn-1',
+        itemId: 'call-2',
+        payload: { itemType: 'command_execution', status: 'completed', title: 'other command' }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'approval:approval-1',
+          kind: 'approval.requested',
+          resolved: false
+        })
+      ])
+    )
+  })
+
   it('accumulates reasoning_text on the thinking activity and keeps it when the reasoning item completes', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
@@ -270,6 +350,48 @@ describe('ProviderRuntimeIngestion', () => {
         visibleIndicator: 'exploring',
         activeItemIds: []
       })
+    )
+  })
+
+  it('clears a stale approval active turn when the provider completes the turn', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'tool-1',
+        payload: { itemType: 'command_execution', title: 'bun --version' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: { requestType: 'command_execution_approval', detail: 'bun --version' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'item.completed',
+        turnId: 'turn-1',
+        itemId: 'tool-1',
+        payload: { itemType: 'command_execution', status: 'completed' }
+      })
+    )
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.activeTurn).toBeNull()
+    expect(thread.session?.activeTurnId).toBeNull()
+    expect(thread.activities.find((activity) => activity.id === 'approval:approval-1')).toEqual(
+      expect.objectContaining({ kind: 'approval.resolved', resolved: true })
     )
   })
 
@@ -580,6 +702,122 @@ describe('ProviderRuntimeIngestion', () => {
     await ingestion.drain()
 
     expect(engine.getThread('thread-1').session).toBeNull()
+  })
+
+  it('treats a ready session state as completed for the active turn', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'call-1',
+        payload: {
+          itemType: 'command_execution',
+          status: 'inProgress',
+          title: 'Run ESLint'
+        }
+      })
+    )
+    ingestion.enqueue(event({ type: 'session.state.changed', payload: { state: 'ready' } }))
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn).toEqual(
+      expect.objectContaining({
+        id: 'turn-1',
+        status: 'completed',
+        completedAt: createdAt
+      })
+    )
+    expect(thread.session).toEqual(
+      expect.objectContaining({
+        status: 'ready',
+        activeTurnId: null
+      })
+    )
+    expect(thread.activeTurn).toBeNull()
+    expect(thread.activities.find((activity) => activity.id === 'tool:call-1')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+  })
+
+  it('treats a ready session state as completed when only latestTurn is still running', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    await ingestion.drain()
+
+    engine.setSession({
+      threadId: 'thread-1',
+      status: 'ready',
+      providerName: 'opencode',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      activeTurnId: null,
+      activePlanId: null,
+      lastError: null,
+      createdAt
+    })
+
+    ingestion.enqueue(event({ type: 'session.state.changed', payload: { state: 'ready' } }))
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn).toEqual(
+      expect.objectContaining({
+        id: 'turn-1',
+        status: 'completed',
+        completedAt: createdAt
+      })
+    )
+    expect(thread.session?.activeTurnId).toBeNull()
+    expect(thread.activeTurn).toBeNull()
+  })
+
+  it('keeps Codex turn completion authoritative without waiting for session ready', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'content.delta',
+        turnId: 'turn-1',
+        payload: { streamKind: 'assistant_text', delta: 'Done.' }
+      })
+    )
+    ingestion.enqueue(
+      event({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn).toEqual(
+      expect.objectContaining({
+        id: 'turn-1',
+        status: 'completed'
+      })
+    )
+    expect(thread.session).toEqual(
+      expect.objectContaining({
+        providerName: 'codex',
+        status: 'ready',
+        activeTurnId: null
+      })
+    )
+    expect(thread.messages).toEqual([
+      expect.objectContaining({
+        text: 'Done.',
+        streaming: false
+      })
+    ])
   })
 
   it('ignores late turn starts for a completed turn', async () => {

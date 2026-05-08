@@ -91,7 +91,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   app.setName('cobel')
   electronApp.setAppUserModelId('com.cobel.app')
-  Menu.setApplicationMenu(null)
+  Menu.setApplicationMenu(Menu.buildFromTemplate([]))
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
