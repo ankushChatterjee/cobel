@@ -2251,4 +2251,77 @@ describe('ProviderRuntimeIngestion — OpenCode provider-aware branches', () => 
     const thread = engine.getThread('thread-1')
     expect(thread.latestTurn?.status).toBe('completed')
   })
+
+  it('two simultaneous approvals: resolving the first keeps the second approval visible', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    // Turn starts
+    ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+
+    // Two tools start running (they need approval)
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'tool-1',
+        payload: { itemType: 'command_execution', title: 'bash 1' }
+      })
+    )
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'tool-2',
+        payload: { itemType: 'command_execution', title: 'bash 2' }
+      })
+    )
+
+    // Two permission.asked arrive simultaneously
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', detail: 'bash 1', toolCallId: 'tool-1' }
+      })
+    )
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'req-2',
+        payload: { requestType: 'command_execution_approval', detail: 'bash 2', toolCallId: 'tool-2' }
+      })
+    )
+    await ingestion.drain()
+
+    // Both approvals pending — should be waiting_for_input / approval
+    let activeTurn = engine.getThread('thread-1').activeTurn
+    expect(activeTurn?.phase).toBe('waiting_for_input')
+    expect(activeTurn?.visibleIndicator).toBe('approval')
+
+    // User approves the first one
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.resolved',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', decision: 'accept' }
+      })
+    )
+    await ingestion.drain()
+
+    // Second approval must still show — the dock must NOT disappear
+    activeTurn = engine.getThread('thread-1').activeTurn
+    expect(activeTurn?.phase).toBe('waiting_for_input')
+    expect(activeTurn?.visibleIndicator).toBe('approval')
+
+    // Verify req-1 is resolved but req-2 is still pending
+    const activities = engine.getThread('thread-1').activities
+    const req1 = activities.find((a) => a.id === 'approval:req-1')
+    const req2 = activities.find((a) => a.id === 'approval:req-2')
+    expect(req1?.resolved).toBe(true)
+    expect(req2?.resolved).not.toBe(true)
+  })
 })

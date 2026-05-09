@@ -145,10 +145,8 @@ export class ProviderRuntimeIngestion {
     }
 
     const thread = this.engine.getThread(threadId)
-    const toolSlots = base.activeItemIds.filter((id) => !id.startsWith('approval:'))
-    if (toolSlots.length > 0) {
-      return { ...base, phase: 'tool_running', visibleIndicator: 'tool', updatedAt: createdAt }
-    }
+    // Pending approvals take priority over running tools: the user must act
+    // before the session can continue, regardless of what else is in flight.
     const approvalSlots = base.activeItemIds.filter((id) => id.startsWith('approval:'))
     if (approvalSlots.length > 0) {
       return {
@@ -157,6 +155,10 @@ export class ProviderRuntimeIngestion {
         visibleIndicator: 'approval',
         updatedAt: createdAt
       }
+    }
+    const toolSlots = base.activeItemIds.filter((id) => !id.startsWith('approval:'))
+    if (toolSlots.length > 0) {
+      return { ...base, phase: 'tool_running', visibleIndicator: 'tool', updatedAt: createdAt }
     }
     if (this.turnHasUnresolvedReasoningThinking(thread, base.turnId)) {
       return { ...base, phase: 'thinking', visibleIndicator: 'thinking', updatedAt: createdAt }
