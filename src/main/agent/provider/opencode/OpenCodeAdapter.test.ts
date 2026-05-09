@@ -981,7 +981,7 @@ describe('OpenCodeAdapter event mapping', () => {
     stream.close()
   })
 
-  it('attaches OpenCode session diffs that arrive after idle to the just-completed turn', async () => {
+  it('does NOT create a session-diff activity tile for cumulative session.diff events (B3 fix)', async () => {
     const stream = createEventStream()
     eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
     const adapter = new OpenCodeAdapter()
@@ -995,7 +995,7 @@ describe('OpenCodeAdapter event mapping', () => {
       interactionMode: 'default',
       model: 'anthropic/claude-sonnet-4'
     })
-    const turn = await adapter.sendTurn({
+    await adapter.sendTurn({
       threadId: 'thread-1',
       input: 'edit then report diff',
       model: 'anthropic/claude-sonnet-4',
@@ -1007,6 +1007,7 @@ describe('OpenCodeAdapter event mapping', () => {
       type: 'session.idle',
       properties: { sessionID: 'session:events' }
     })
+    // session.diff is dropped entirely — per-edit-tool tiles cover what the user needs
     stream.push({
       type: 'session.diff',
       properties: {
@@ -1022,14 +1023,7 @@ describe('OpenCodeAdapter event mapping', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: 'item.completed',
-        turnId: turn.turnId,
-        itemId: 'opencode:session-diff',
-        payload: expect.objectContaining({ itemType: 'file_change', status: 'completed' })
-      })
-    )
+    expect(events.some((e) => e.itemId === 'opencode:session-diff')).toBe(false)
 
     stream.close()
   })
@@ -1155,5 +1149,120 @@ describe('toolLifecycleTitle', () => {
         }
       } as never)
     ).toBe('Editing todos')
+  })
+
+  it('returns Preparing <tool> for a pending tool part with no input yet', () => {
+    expect(
+      toolLifecycleTitle({
+        id: 'part-1',
+        callID: 'call-1',
+        messageID: 'message-1',
+        type: 'tool',
+        tool: 'edit',
+        metadata: {},
+        state: { status: 'pending', metadata: {} }
+      } as never)
+    ).toBe('Preparing edit')
+  })
+
+  it('returns basename of filePath for a running edit part (wins over state title)', () => {
+    expect(
+      toolLifecycleTitle({
+        id: 'part-1',
+        callID: 'call-1',
+        messageID: 'message-1',
+        type: 'tool',
+        tool: 'edit',
+        metadata: {},
+        state: {
+          status: 'running',
+          title: 'Editing',
+          input: { filePath: 'src/components/Button.tsx' },
+          time: { start: 1 },
+          metadata: {}
+        }
+      } as never)
+    ).toBe('Button.tsx')
+  })
+})
+
+describe('OpenCodeAdapter JSONL replay harness (FSM level)', () => {
+  it('replays opencode19.jsonl: no session-diff tile, exactly one turn.completed, all edit tiles visible from first running event', async () => {
+    const fs = await import('node:fs')
+    const dumpPath = '/tmp/opencode19.jsonl'
+    if (!fs.existsSync(dumpPath)) {
+      // Skip if the dump file is not present in CI
+      return
+    }
+
+    vi.clearAllMocks()
+    vi.mocked(mergeOpenCodeAssistantText).mockImplementation((previous, text) => ({
+      latestText: text,
+      deltaToEmit: previous === undefined ? text : text.slice(previous.length)
+    }))
+    const { appendOpenCodeAssistantTextDelta } = await import('./opencodeRuntime')
+    vi.mocked(appendOpenCodeAssistantTextDelta).mockImplementation((previous, delta) => ({
+      nextText: previous + delta,
+      deltaToEmit: delta
+    }))
+
+    const { OpenCodeSessionFsm: FsmClass } = await import('./OpenCodeSessionFsm')
+    const rawLines = fs.readFileSync(dumpPath, 'utf8').trim().split('\n')
+    const dumpEntries = rawLines.map(
+      (l) => JSON.parse(l) as { raw: { type: string; properties: Record<string, unknown> } }
+    )
+
+    // Extract the session ID from the dump
+    const sessionIdEntry = dumpEntries.find((e) => e.raw?.properties?.sessionID)
+    const sessionId = (sessionIdEntry?.raw?.properties?.sessionID as string) ?? 'ses_unknown'
+
+    const fsm = new FsmClass('thread-1', sessionId)
+    fsm.setInteractionMode('default')
+    fsm.beginTurn('turn-replay-1')
+
+    const fsmEvents: import('../../../../shared/agent').ProviderRuntimeEvent[] = []
+
+    for (const entry of dumpEntries) {
+      const raw = entry.raw
+      if (!raw?.type || raw.type === 'server.connected') continue
+      const sdkEvent = { type: raw.type, properties: raw.properties ?? {} }
+      if (!fsm.eventBelongsToContext(sdkEvent)) continue
+      const effects = fsm.dispatch(sdkEvent)
+      fsmEvents.push(...effects)
+    }
+
+    // (iv) Zero session-diff activities
+    expect(fsmEvents.some((e) => e.itemId === 'opencode:session-diff')).toBe(false)
+
+    // (iii) Exactly one turn.completed
+    const turnCompletions = fsmEvents.filter((e) => e.type === 'turn.completed')
+    expect(turnCompletions).toHaveLength(1)
+    expect(turnCompletions[0]).toMatchObject({ payload: { state: 'completed' } })
+
+    // (i) Every edit tile has a non-empty title on the first running (item.updated) frame
+    const editItemEvents = fsmEvents.filter(
+      (e) =>
+        (e.type === 'item.started' || e.type === 'item.updated' || e.type === 'item.completed') &&
+        (e.payload as { itemType?: string }).itemType === 'file_change'
+    )
+    expect(editItemEvents.length).toBeGreaterThan(0)
+
+    const byItem = new Map<string, typeof editItemEvents>()
+    for (const e of editItemEvents) {
+      const list = byItem.get(e.itemId ?? '') ?? []
+      list.push(e)
+      byItem.set(e.itemId ?? '', list)
+    }
+
+    for (const [itemId, itemEvents] of byItem) {
+      const firstRunning = itemEvents.find((e) => e.type === 'item.updated')
+      if (firstRunning) {
+        const title = (firstRunning.payload as { title?: string }).title
+        expect(
+          title,
+          `Edit item ${itemId} should have a non-empty title on first running frame`
+        ).toBeTruthy()
+      }
+    }
   })
 })

@@ -2093,3 +2093,162 @@ function event<T extends ProviderRuntimeEvent['type']>(
     ...input
   } as unknown as ProviderRuntimeEvent
 }
+
+function openCodeEvent<T extends ProviderRuntimeEvent['type']>(
+  input: Extract<ProviderRuntimeEvent, { type: T }> extends infer E
+    ? Omit<E, 'eventId' | 'provider' | 'threadId' | 'createdAt'>
+    : never
+): ProviderRuntimeEvent {
+  return {
+    eventId: `event:${Math.random()}`,
+    provider: 'opencode',
+    threadId: 'thread-1',
+    createdAt,
+    raw: { source: 'opencode.sdk', payload: input },
+    ...input
+  } as unknown as ProviderRuntimeEvent
+}
+
+describe('ProviderRuntimeIngestion — OpenCode provider-aware branches', () => {
+  it('(B1) request.opened does NOT downgrade session.status to ready for OpenCode', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', detail: 'ls' }
+      })
+    )
+    await ingestion.drain()
+
+    // Session status must remain 'running' for OpenCode (stop button stays visible)
+    const thread = engine.getThread('thread-1')
+    expect(thread.session?.status).toBe('running')
+  })
+
+  it('(B1-codex) request.opened DOES downgrade session.status to ready for Codex', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', detail: 'ls' }
+      })
+    )
+    await ingestion.drain()
+
+    // Codex: status is set to 'ready' (legacy Codex behavior)
+    const thread = engine.getThread('thread-1')
+    expect(thread.session?.status).toBe('ready')
+  })
+
+  it('(B1) decline does NOT close OpenCode turn — turn stays running', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', detail: 'ls' }
+      })
+    )
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.resolved',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', decision: 'decline' }
+      })
+    )
+    await ingestion.drain()
+
+    // Turn must still be running (not closed)
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn?.status).toBe('running')
+  })
+
+  it('(B1-codex) decline DOES close Codex turn', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', detail: 'ls' }
+      })
+    )
+    ingestion.enqueue(
+      event({
+        type: 'request.resolved',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', decision: 'decline' }
+      })
+    )
+    await ingestion.drain()
+
+    // Codex: turn should be interrupted
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn?.status).toBe('interrupted')
+  })
+
+  it('(B6) session.state.changed:ready does NOT synthesize turn.completed for OpenCode', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      openCodeEvent({ type: 'session.state.changed', payload: { state: 'ready' } })
+    )
+    await ingestion.drain()
+
+    // Turn should still be running — the adapter's explicit turn.completed is authoritative
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn?.status).toBe('running')
+  })
+
+  it('(B6-codex) session.state.changed:ready DOES synthesize turn.completed for Codex', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(event({ type: 'session.state.changed', payload: { state: 'ready' } }))
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn?.status).toBe('completed')
+  })
+
+  it('(B6) OpenCode turn.completed from adapter IS processed correctly', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    // FSM emits session.state.changed:ready before turn.completed
+    ingestion.enqueue(
+      openCodeEvent({ type: 'session.state.changed', payload: { state: 'ready' } })
+    )
+    // Then the explicit turn.completed from the adapter
+    ingestion.enqueue(
+      openCodeEvent({ type: 'turn.completed', turnId: 'turn-1', payload: { state: 'completed' } })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn?.status).toBe('completed')
+  })
+})

@@ -18,6 +18,17 @@ import { OrchestrationEngine } from './OrchestrationEngine'
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000
 const MAX_BUFFERED_REASONING_TEXT_CHARS = 16_000
 
+/**
+ * Returns true for providers (like opencode) that manage their own turn
+ * lifecycle via explicit `turn.completed` events.  For these providers the
+ * shared ingestion layer must NOT synthesise a `turn.completed` from
+ * Codex-specific cues (`request.opened`, decline resolution, or
+ * `session.state.changed:ready`).
+ */
+function isProviderManagedTurnLifecycle(provider: string): boolean {
+  return provider === 'opencode'
+}
+
 interface AssistantSegmentState {
   baseKey: string
   nextSegmentIndex: number
@@ -449,21 +460,25 @@ export class ProviderRuntimeIngestion {
             event.threadId
           )
         }
-        this.engine.setSession({
-          threadId: event.threadId,
-          status: 'ready',
-          providerName: event.provider,
-          runtimeMode:
-            this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
-          interactionMode:
-            this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
-          model: this.engine.getThread(event.threadId).session?.model,
-          effort: this.engine.getThread(event.threadId).session?.effort,
-          activeTurnId: event.turnId ?? null,
-          activePlanId: this.engine.getThread(event.threadId).session?.activePlanId ?? null,
-          lastError: null,
-          createdAt: event.createdAt
-        })
+        // B1 fix: OpenCode manages its own session status — do not downgrade to 'ready'
+        // while a turn is still in flight (OpenCode session.idle signals the real end).
+        if (!isProviderManagedTurnLifecycle(event.provider)) {
+          this.engine.setSession({
+            threadId: event.threadId,
+            status: 'ready',
+            providerName: event.provider,
+            runtimeMode:
+              this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
+            interactionMode:
+              this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
+            model: this.engine.getThread(event.threadId).session?.model,
+            effort: this.engine.getThread(event.threadId).session?.effort,
+            activeTurnId: event.turnId ?? null,
+            activePlanId: this.engine.getThread(event.threadId).session?.activePlanId ?? null,
+            lastError: null,
+            createdAt: event.createdAt
+          })
+        }
         return
       }
 
@@ -494,26 +509,30 @@ export class ProviderRuntimeIngestion {
           event.threadId
         )
         if (event.payload.decision === 'decline') {
-          const interruptedTurnId =
-            resolvedTurnId ??
-            this.engine.getThread(event.threadId).session?.activeTurnId ??
-            this.engine.getThread(event.threadId).activeTurn?.turnId ??
-            event.eventId
-          this.closeActiveTurn({
-            ...event,
-            type: 'turn.completed',
-            turnId: interruptedTurnId,
-            payload: {
-              state: 'interrupted',
-              errorMessage: 'Approval declined.'
-            }
-          })
-          this.engine.setActiveTurn({
-            threadId: event.threadId,
-            activeTurn: null,
-            createdAt: event.createdAt
-          })
-          return
+          // B1 fix: OpenCode keeps the turn alive on decline; only session.idle / session.error
+          // closes the turn.  Do not synthesise turn.completed here for OpenCode.
+          if (!isProviderManagedTurnLifecycle(event.provider)) {
+            const interruptedTurnId =
+              resolvedTurnId ??
+              this.engine.getThread(event.threadId).session?.activeTurnId ??
+              this.engine.getThread(event.threadId).activeTurn?.turnId ??
+              event.eventId
+            this.closeActiveTurn({
+              ...event,
+              type: 'turn.completed',
+              turnId: interruptedTurnId,
+              payload: {
+                state: 'interrupted',
+                errorMessage: 'Approval declined.'
+              }
+            })
+            this.engine.setActiveTurn({
+              threadId: event.threadId,
+              activeTurn: null,
+              createdAt: event.createdAt
+            })
+            return
+          }
         }
         this.patchActiveTurn(
           event.threadId,
@@ -1327,6 +1346,9 @@ export class ProviderRuntimeIngestion {
     event: Extract<ProviderRuntimeEvent, { type: 'session.state.changed' }>
   ): void {
     if (event.payload.state !== 'ready') return
+    // B6 fix: OpenCode's adapter emits its own authoritative turn.completed before
+    // session.state.changed:ready.  Do not synthesise a second one here.
+    if (isProviderManagedTurnLifecycle(event.provider)) return
     const thread = this.engine.getThread(event.threadId)
     const activeTurnId =
       event.turnId ??

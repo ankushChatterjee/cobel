@@ -19,3 +19,4 @@ $ bun run dev
 ```bash
 $ bun run build:mac
 ```
+
