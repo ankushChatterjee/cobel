@@ -44,8 +44,30 @@ export const ToolLine = memo(function ToolLine({
   const fileReadPreview = readCanonicalFileReadPreview(payload)
 
   if (readPayloadString(payload, 'itemType') === 'file_change') {
-    const lockedCollapsed = isRunning
     const fileChangeTitle = fileChange?.title ?? fileChangeTitleFromPayload(payload, title)
+    const hasDiff = Boolean(fileChange?.diff && fileChange.diff.trim().length > 0)
+
+    // Show a compact spinner-only header while the tool is still in the "Preparing" phase —
+    // i.e., no filePath has arrived yet (title is a placeholder like "Preparing edit").
+    // Once the filePath is known the title is real, so we switch to EmbeddedDiffView in
+    // lockedCollapsed mode even before the diff itself has arrived.
+    const isPendingPlaceholder = isRunning && !hasDiff && fileChangeTitle.toLowerCase().startsWith('preparing ')
+    if (isPendingPlaceholder) {
+      return (
+        <article
+          className={`tool-line embedded-tool-line ${statusTone}`}
+          data-item-type="file_change"
+        >
+          <div className="tool-line-summary tool-line-file-change-pending">
+            <span className="tool-line-chevron" aria-hidden="true">
+              <span className="tool-line-spinner" />
+            </span>
+            <span className="tool-line-target">{fileChangeTitle}</span>
+          </div>
+        </article>
+      )
+    }
+
     return (
       <article
         className={`tool-line embedded-tool-line ${statusTone}`}
@@ -56,9 +78,9 @@ export const ToolLine = memo(function ToolLine({
           title={fileChangeTitle}
           compactTitle
           defaultCollapsed
-          lockedCollapsed={lockedCollapsed}
-          busy={lockedCollapsed}
-          status={lockedCollapsed ? undefined : <span>{statusLabel(status)}</span>}
+          lockedCollapsed={isRunning}
+          busy={isRunning}
+          status={isRunning ? undefined : <span>{statusLabel(status)}</span>}
         />
       </article>
     )
@@ -190,12 +212,17 @@ function formatPayload(payload: Record<string, unknown>): string {
 }
 
 function fileChangeTitleFromPayload(payload: Record<string, unknown>, fallback: string): string {
-  const directTitle = readPayloadString(payload, 'title')
-  if (directTitle && directTitle.toLowerCase() !== 'edited edit') return directTitle
-
+  // Prefer the filename derived from input.filePath when available
   const data = readPayloadRecord(payload, 'data')
   const state = readPayloadRecord(data, 'state')
   const input = readPayloadRecord(state, 'input')
   const filePath = readPayloadString(input, 'filePath')
-  return filePath ?? directTitle ?? fallback
+  if (filePath) return filePath.replace(/\\/g, '/').split('/').pop() ?? filePath
+
+  const directTitle = readPayloadString(payload, 'title')
+  // Skip placeholder titles emitted during the pending frame
+  if (directTitle && !directTitle.toLowerCase().startsWith('preparing ') && directTitle.toLowerCase() !== 'edited edit') {
+    return directTitle
+  }
+  return fallback
 }
