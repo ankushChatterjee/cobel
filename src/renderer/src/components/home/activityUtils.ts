@@ -142,8 +142,21 @@ export function labelForActivity(activity: OrchestrationThreadActivity): string 
   return 'tool'
 }
 
-export function statusFromActivity(activity: OrchestrationThreadActivity): string {
+export function statusFromActivity(
+  activity: OrchestrationThreadActivity,
+  options: { turnInProgress?: boolean; activeTurnId?: string | null } = {}
+): string {
   const payloadStatus = readPayloadString(activity.payload, 'status')
+  const belongsToActiveTurn =
+    options.activeTurnId !== undefined &&
+    options.activeTurnId !== null &&
+    activity.turnId === options.activeTurnId
+  const staleNonTerminal =
+    (options.turnInProgress === false || (options.activeTurnId !== undefined && !belongsToActiveTurn)) &&
+    activity.resolved !== true
+  if (staleNonTerminal && (activity.kind === 'tool.updated' || activity.kind === 'task.progress')) {
+    return 'completed'
+  }
   if (activity.kind === 'tool.completed' || activity.kind === 'task.completed') {
     if (payloadStatus === 'failed' || payloadStatus === 'declined') return payloadStatus
     return 'completed'
@@ -318,6 +331,13 @@ export function normalizePendingRequest(
   }
 }
 
+export function pendingRequestIdentity(request: PendingRequestViewModel): string {
+  if (request.kind === 'input') return request.activity.id
+  const toolCallId = readPayloadString(request.activity.payload, 'toolCallId')
+  if (toolCallId) return `approval:tool:${toolCallId}`
+  return `approval:${request.requestType}:${request.summary.trim()}`
+}
+
 export function compareActivityOrder(
   left: Pick<OrchestrationThreadActivity, 'sequence' | 'createdAt' | 'id'>,
   right: Pick<OrchestrationThreadActivity, 'sequence' | 'createdAt' | 'id'>
@@ -335,13 +355,19 @@ export function listPendingRequests(
   activities: OrchestrationThreadActivity[],
   activeTurnId: string | null
 ): PendingRequestViewModel[] {
-  return activities
+  const deduped = new Map<string, PendingRequestViewModel>()
+  for (const request of activities
     .map(normalizePendingRequest)
     .filter((request): request is PendingRequestViewModel => Boolean(request))
+    .filter((request) => activeTurnId !== null && request.activity.turnId === activeTurnId)
     .sort((left, right) => {
       const leftActive = left.activity.turnId !== null && left.activity.turnId === activeTurnId
       const rightActive = right.activity.turnId !== null && right.activity.turnId === activeTurnId
       if (leftActive !== rightActive) return leftActive ? -1 : 1
       return compareActivityOrder(left.activity, right.activity)
-    })
+    })) {
+    const identity = pendingRequestIdentity(request)
+    if (!deduped.has(identity)) deduped.set(identity, request)
+  }
+  return [...deduped.values()]
 }

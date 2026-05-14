@@ -37,9 +37,22 @@ export interface GenerateThreadTitleInput {
   useStructuredOutput?: boolean
 }
 
+export interface ProviderLifecycleCapabilities {
+  readonly completesOnReadySession: boolean
+  readonly closesOnApprovalDecline: boolean
+  readonly promotesRuntimeErrorsToTurnFailure: 'fatal-only' | 'active-turn'
+}
+
+export const DEFAULT_PROVIDER_LIFECYCLE_CAPABILITIES: ProviderLifecycleCapabilities = {
+  completesOnReadySession: true,
+  closesOnApprovalDecline: true,
+  promotesRuntimeErrorsToTurnFailure: 'active-turn'
+}
+
 export interface ProviderAdapter {
   readonly id: ProviderId
   readonly supportsStructuredOutput: boolean
+  readonly lifecycleCapabilities: ProviderLifecycleCapabilities
   resolveCLI(): Promise<ProviderSummary>
   getSummary(): Promise<ProviderSummary>
   startSession(input: StartSessionInput): Promise<ProviderSession>

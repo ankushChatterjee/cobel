@@ -7,6 +7,8 @@ const closeMock = vi.fn()
 const eventSubscribeMock = vi.fn()
 const promptAsyncMock = vi.fn()
 const permissionReplyMock = vi.fn()
+const questionReplyMock = vi.fn()
+const messagesMock = vi.fn()
 
 vi.mock('./opencodeRuntime', () => ({
   buildOpenCodePermissionRules: vi.fn(() => [{ permission: '*', pattern: '*', action: 'ask' }]),
@@ -20,13 +22,17 @@ vi.mock('./opencodeRuntime', () => ({
       create: createMock,
       prompt: promptMock,
       promptAsync: promptAsyncMock,
-      delete: deleteMock
+      delete: deleteMock,
+      messages: messagesMock
     },
     event: {
       subscribe: eventSubscribeMock
     },
     permission: {
       reply: permissionReplyMock
+    },
+    question: {
+      reply: questionReplyMock
     }
   })),
   inventoryToModelInfos: vi.fn(() => [{ id: 'anthropic/claude-sonnet-4', providerId: 'opencode' }]),
@@ -126,7 +132,7 @@ describe('OpenCodeAdapter.generateThreadTitle', () => {
       })
     )
     expect(promptMock.mock.calls[0]?.[0]).not.toHaveProperty('format')
-    expect(deleteMock).toHaveBeenCalledWith({ sessionID: 'session:title' })
+    expect(deleteMock).toHaveBeenCalledWith({ sessionID: 'session:title', directory: '/tmp/project' })
     expect(closeMock).toHaveBeenCalledTimes(1)
   })
 
@@ -156,12 +162,22 @@ describe('OpenCodeAdapter event mapping', () => {
     vi.clearAllMocks()
     createMock.mockResolvedValue({ data: { id: 'session:events' } })
     promptAsyncMock.mockResolvedValue({})
+    messagesMock.mockResolvedValue({ data: [] })
     permissionReplyMock.mockResolvedValue({})
+    questionReplyMock.mockResolvedValue({})
     vi.mocked(mergeOpenCodeAssistantText).mockImplementation((previous, text) => ({
       latestText: text,
       deltaToEmit: previous === undefined ? text : text.slice(previous.length)
     }))
     closeMock.mockReset()
+  })
+
+  it('exposes OpenCode lifecycle capabilities from the adapter', () => {
+    expect(new OpenCodeAdapter().lifecycleCapabilities).toEqual({
+      completesOnReadySession: true,
+      closesOnApprovalDecline: false,
+      promotesRuntimeErrorsToTurnFailure: 'fatal-only'
+    })
   })
 
   it('does not emit tool lifecycle rows for OpenCode step markers', async () => {
@@ -418,8 +434,30 @@ describe('OpenCodeAdapter event mapping', () => {
       requestId: 'permission-1',
       decision: 'accept'
     })
+    stream.push({
+      type: 'permission.asked',
+      properties: {
+        sessionID: 'session:events',
+        id: 'permission-1',
+        permission: 'bash',
+        patterns: ['bun run typecheck'],
+        metadata: {},
+        tool: { messageID: 'message-1', callID: 'tool-1' }
+      }
+    })
+    stream.push({
+      type: 'permission.replied',
+      properties: {
+        sessionID: 'session:events',
+        requestID: 'permission-1',
+        reply: 'once'
+      }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(permissionReplyMock).toHaveBeenCalledTimes(1)
+    expect(events.filter((event) => event.type === 'request.opened')).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'request.resolved')).toHaveLength(1)
     expect(events).toContainEqual(
       expect.objectContaining({
         type: 'request.resolved',
@@ -427,6 +465,107 @@ describe('OpenCodeAdapter event mapping', () => {
         payload: expect.objectContaining({ decision: 'accept' })
       })
     )
+
+    stream.close()
+  })
+
+  it('clears stale persisted approvals when OpenCode does not replay the permission after restart', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+
+    await adapter.respondToApproval({
+      threadId: 'thread-1',
+      requestId: 'permission-from-before-restart',
+      decision: 'accept'
+    })
+
+    expect(permissionReplyMock).not.toHaveBeenCalled()
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'request.resolved',
+        requestId: 'permission-from-before-restart',
+        payload: expect.objectContaining({
+          requestType: 'unknown',
+          decision: 'cancel',
+          resolution: { reason: 'stale_after_restart' }
+        })
+      })
+    )
+
+    stream.close()
+  })
+
+  it('optimistically resolves OpenCode questions before the SDK reply returns', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    let releaseReply: (() => void) | undefined
+    questionReplyMock.mockReturnValue(
+      new Promise<void>((resolve) => {
+        releaseReply = resolve
+      })
+    )
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await adapter.sendTurn({
+      threadId: 'thread-1',
+      input: 'choose',
+      model: 'anthropic/claude-sonnet-4',
+      interactionMode: 'default'
+    })
+    await vi.waitFor(() => expect(promptAsyncMock).toHaveBeenCalled())
+
+    stream.push({
+      type: 'question.asked',
+      properties: {
+        sessionID: 'session:events',
+        id: 'question-1',
+        questions: [
+          {
+            header: 'Confirm',
+            question: 'Continue?',
+            options: [{ label: 'YES' }, { label: 'NO' }]
+          }
+        ]
+      }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const pendingReply = adapter.respondToUserInput({
+      threadId: 'thread-1',
+      requestId: 'question-1',
+      answers: { Confirm: 'YES' }
+    })
+    await vi.waitFor(() =>
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'user-input.resolved',
+          requestId: 'question-1'
+        })
+      )
+    )
+    expect(questionReplyMock).toHaveBeenCalledTimes(1)
+    releaseReply?.()
+    await pendingReply
 
     stream.close()
   })
@@ -795,6 +934,69 @@ describe('OpenCodeAdapter event mapping', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(1)
+
+    stream.close()
+  })
+
+  it('reconciles completed OpenCode snapshots into canonical idle when subscribe omits lifecycle events', async () => {
+    const stream = createEventStream()
+    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
+    messagesMock.mockResolvedValueOnce({ data: [] }).mockResolvedValue({
+      data: [
+        {
+          info: {
+            id: 'message-final',
+            sessionID: 'session:events',
+            role: 'assistant',
+            finish: 'stop',
+            time: { created: 1, completed: 2 }
+          },
+          parts: [
+            {
+              id: 'text-final',
+              sessionID: 'session:events',
+              messageID: 'message-final',
+              type: 'text',
+              text: 'Done.',
+              time: { start: 1, end: 2 }
+            }
+          ]
+        }
+      ]
+    })
+    const adapter = new OpenCodeAdapter()
+    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
+    adapter.streamEvents((event) => events.push(event))
+
+    await adapter.startSession({
+      threadId: 'thread-1',
+      cwd: '/tmp/project',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'anthropic/claude-sonnet-4'
+    })
+    await adapter.sendTurn({
+      threadId: 'thread-1',
+      input: 'finish',
+      model: 'anthropic/claude-sonnet-4',
+      interactionMode: 'default'
+    })
+
+    await vi.waitFor(() =>
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'turn.completed',
+          payload: expect.objectContaining({ state: 'completed' })
+        })
+      )
+    )
+    expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(1)
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'content.delta',
+        payload: expect.objectContaining({ delta: 'Done.' })
+      })
+    )
 
     stream.close()
   })

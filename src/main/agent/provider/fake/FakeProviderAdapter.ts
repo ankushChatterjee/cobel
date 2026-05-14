@@ -1,11 +1,16 @@
 import type { ProviderRuntimeEvent, ProviderSession } from '../../../../shared/agent'
 import { parseThreadTitleResponse } from '../../../../shared/threadTitle'
 import { createEventId, nowIso, ProviderEventBus } from '../types'
-import type { ProviderAdapter, SendTurnInput, StartSessionInput } from '../types'
+import type { ProviderAdapter, ProviderLifecycleCapabilities, SendTurnInput, StartSessionInput } from '../types'
 
 export class FakeProviderAdapter implements ProviderAdapter {
   readonly id = 'codex' as const
   readonly supportsStructuredOutput = false
+  readonly lifecycleCapabilities: ProviderLifecycleCapabilities = {
+    completesOnReadySession: false,
+    closesOnApprovalDecline: true,
+    promotesRuntimeErrorsToTurnFailure: 'fatal-only'
+  }
   private readonly bus = new ProviderEventBus()
   private readonly sessions = new Map<string, ProviderSession>()
 

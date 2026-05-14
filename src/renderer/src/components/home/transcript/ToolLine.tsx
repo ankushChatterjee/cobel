@@ -19,10 +19,14 @@ import { formatDuration } from '../formatUtils'
 export const ToolLine = memo(function ToolLine({
   activity,
   expanded,
+  turnInProgress,
+  activeTurnId,
   onToggle
 }: {
   activity: OrchestrationThreadActivity
   expanded: boolean
+  turnInProgress: boolean
+  activeTurnId: string | null
   onToggle: () => void
 }): React.JSX.Element {
   const payload = activity.payload ?? {}
@@ -32,7 +36,7 @@ export const ToolLine = memo(function ToolLine({
     readPayloadString(payload, 'output') ?? readPayloadString(itemPayload, 'aggregatedOutput')
   const detail = readPayloadString(payload, 'detail') ?? readPayloadString(itemPayload, 'cwd')
   const title = readPayloadString(payload, 'title') ?? activity.summary
-  const status = statusFromActivity(activity)
+  const status = statusFromActivity(activity, { turnInProgress, activeTurnId })
   const statusTone = statusToneForTool(status)
   const exitCode = itemPayload['exitCode']
   const durationMs = itemPayload['durationMs']

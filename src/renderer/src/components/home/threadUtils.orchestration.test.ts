@@ -92,15 +92,15 @@ describe('isOrchestrationModelTurnInProgress', () => {
       },
       latestTurn: {
         id: 'turn-1',
-        status: 'completed' as const,
+        status: 'running' as const,
         startedAt: t0,
-        completedAt: t0
+        completedAt: null
       }
     }
     expect(isOrchestrationModelTurnInProgress(thread)).toBe(false)
   })
 
-  it('is true when session is ready but activeTurnId is still set (gap after tool, before next chunk)', () => {
+  it('is true during a ready-state gap when activeTurnId still points at a running latestTurn', () => {
     const thread = {
       ...createEmptyThread('th', t0),
       session: {
@@ -124,7 +124,7 @@ describe('isOrchestrationModelTurnInProgress', () => {
     expect(isOrchestrationModelTurnInProgress(thread)).toBe(true)
   })
 
-  it('is true when only activeTurnId indicates an open turn (session ready, no latestTurn match)', () => {
+  it('is false when only stale activeTurnId remains after the session is ready', () => {
     const thread = {
       ...createEmptyThread('th', t0),
       session: {
@@ -139,6 +139,30 @@ describe('isOrchestrationModelTurnInProgress', () => {
         updatedAt: t0
       },
       latestTurn: null
+    }
+    expect(isOrchestrationModelTurnInProgress(thread)).toBe(false)
+  })
+
+  it('is true for OpenCode during a ready-state gap when latestTurn is still running', () => {
+    const thread = {
+      ...createEmptyThread('th', t0),
+      session: {
+        threadId: 'th',
+        status: 'ready' as const,
+        providerName: 'opencode' as const,
+        runtimeMode: 'auto-accept-edits' as const,
+        interactionMode: 'default' as const,
+        activeTurnId: 'turn-1',
+        activePlanId: null,
+        lastError: null,
+        updatedAt: t0
+      },
+      latestTurn: {
+        id: 'turn-1',
+        status: 'running' as const,
+        startedAt: t0,
+        completedAt: null
+      }
     }
     expect(isOrchestrationModelTurnInProgress(thread)).toBe(true)
   })
@@ -280,7 +304,7 @@ describe('shouldShowTranscriptEndThinkingRow', () => {
     expect(show).toBe(true)
   })
 
-  it('shows tail when turn is in progress, tool finished, no in-flight work', () => {
+  it('hides tail when lifecycle is settled', () => {
     const thread = {
       ...createEmptyThread('th', t0),
       session: {
@@ -296,16 +320,16 @@ describe('shouldShowTranscriptEndThinkingRow', () => {
       },
       latestTurn: {
         id: 'turn-1',
-        status: 'running' as const,
+        status: 'completed' as const,
         startedAt: t0,
-        completedAt: null
+        completedAt: t0
       }
     }
     const show = shouldShowTranscriptEndThinkingRow(thread, {
       isPendingTurnStart: false,
       hasActiveThinkingActivity: false
     })
-    expect(show).toBe(true)
+    expect(show).toBe(false)
   })
 
   it('shows tail when a historical assistant message is incorrectly still marked streaming', () => {
@@ -919,6 +943,32 @@ describe('activeTurn selectors', () => {
         })
       )
     ).toEqual(['tool-a', 'tool-b'])
+  })
+
+  it('hides stale OpenCode active-turn slots when the session is already ready', () => {
+    const thread = threadWithActiveTurn({
+      turnId: 't1',
+      phase: 'waiting_for_input',
+      activeItemIds: ['tool-a', 'approval:req-1'],
+      visibleIndicator: 'approval',
+      startedAt: t0,
+      updatedAt: t0
+    })
+    thread.session = {
+      threadId: 'th',
+      status: 'ready',
+      providerName: 'opencode',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      activeTurnId: null,
+      activePlanId: null,
+      lastError: null,
+      updatedAt: t0
+    }
+
+    expect(selectTailIndicator(thread)).toBe('none')
+    expect(selectRunningToolItemIds(thread)).toEqual([])
+    expect(selectPendingRequestIds(thread)).toEqual([])
   })
 
   it('selectPendingRequestIds returns request ids from approval slots', () => {

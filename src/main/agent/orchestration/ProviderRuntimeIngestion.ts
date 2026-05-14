@@ -13,20 +13,87 @@ import type {
 } from '../../../shared/agent'
 import { mergeFileEditChanges, readCanonicalFileEditChanges } from '../../../shared/fileEditChanges'
 import { mergeFileReadPreview, readCanonicalFileReadPreview } from '../../../shared/fileReadPreview'
+import {
+  DEFAULT_PROVIDER_LIFECYCLE_CAPABILITIES,
+  type ProviderLifecycleCapabilities
+} from '../provider/types'
 import { OrchestrationEngine } from './OrchestrationEngine'
 
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000
 const MAX_BUFFERED_REASONING_TEXT_CHARS = 16_000
 
-/**
- * Returns true for providers (like opencode) that manage their own turn
- * lifecycle via explicit `turn.completed` events.  For these providers the
- * shared ingestion layer must NOT synthesise a `turn.completed` from
- * Codex-specific cues (`request.opened`, decline resolution, or
- * `session.state.changed:ready`).
- */
-function isProviderManagedTurnLifecycle(provider: string): boolean {
-  return provider === 'opencode'
+export type OrchestrationDomainInput =
+  | {
+      type: 'turn-start-requested'
+      threadId: string
+      provider: ProviderRuntimeEvent['provider']
+      commandId?: string
+      pendingTurnId?: string
+      model?: string
+      effort?: ReasoningEffort
+      runtimeMode?: RuntimeModeLike
+      interactionMode?: InteractionModeLike
+      activePlanId?: string | null
+      createdAt: string
+    }
+  | {
+      type: 'turn-start-accepted'
+      threadId: string
+      provider: ProviderRuntimeEvent['provider']
+      turnId: string
+      pendingTurnId?: string
+      model?: string
+      effort?: ReasoningEffort
+      runtimeMode?: RuntimeModeLike
+      interactionMode?: InteractionModeLike
+      activePlanId?: string | null
+      createdAt: string
+    }
+  | {
+      type: 'turn-start-failed'
+      threadId: string
+      provider: ProviderRuntimeEvent['provider']
+      pendingTurnId?: string
+      errorMessage: string
+      createdAt: string
+    }
+  | {
+      type: 'turn-interrupt-requested'
+      threadId: string
+      provider: ProviderRuntimeEvent['provider']
+      turnId?: string
+      createdAt: string
+    }
+  | {
+      type: 'session-stop-requested'
+      threadId: string
+      provider: ProviderRuntimeEvent['provider']
+      createdAt: string
+    }
+
+export type RuntimeIngestionInput =
+  | { source: 'runtime'; event: ProviderRuntimeEvent }
+  | { source: 'domain'; event: OrchestrationDomainInput }
+
+type RuntimeModeLike = Parameters<OrchestrationEngine['setSession']>[0]['runtimeMode']
+type InteractionModeLike = Parameters<OrchestrationEngine['setSession']>[0]['interactionMode']
+
+type ProviderLifecycleResolver = (provider: ProviderRuntimeEvent['provider']) => ProviderLifecycleCapabilities
+
+function openCodeReadyEventMeansTurnIdle(
+  event: Extract<ProviderRuntimeEvent, { type: 'session.state.changed' }>
+): boolean {
+  if (event.provider !== 'opencode') return false
+  const raw = event.raw?.payload
+  if (!raw || typeof raw !== 'object') return false
+  const type = (raw as Record<string, unknown>)['type']
+  if (type === 'session.idle') return true
+  if (type !== 'session.status') return false
+  const properties = (raw as Record<string, unknown>)['properties']
+  if (!properties || typeof properties !== 'object') return false
+  const status = (properties as Record<string, unknown>)['status']
+  if (!status || typeof status !== 'object') return false
+  return (status as Record<string, unknown>)['type'] === 'idle'
 }
 
 interface AssistantSegmentState {
@@ -55,7 +122,7 @@ function isReasoningEffort(value: string | undefined): value is ReasoningEffort 
 }
 
 export class ProviderRuntimeIngestion {
-  private readonly queue: ProviderRuntimeEvent[] = []
+  private readonly queue: RuntimeIngestionInput[] = []
   private readonly assistantSegments = new Map<string, AssistantSegmentState>()
   private readonly streamedAssistantItems = new Set<string>()
   private readonly planBuffers = new Map<string, PlanBufferState>()
@@ -63,11 +130,23 @@ export class ProviderRuntimeIngestion {
   private draining = false
   private drainPromise: Promise<void> = Promise.resolve()
 
-  constructor(private readonly engine: OrchestrationEngine) {}
+  constructor(
+    private readonly engine: OrchestrationEngine,
+    private readonly resolveLifecycleCapabilities: ProviderLifecycleResolver = () =>
+      DEFAULT_PROVIDER_LIFECYCLE_CAPABILITIES
+  ) {}
 
   enqueue(event: ProviderRuntimeEvent): void {
-    logEvent('runtime/enqueue', event)
-    this.queue.push(event)
+    this.enqueueInput({ source: 'runtime', event })
+  }
+
+  enqueueDomain(event: OrchestrationDomainInput): void {
+    this.enqueueInput({ source: 'domain', event })
+  }
+
+  enqueueInput(input: RuntimeIngestionInput): void {
+    logEvent('runtime/enqueue', input)
+    this.queue.push(input)
     if (!this.draining) {
       this.drainPromise = this.drainInternal()
     }
@@ -81,8 +160,8 @@ export class ProviderRuntimeIngestion {
     this.draining = true
     try {
       while (this.queue.length > 0) {
-        const event = this.queue.shift()
-        if (event) this.ingest(event)
+        const input = this.queue.shift()
+        if (input) this.ingestInput(input)
       }
     } finally {
       this.draining = false
@@ -97,6 +176,146 @@ export class ProviderRuntimeIngestion {
     if (event.turnId === activeTurn.turnId) return true
     if (activeTurn.turnId.startsWith('pending:')) return true
     return false
+  }
+
+  private ingestInput(input: RuntimeIngestionInput): void {
+    if (input.source === 'domain') {
+      this.ingestDomain(input.event)
+      return
+    }
+    this.ingest(input.event)
+  }
+
+  private ingestDomain(event: OrchestrationDomainInput): void {
+    this.engine.ensureThread({ threadId: event.threadId })
+    switch (event.type) {
+      case 'turn-start-requested': {
+        const pendingTurnId = event.pendingTurnId ?? `pending:${event.commandId ?? event.createdAt}`
+        this.patchActiveTurn(
+          event.threadId,
+          () => ({
+            turnId: pendingTurnId,
+            phase: 'queued',
+            activeItemIds: [],
+            visibleIndicator: 'exploring',
+            startedAt: event.createdAt,
+            updatedAt: event.createdAt
+          }),
+          event.createdAt
+        )
+        this.engine.setSession({
+          threadId: event.threadId,
+          status: 'starting',
+          providerName: event.provider,
+          runtimeMode:
+            event.runtimeMode ?? this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
+          interactionMode:
+            event.interactionMode ?? this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
+          model: event.model ?? this.engine.getThread(event.threadId).session?.model,
+          effort: event.effort ?? this.engine.getThread(event.threadId).session?.effort,
+          activeTurnId: null,
+          activePlanId:
+            event.activePlanId ?? this.engine.getThread(event.threadId).session?.activePlanId ?? null,
+          lastError: null,
+          createdAt: event.createdAt
+        })
+        return
+      }
+      case 'turn-start-accepted':
+        this.applyTurnStarted({
+          eventId: `domain:${event.turnId}`,
+          provider: event.provider,
+          threadId: event.threadId,
+          turnId: event.turnId,
+          createdAt: event.createdAt,
+          type: 'turn.started',
+          payload: { model: event.model, effort: event.effort }
+        } as Extract<ProviderRuntimeEvent, { type: 'turn.started' }>)
+        return
+      case 'turn-start-failed': {
+        const activeTurnId =
+          this.engine.getThread(event.threadId).session?.activeTurnId ??
+          this.engine.getThread(event.threadId).activeTurn?.turnId ??
+          event.pendingTurnId
+        if (activeTurnId) {
+          this.finalizeTurn({
+            provider: event.provider,
+            threadId: event.threadId,
+            turnId: activeTurnId,
+            state: 'failed',
+            errorMessage: event.errorMessage,
+            createdAt: event.createdAt
+          })
+        } else {
+          this.engine.setActiveTurn({ threadId: event.threadId, activeTurn: null, createdAt: event.createdAt })
+          this.engine.setSession({
+            threadId: event.threadId,
+            status: 'error',
+            providerName: event.provider,
+            runtimeMode:
+              this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
+            interactionMode:
+              this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
+            model: this.engine.getThread(event.threadId).session?.model,
+            effort: this.engine.getThread(event.threadId).session?.effort,
+            activeTurnId: null,
+            activePlanId: null,
+            lastError: event.errorMessage,
+            createdAt: event.createdAt
+          })
+        }
+        return
+      }
+      case 'turn-interrupt-requested': {
+        const turnId =
+          event.turnId ??
+          this.engine.getThread(event.threadId).session?.activeTurnId ??
+          this.engine.getThread(event.threadId).activeTurn?.turnId
+        if (turnId) {
+          this.finalizeTurn({
+            provider: event.provider,
+            threadId: event.threadId,
+            turnId,
+            state: 'interrupted',
+            errorMessage: 'Interrupted.',
+            createdAt: event.createdAt
+          })
+        }
+        return
+      }
+      case 'session-stop-requested': {
+        const turnId =
+          this.engine.getThread(event.threadId).session?.activeTurnId ??
+          this.engine.getThread(event.threadId).activeTurn?.turnId
+        if (turnId) {
+          this.finalizeTurn({
+            provider: event.provider,
+            threadId: event.threadId,
+            turnId,
+            state: 'interrupted',
+            errorMessage: 'Session stopped.',
+            createdAt: event.createdAt
+          })
+        }
+        this.engine.setSession({
+          threadId: event.threadId,
+          status: 'stopped',
+          providerName: event.provider,
+          runtimeMode:
+            this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
+          interactionMode:
+            this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
+          model: this.engine.getThread(event.threadId).session?.model,
+          effort: this.engine.getThread(event.threadId).session?.effort,
+          activeTurnId: null,
+          activePlanId: null,
+          lastError: null,
+          createdAt: event.createdAt
+        })
+        this.engine.setActiveTurn({ threadId: event.threadId, activeTurn: null, createdAt: event.createdAt })
+        return
+      }
+    }
   }
 
   private patchActiveTurn(
@@ -311,14 +530,144 @@ export class ProviderRuntimeIngestion {
     return `tool:${event.eventId}`
   }
 
+  private shouldIgnoreNonTerminalRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+    if (
+      event.type === 'session.state.changed' ||
+      event.type === 'thread.started' ||
+      event.type === 'turn.started' ||
+      event.type === 'turn.completed' ||
+      event.type === 'runtime.error' ||
+      event.type === 'runtime.warning'
+    ) {
+      return false
+    }
+    if (!event.turnId) return false
+    return this.isCompletedTurn(event.threadId, event.turnId)
+  }
+
+  private applyTurnStarted(event: Extract<ProviderRuntimeEvent, { type: 'turn.started' }>): void {
+    const turnId = event.turnId ?? event.eventId
+    if (this.isCompletedTurn(event.threadId, turnId)) return
+    const thread = this.engine.getThread(event.threadId)
+    const activeTurnId = thread.session?.activeTurnId
+    if (activeTurnId && activeTurnId !== turnId && !activeTurnId.startsWith('pending:')) return
+    this.patchActiveTurn(
+      event.threadId,
+      (prev) => ({
+        turnId,
+        phase: 'starting',
+        activeItemIds: [],
+        visibleIndicator: 'exploring',
+        startedAt: prev?.startedAt ?? event.createdAt,
+        updatedAt: event.createdAt
+      }),
+      event.createdAt
+    )
+    const currentModel = thread.session?.model
+    const currentEffort = thread.session?.effort
+    const nextModel = typeof event.payload.model === 'string' ? event.payload.model : currentModel
+    const nextEffort = isReasoningEffort(event.payload.effort)
+      ? event.payload.effort
+      : currentEffort
+    this.engine.setLatestTurn(event.threadId, {
+      id: turnId,
+      status: 'running',
+      startedAt: event.createdAt,
+      completedAt: null
+    })
+    this.engine.setSession({
+      threadId: event.threadId,
+      status: 'running',
+      providerName: event.provider,
+      runtimeMode: thread.session?.runtimeMode ?? 'auto-accept-edits',
+      interactionMode: thread.session?.interactionMode ?? 'default',
+      model: nextModel,
+      effort: nextEffort,
+      activeTurnId: turnId,
+      activePlanId: thread.session?.activePlanId ?? null,
+      lastError: null,
+      createdAt: event.createdAt
+    })
+  }
+
+  private finalizeTurn(input: {
+    provider: ProviderRuntimeEvent['provider']
+    threadId: string
+    turnId: string
+    state: 'completed' | 'failed' | 'cancelled' | 'interrupted'
+    errorMessage?: string
+    createdAt: string
+  }): void {
+    const normalizedState = mapTurnCompletedPhase(input.state)
+    const cleanupEvent: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }> = {
+      eventId: `finalize:${input.threadId}:${input.turnId}:${input.createdAt}`,
+      provider: input.provider,
+      threadId: input.threadId,
+      turnId: input.turnId,
+      createdAt: input.createdAt,
+      type: 'turn.completed',
+      payload: {
+        state: input.state,
+        errorMessage: input.errorMessage
+      }
+    }
+    this.completedTurns.set(
+      this.turnCompletionKey(input.threadId, input.turnId),
+      toolStatusForTurnCompletion(input.state)
+    )
+    this.flushAssistant(cleanupEvent, { closeSegment: true, streaming: false })
+    this.finalizePlan(cleanupEvent)
+    this.applyTurnCompletedUi(cleanupEvent)
+    this.finalizeActivitiesForTurn(cleanupEvent)
+    this.engine.clearTodoListsForTurn(input.threadId, input.turnId, input.createdAt)
+
+    const thread = this.engine.getThread(input.threadId)
+    const activeTurnId = thread.session?.activeTurnId
+    const shouldCloseLifecycle =
+      !activeTurnId || activeTurnId === input.turnId || activeTurnId.startsWith('pending:')
+    if (!shouldCloseLifecycle && thread.latestTurn?.id !== input.turnId) return
+
+    this.engine.setLatestTurn(input.threadId, {
+      id: input.turnId,
+      status: input.state,
+      startedAt: thread.latestTurn?.id === input.turnId ? thread.latestTurn.startedAt : input.createdAt,
+      completedAt: input.createdAt
+    })
+    this.engine.setSession({
+      threadId: input.threadId,
+      status:
+        normalizedState === 'completed'
+          ? 'ready'
+          : normalizedState === 'interrupted'
+            ? 'interrupted'
+            : 'error',
+      providerName: input.provider,
+      runtimeMode: thread.session?.runtimeMode ?? 'auto-accept-edits',
+      interactionMode: thread.session?.interactionMode ?? 'default',
+      model: thread.session?.model,
+      effort: thread.session?.effort,
+      activeTurnId: null,
+      activePlanId: null,
+      lastError: normalizedState === 'completed' ? null : (input.errorMessage ?? null),
+      createdAt: input.createdAt
+    })
+    this.engine.setActiveTurn({
+      threadId: input.threadId,
+      activeTurn: null,
+      createdAt: input.createdAt
+    })
+  }
+
   private ingest(event: ProviderRuntimeEvent): void {
     logEvent('runtime/ingest', event)
     this.engine.ensureThread({ threadId: event.threadId })
+    if (this.shouldIgnoreNonTerminalRuntimeEvent(event)) return
 
     switch (event.type) {
       case 'session.state.changed':
         this.closeTurnForTerminalSession(event)
         this.closeTurnForReadySession(event)
+        if (this.shouldIgnoreReadySessionWhileTurnIsActive(event)) return
         if (event.payload.state === 'running') {
           const activeTurnId =
             event.turnId ?? this.engine.getThread(event.threadId).session?.activeTurnId ?? null
@@ -351,56 +700,18 @@ export class ProviderRuntimeIngestion {
         return
 
       case 'turn.started':
-        {
-          const turnId = event.turnId ?? event.eventId
-          if (this.isCompletedTurn(event.threadId, turnId)) return
-          this.patchActiveTurn(
-            event.threadId,
-            (prev) => ({
-              turnId,
-              phase: 'starting',
-              activeItemIds: [],
-              visibleIndicator: 'exploring',
-              startedAt: prev?.startedAt ?? event.createdAt,
-              updatedAt: event.createdAt
-            }),
-            event.createdAt
-          )
-        }
-        const currentModel = this.engine.getThread(event.threadId).session?.model
-        const currentEffort = this.engine.getThread(event.threadId).session?.effort
-        const nextModel = typeof event.payload.model === 'string' ? event.payload.model : currentModel
-        const nextEffort = isReasoningEffort(event.payload.effort)
-          ? event.payload.effort
-          : currentEffort
-        this.engine.setLatestTurn(event.threadId, {
-          id: event.turnId ?? event.eventId,
-          status: 'running',
-          startedAt: event.createdAt,
-          completedAt: null
-        })
-        this.engine.setSession({
-          threadId: event.threadId,
-          status: 'running',
-          providerName: event.provider,
-          runtimeMode:
-            this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
-          interactionMode:
-            this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
-          model: nextModel,
-          effort: nextEffort,
-          activeTurnId: event.turnId ?? null,
-          activePlanId: this.engine.getThread(event.threadId).session?.activePlanId ?? null,
-          lastError: null,
-          createdAt: event.createdAt
-        })
+        this.applyTurnStarted(event)
         return
 
       case 'turn.completed':
-        this.flushAssistant(event, { closeSegment: true })
-        this.finalizePlan(event)
-        this.applyTurnCompletedUi(event)
-        this.closeActiveTurn(event)
+        this.finalizeTurn({
+          provider: event.provider,
+          threadId: event.threadId,
+          turnId: event.turnId ?? event.eventId,
+          state: event.payload.state,
+          errorMessage: event.payload.errorMessage,
+          createdAt: event.createdAt
+        })
         return
 
       case 'content.delta':
@@ -422,6 +733,10 @@ export class ProviderRuntimeIngestion {
 
       case 'request.opened': {
         const approvalSlotId = `approval:${event.requestId ?? event.eventId}`
+        const existingApproval = this.engine
+          .getThread(event.threadId)
+          .activities.find((activity) => activity.id === approvalSlotId)
+        if (existingApproval?.resolved === true) return
         this.patchActiveTurn(
           event.threadId,
           (prev) => {
@@ -462,25 +777,6 @@ export class ProviderRuntimeIngestion {
             event.threadId
           )
         }
-        // B1 fix: OpenCode manages its own session status — do not downgrade to 'ready'
-        // while a turn is still in flight (OpenCode session.idle signals the real end).
-        if (!isProviderManagedTurnLifecycle(event.provider)) {
-          this.engine.setSession({
-            threadId: event.threadId,
-            status: 'ready',
-            providerName: event.provider,
-            runtimeMode:
-              this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
-            interactionMode:
-              this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
-            model: this.engine.getThread(event.threadId).session?.model,
-            effort: this.engine.getThread(event.threadId).session?.effort,
-            activeTurnId: event.turnId ?? null,
-            activePlanId: this.engine.getThread(event.threadId).session?.activePlanId ?? null,
-            lastError: null,
-            createdAt: event.createdAt
-          })
-        }
         return
       }
 
@@ -488,6 +784,10 @@ export class ProviderRuntimeIngestion {
         const existing = this.findApprovalForResolution(event)
         const resolvedApprovalId = existing?.id ?? `approval:${event.requestId ?? event.eventId}`
         const resolvedTurnId = event.turnId ?? existing?.turnId ?? null
+        const staleAfterRestart = resolutionReason(event.payload.resolution) === 'stale_after_restart'
+        const staleToolCallId = staleAfterRestart
+          ? readPayloadString(existing?.payload, 'toolCallId')
+          : undefined
         this.engine.upsertActivity(
           {
             id: resolvedApprovalId,
@@ -511,26 +811,18 @@ export class ProviderRuntimeIngestion {
           event.threadId
         )
         if (event.payload.decision === 'decline') {
-          // B1 fix: OpenCode keeps the turn alive on decline; only session.idle / session.error
-          // closes the turn.  Do not synthesise turn.completed here for OpenCode.
-          if (!isProviderManagedTurnLifecycle(event.provider)) {
+          if (this.lifecycleCapabilities(event.provider).closesOnApprovalDecline) {
             const interruptedTurnId =
               resolvedTurnId ??
               this.engine.getThread(event.threadId).session?.activeTurnId ??
               this.engine.getThread(event.threadId).activeTurn?.turnId ??
               event.eventId
-            this.closeActiveTurn({
-              ...event,
-              type: 'turn.completed',
-              turnId: interruptedTurnId,
-              payload: {
-                state: 'interrupted',
-                errorMessage: 'Approval declined.'
-              }
-            })
-            this.engine.setActiveTurn({
+            this.finalizeTurn({
+              provider: event.provider,
               threadId: event.threadId,
-              activeTurn: null,
+              turnId: interruptedTurnId,
+              state: 'interrupted',
+              errorMessage: 'Approval declined.',
               createdAt: event.createdAt
             })
             return
@@ -541,7 +833,9 @@ export class ProviderRuntimeIngestion {
           (prev) => {
             if (!prev || !this.eventMatchesActiveTurn(event, prev)) return prev
             if (prev.phase !== 'waiting_for_input') return prev
-            const ids = prev.activeItemIds.filter((slot) => slot !== resolvedApprovalId)
+            const ids = prev.activeItemIds.filter(
+              (slot) => slot !== resolvedApprovalId && slot !== staleToolCallId
+            )
             const draft: ActiveTurnProjection = {
               ...prev,
               activeItemIds: ids,
@@ -647,11 +941,22 @@ export class ProviderRuntimeIngestion {
           event.threadId
         )
         if (event.type === 'runtime.error' && this.shouldPromoteRuntimeError(event)) {
-          this.engine.setActiveTurn({
-            threadId: event.threadId,
-            activeTurn: null,
-            createdAt: event.createdAt
-          })
+          const turnId =
+            event.turnId ??
+            this.engine.getThread(event.threadId).session?.activeTurnId ??
+            this.engine.getThread(event.threadId).activeTurn?.turnId
+          if (turnId) {
+            this.finalizeTurn({
+              provider: event.provider,
+              threadId: event.threadId,
+              turnId,
+              state: 'failed',
+              errorMessage: event.payload.message,
+              createdAt: event.createdAt
+            })
+            return
+          }
+          this.engine.setActiveTurn({ threadId: event.threadId, activeTurn: null, createdAt: event.createdAt })
           this.engine.setSession({
             threadId: event.threadId,
             status: 'error',
@@ -676,9 +981,20 @@ export class ProviderRuntimeIngestion {
   }
 
   private shouldPromoteRuntimeError(event: ProviderRuntimeEvent): boolean {
+    const capabilities = this.lifecycleCapabilities(event.provider)
+    if (
+      capabilities.promotesRuntimeErrorsToTurnFailure === 'fatal-only' &&
+      !runtimeErrorIsFatal(event)
+    ) {
+      return false
+    }
     if (!event.turnId) return true
     const activeTurnId = this.engine.getThread(event.threadId).session?.activeTurnId
     return activeTurnId === event.turnId
+  }
+
+  private lifecycleCapabilities(provider: ProviderRuntimeEvent['provider']): ProviderLifecycleCapabilities {
+    return this.resolveLifecycleCapabilities(provider)
   }
 
   private patchActiveTurnFromContentDelta(
@@ -1261,50 +1577,6 @@ export class ProviderRuntimeIngestion {
     )
   }
 
-  private closeActiveTurn(event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>): void {
-    const thread = this.engine.getThread(event.threadId)
-    const activeTurnId = thread.session?.activeTurnId
-    const completedTurnId = event.turnId ?? event.eventId
-
-    this.completedTurns.set(
-      this.turnCompletionKey(event.threadId, completedTurnId),
-      toolStatusForTurnCompletion(event.payload.state)
-    )
-    this.finalizeActivitiesForTurn(event)
-    this.engine.clearTodoListsForTurn(event.threadId, completedTurnId, event.createdAt)
-    if (activeTurnId && event.turnId && activeTurnId !== event.turnId) return
-
-    this.engine.setLatestTurn(event.threadId, {
-      id: completedTurnId,
-      status: event.payload.state,
-      startedAt: thread.latestTurn?.startedAt ?? event.createdAt,
-      completedAt: event.createdAt
-    })
-    this.engine.setSession({
-      threadId: event.threadId,
-      status:
-        event.payload.state === 'completed'
-          ? 'ready'
-          : event.payload.state === 'interrupted'
-            ? 'interrupted'
-            : 'error',
-      providerName: event.provider,
-      runtimeMode: thread.session?.runtimeMode ?? 'auto-accept-edits',
-      interactionMode: thread.session?.interactionMode ?? 'default',
-      model: thread.session?.model,
-      effort: thread.session?.effort,
-      activeTurnId: null,
-      activePlanId: null,
-      lastError: event.payload.errorMessage ?? null,
-      createdAt: event.createdAt
-    })
-    this.engine.setActiveTurn({
-      threadId: event.threadId,
-      activeTurn: null,
-      createdAt: event.createdAt
-    })
-  }
-
   private closeTurnForTerminalSession(
     event: Extract<ProviderRuntimeEvent, { type: 'session.state.changed' }>
   ): void {
@@ -1316,30 +1588,12 @@ export class ProviderRuntimeIngestion {
     if (!activeTurnId) return
 
     const state = event.payload.state === 'error' ? 'failed' : 'interrupted'
-    const cleanupEvent: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }> = {
-      ...event,
-      type: 'turn.completed',
-      turnId: activeTurnId,
-      payload: {
-        state,
-        errorMessage: event.payload.reason
-      }
-    }
-    this.completedTurns.set(
-      this.turnCompletionKey(event.threadId, activeTurnId),
-      toolStatusForTurnCompletion(state)
-    )
-    this.finalizeActivitiesForTurn(cleanupEvent)
-    this.engine.clearTodoListsForTurn(event.threadId, activeTurnId, event.createdAt)
-    this.engine.setLatestTurn(event.threadId, {
-      id: activeTurnId,
-      status: state,
-      startedAt: thread.latestTurn?.startedAt ?? event.createdAt,
-      completedAt: event.createdAt
-    })
-    this.engine.setActiveTurn({
+    this.finalizeTurn({
+      provider: event.provider,
       threadId: event.threadId,
-      activeTurn: null,
+      turnId: activeTurnId,
+      state,
+      errorMessage: event.payload.reason,
       createdAt: event.createdAt
     })
   }
@@ -1348,28 +1602,40 @@ export class ProviderRuntimeIngestion {
     event: Extract<ProviderRuntimeEvent, { type: 'session.state.changed' }>
   ): void {
     if (event.payload.state !== 'ready') return
-    // B6 fix: OpenCode's adapter emits its own authoritative turn.completed before
-    // session.state.changed:ready.  Do not synthesise a second one here.
-    if (isProviderManagedTurnLifecycle(event.provider)) return
+    if (!this.lifecycleCapabilities(event.provider).completesOnReadySession) return
     const thread = this.engine.getThread(event.threadId)
+    if (event.provider === 'opencode' && thread.session?.status === 'running' && !openCodeReadyEventMeansTurnIdle(event)) {
+      return
+    }
     const activeTurnId =
       event.turnId ??
       thread.session?.activeTurnId ??
+      thread.activeTurn?.turnId ??
       (thread.latestTurn?.status === 'running' ? thread.latestTurn.id : null)
     if (!activeTurnId) return
     if (this.isCompletedTurn(event.threadId, activeTurnId)) return
 
-    this.closeActiveTurn({
-      ...event,
-      type: 'turn.completed',
-      turnId: activeTurnId,
-      payload: { state: 'completed' }
-    })
-    this.engine.setActiveTurn({
+    this.finalizeTurn({
+      provider: event.provider,
       threadId: event.threadId,
-      activeTurn: null,
+      turnId: activeTurnId,
+      state: 'completed',
       createdAt: event.createdAt
     })
+  }
+
+  private shouldIgnoreReadySessionWhileTurnIsActive(
+    event: Extract<ProviderRuntimeEvent, { type: 'session.state.changed' }>
+  ): boolean {
+    if (event.payload.state !== 'ready') return false
+    if (this.lifecycleCapabilities(event.provider).completesOnReadySession) return false
+    const thread = this.engine.getThread(event.threadId)
+    const activeTurnId =
+      event.turnId ??
+      thread.session?.activeTurnId ??
+      thread.activeTurn?.turnId ??
+      (thread.latestTurn?.status === 'running' ? thread.latestTurn.id : null)
+    return Boolean(activeTurnId && !this.isCompletedTurn(event.threadId, activeTurnId))
   }
 
   private finalizeActivitiesForTurn(
@@ -1658,6 +1924,12 @@ function readNestedPayloadString(value: unknown, ...keys: string[]): string | un
   return undefined
 }
 
+function resolutionReason(resolution: unknown): string | undefined {
+  if (!resolution || typeof resolution !== 'object') return undefined
+  const reason = (resolution as Record<string, unknown>).reason
+  return typeof reason === 'string' ? reason : undefined
+}
+
 function normalizeProposedPlanText(value: string | undefined): string | undefined {
   const trimmed = value?.trim()
   if (!trimmed) return undefined
@@ -1741,6 +2013,22 @@ function titleForItem(itemType: CanonicalItemType): string {
 
 function titleForRequest(requestType: string): string {
   return requestType.replaceAll('_', ' ')
+}
+
+function runtimeErrorIsFatal(event: ProviderRuntimeEvent): boolean {
+  if (event.type !== 'runtime.error') return false
+  if (event.payload.fatal === true || event.payload.severity === 'fatal') return true
+  const detail = event.payload.detail
+  if (!detail || typeof detail !== 'object') return false
+  const record = detail as Record<string, unknown>
+  if (record['fatal'] === true || record['severity'] === 'fatal') return true
+  const className = record['class']
+  return (
+    className === 'transport_error' ||
+    className === 'app_server_exit' ||
+    className === 'protocol_error' ||
+    className === 'turn_start_failed'
+  )
 }
 
 const COBEL_DEBUG_EVENTS_ENABLED = /^(1|true|yes|on)$/i.test(

@@ -7,6 +7,7 @@ import type {
   DispatchResult,
   OrchestrationShellSnapshot,
   OrchestrationShellStreamItem,
+  OrchestrationSession,
   OrchestrationThreadStreamItem,
   ProviderId,
   ProviderSummary,
@@ -66,19 +67,21 @@ export class AgentBackend {
     this.clearRestartStaleUserInputs()
 
     this.providers = new ProviderService()
-    this.ingestion = new ProviderRuntimeIngestion(this.engine)
-    this.checkpointStore = new CheckpointStore()
-    this.checkpointReactor = new CheckpointReactor(
-      this.engine,
-      this.ingestion,
-      this.checkpointStore
-    )
     this.providers.register(
       options.useFakeProvider ? new FakeProviderAdapter() : new CodexAdapter()
     )
     if (!options.useFakeProvider) {
       this.providers.register(new OpenCodeAdapter())
     }
+    this.ingestion = new ProviderRuntimeIngestion(this.engine, (provider) =>
+      this.providers.getLifecycleCapabilities(provider)
+    )
+    this.checkpointStore = new CheckpointStore()
+    this.checkpointReactor = new CheckpointReactor(
+      this.engine,
+      this.ingestion,
+      this.checkpointStore
+    )
     this.providers.subscribe((event) => {
       this.ingestion.enqueue(event)
       this.checkpointReactor.enqueue(event)
@@ -217,101 +220,93 @@ export class AgentBackend {
           attachments: input.attachments,
           createdAt: input.createdAt
         })
-        this.engine.setSession({
+        this.ingestion.enqueueDomain({
+          type: 'turn-start-requested',
           threadId: input.threadId,
-          status: 'starting',
-          providerName: input.provider,
+          provider: input.provider,
+          commandId: input.commandId,
+          pendingTurnId: `pending:${input.commandId}`,
           runtimeMode: input.runtimeMode,
           interactionMode: input.interactionMode,
           model: sanitizeOptionalString(input.model),
           effort: sanitizeOptionalEffort(input.effort),
-          activeTurnId: null,
           activePlanId: sanitizeOptionalString(input.targetPlanId) ?? null,
-          lastError: null,
           createdAt: input.createdAt
         })
-        this.engine.setActiveTurn({
-          threadId: input.threadId,
-          activeTurn: {
-            turnId: `pending:${input.commandId}`,
-            phase: 'queued',
-            activeItemIds: [],
-            visibleIndicator: 'exploring',
-            startedAt: input.createdAt,
-            updatedAt: input.createdAt
-          },
-          createdAt: input.createdAt
-        })
+        await this.ingestion.drain()
         try {
-        const resumeCursor = this.directory.getResumeCursor(input.threadId)
-        await this.providers.startSession({
-          provider: input.provider,
-          threadId: input.threadId,
-          cwd: input.cwd,
-          model: sanitizeOptionalString(input.model),
-          runtimeMode: input.runtimeMode,
-          interactionMode: input.interactionMode,
-          resumeCursor
-        })
-        await this.checkpointReactor.ensureBaseline({
-          threadId: input.threadId,
-          cwd: input.cwd ?? this.engine.getThread(input.threadId).cwd
-        })
-        const result = await this.providers.sendTurn({
-          provider: input.provider,
-          threadId: input.threadId,
-          input: input.input,
-          attachments: input.attachments,
-          model: sanitizeOptionalString(input.model),
-          effort: sanitizeOptionalEffort(input.effort),
-          interactionMode: input.interactionMode
-        })
-        if (result.resumeCursor) {
-          this.directory.upsert(input.threadId, {
+          const resumeCursor = this.directory.getResumeCursor(input.threadId)
+          await this.providers.startSession({
             provider: input.provider,
+            threadId: input.threadId,
+            cwd: input.cwd,
+            model: sanitizeOptionalString(input.model),
             runtimeMode: input.runtimeMode,
             interactionMode: input.interactionMode,
-            status: 'running',
-            resumeCursor: result.resumeCursor
+            resumeCursor
           })
-        }
-        {
-          const nowIso = new Date().toISOString()
-          const cur = this.engine.getThread(input.threadId).activeTurn
-          if (cur?.phase === 'queued') {
-            this.engine.setActiveTurn({
-              threadId: input.threadId,
-              activeTurn: {
-                ...cur,
-                turnId: result.turnId,
-                updatedAt: nowIso
-              },
-              createdAt: nowIso
-            })
-          }
-        }
-        this.trackThreadNaming(this.autoRenameThreadFromFirstTurn({
-          threadId: input.threadId,
-          input: input.input,
-          provider: input.provider,
-          cwd: input.cwd,
-          model: sanitizeOptionalString(input.model),
-          titleSeed: input.titleSeed,
-          commandId: input.commandId,
-          createdAt: input.createdAt
-        }))
-        return {
-          accepted: true,
-          commandId: input.commandId,
-          threadId: input.threadId,
-          turnId: result.turnId
-        }
-        } catch (err) {
-          this.engine.setActiveTurn({
+          await this.checkpointReactor.ensureBaseline({
             threadId: input.threadId,
-            activeTurn: null,
+            cwd: input.cwd ?? this.engine.getThread(input.threadId).cwd
+          })
+          const result = await this.providers.sendTurn({
+            provider: input.provider,
+            threadId: input.threadId,
+            input: input.input,
+            attachments: input.attachments,
+            model: sanitizeOptionalString(input.model),
+            effort: sanitizeOptionalEffort(input.effort),
+            interactionMode: input.interactionMode
+          })
+          this.ingestion.enqueueDomain({
+            type: 'turn-start-accepted',
+            threadId: input.threadId,
+            provider: input.provider,
+            turnId: result.turnId,
+            pendingTurnId: `pending:${input.commandId}`,
+            model: sanitizeOptionalString(input.model),
+            effort: sanitizeOptionalEffort(input.effort),
+            runtimeMode: input.runtimeMode,
+            interactionMode: input.interactionMode,
+            activePlanId: sanitizeOptionalString(input.targetPlanId) ?? null,
             createdAt: new Date().toISOString()
           })
+          await this.ingestion.drain()
+          if (result.resumeCursor) {
+            this.directory.upsert(input.threadId, {
+              provider: input.provider,
+              runtimeMode: input.runtimeMode,
+              interactionMode: input.interactionMode,
+              status: 'running',
+              resumeCursor: result.resumeCursor
+            })
+          }
+          this.trackThreadNaming(this.autoRenameThreadFromFirstTurn({
+            threadId: input.threadId,
+            input: input.input,
+            provider: input.provider,
+            cwd: input.cwd,
+            model: sanitizeOptionalString(input.model),
+            titleSeed: input.titleSeed,
+            commandId: input.commandId,
+            createdAt: input.createdAt
+          }))
+          return {
+            accepted: true,
+            commandId: input.commandId,
+            threadId: input.threadId,
+            turnId: result.turnId
+          }
+        } catch (err) {
+          this.ingestion.enqueueDomain({
+            type: 'turn-start-failed',
+            threadId: input.threadId,
+            provider: input.provider,
+            pendingTurnId: `pending:${input.commandId}`,
+            errorMessage: err instanceof Error ? err.message : String(err),
+            createdAt: new Date().toISOString()
+          })
+          await this.ingestion.drain()
           throw err
         }
       }
@@ -331,7 +326,16 @@ export class AgentBackend {
   }
 
   async interruptTurn(input: { threadId: string; turnId?: string }): Promise<void> {
-    await this.providers.interruptTurn(this.providerForThread(input.threadId), input)
+    const provider = this.providerForThread(input.threadId)
+    this.ingestion.enqueueDomain({
+      type: 'turn-interrupt-requested',
+      threadId: input.threadId,
+      provider,
+      turnId: input.turnId,
+      createdAt: new Date().toISOString()
+    })
+    await this.ingestion.drain()
+    await this.providers.interruptTurn(provider, input)
   }
 
   async respondToApproval(input: RespondToApprovalInput): Promise<void> {
@@ -345,7 +349,15 @@ export class AgentBackend {
   }
 
   async stopSession(input: StopSessionInput): Promise<void> {
-    await this.providers.stopSession(this.providerForThread(input.threadId), input)
+    const provider = this.providerForThread(input.threadId)
+    this.ingestion.enqueueDomain({
+      type: 'session-stop-requested',
+      threadId: input.threadId,
+      provider,
+      createdAt: new Date().toISOString()
+    })
+    await this.ingestion.drain()
+    await this.providers.stopSession(provider, input)
   }
 
   async clearThread(input: { threadId: string }): Promise<void> {
@@ -408,7 +420,13 @@ export class AgentBackend {
 
   /** Release provider child processes before the Electron app exits. */
   async prepareQuit(): Promise<void> {
+    await this.stopRunningSessionsForExit('app quit')
     await this.providers.disposeOpenCodeSessions()
+  }
+
+  /** Stop live provider work when the last window closes but the app process stays alive. */
+  async prepareWindowClose(): Promise<void> {
+    await this.stopRunningSessionsForExit('window close')
   }
 
   private clearRestartStaleUserInputs(): void {
@@ -432,11 +450,42 @@ export class AgentBackend {
   }
 
   private clearRestartStaleOpenCodeTurns(): void {
+    this.clearStaleRunningSessions('app restart', (session) => session.providerName === 'opencode')
+  }
+
+  private async stopRunningSessionsForExit(reason: 'app quit' | 'window close'): Promise<void> {
+    const runningSessions = this.runningSessions()
+    await Promise.allSettled(
+      runningSessions.map((session) =>
+        this.providers.stopSession(session.providerName, { threadId: session.threadId })
+      )
+    )
+    await this.ingestion.drain()
+    await this.checkpointReactor.drain()
+    this.clearStaleRunningSessions(reason)
+  }
+
+  private runningSessions(): Array<{ threadId: string; providerName: ProviderId }> {
+    const sessions: Array<{ threadId: string; providerName: ProviderId }> = []
+    for (const shellThread of this.snapshots.getShellSnapshot().threads) {
+      const session = this.engine.getThread(shellThread.id).session
+      if (!session) continue
+      if (session.status !== 'starting' && session.status !== 'running') continue
+      if (!session.providerName) continue
+      sessions.push({ threadId: shellThread.id, providerName: session.providerName })
+    }
+    return sessions
+  }
+
+  private clearStaleRunningSessions(
+    reason: 'app restart' | 'app quit' | 'window close',
+    include: (session: OrchestrationSession) => boolean = () => true
+  ): void {
     const now = new Date().toISOString()
     for (const shellThread of this.snapshots.getShellSnapshot().threads) {
       const thread = this.engine.getThread(shellThread.id)
       const session = thread.session
-      if (!session || session.providerName !== 'opencode') continue
+      if (!session || !include(session)) continue
       if (session.status !== 'starting' && session.status !== 'running') continue
 
       const activeTurnId =
@@ -473,7 +522,7 @@ export class AgentBackend {
             ...activity,
             kind: activity.kind.startsWith('task.') ? 'task.completed' : 'tool.completed',
             tone: activity.tone === 'thinking' ? 'thinking' : activity.tone,
-            summary: `${activity.summary} (interrupted on app restart)`,
+            summary: `${activity.summary} (interrupted on ${reason})`,
             payload: { ...activity.payload, status: 'failed' },
             resolved: true,
             createdAt: now

@@ -317,14 +317,111 @@ describe('OpenCodeSessionFsm — permission lifecycle', () => {
     )
 
     // Optimistic reply from respondToApproval
-    const optEffects = fsm.replyToPermission('perm-1', 'accept', undefined)
-    expect(optEffects.filter((e) => e.type === 'request.resolved')).toHaveLength(1)
+    const optimistic = fsm.replyToPermission('perm-1', 'accept', undefined)
+    expect(optimistic.shouldReplyToSdk).toBe(true)
+    expect(optimistic.effects.filter((e) => e.type === 'request.resolved')).toHaveLength(1)
 
     // SDK echo arrives — should be dropped
     const echoEffects = fsm.dispatch(
       sdkEvent('permission.replied', { requestID: 'perm-1', reply: 'once' })
     )
     expect(echoEffects.filter((e) => e.type === 'request.resolved')).toHaveLength(0)
+  })
+
+  it('does not reopen a resolved permission when OpenCode replays permission.asked', () => {
+    const fsm = makeFsm()
+    fsm.beginTurn('turn-1')
+    const opened = fsm.dispatch(
+      sdkEvent('permission.asked', {
+        id: 'perm-1',
+        permission: 'bash',
+        patterns: ['ls'],
+        metadata: {}
+      })
+    )
+    expect(opened.filter((e) => e.type === 'request.opened')).toHaveLength(1)
+
+    const optimistic = fsm.replyToPermission('perm-1', 'accept', undefined)
+    expect(optimistic.effects.filter((e) => e.type === 'request.resolved')).toHaveLength(1)
+
+    const replayed = fsm.dispatch(
+      sdkEvent('permission.asked', {
+        id: 'perm-1',
+        permission: 'bash',
+        patterns: ['ls -la'],
+        metadata: {}
+      })
+    )
+    expect(replayed.filter((e) => e.type === 'request.opened')).toHaveLength(0)
+
+    const duplicateReply = fsm.replyToPermission('perm-1', 'accept', undefined)
+    expect(duplicateReply.shouldReplyToSdk).toBe(false)
+    expect(duplicateReply.effects).toHaveLength(0)
+  })
+
+  it('does not re-resolve a permission when its approved tool later completes', () => {
+    const fsm = makeFsm()
+    fsm.beginTurn('turn-1')
+    fsm.dispatch(sdkEvent('message.updated', { info: { id: 'msg-1', role: 'assistant' } }))
+    fsm.dispatch(
+      sdkEvent('permission.asked', {
+        id: 'perm-1',
+        permission: 'bash',
+        patterns: ['ls'],
+        metadata: {},
+        tool: { callID: 'call-1' }
+      })
+    )
+
+    const optimistic = fsm.replyToPermission('perm-1', 'accept', undefined)
+    expect(optimistic.effects.filter((e) => e.type === 'request.resolved')).toHaveLength(1)
+
+    const completed = fsm.dispatch(
+      sdkEvent('message.part.updated', {
+        part: {
+          id: 'tool-1',
+          callID: 'call-1',
+          messageID: 'msg-1',
+          type: 'tool',
+          tool: 'bash',
+          metadata: {},
+          state: {
+            status: 'completed',
+            input: { command: 'ls' },
+            output: 'file.ts',
+            time: { start: 1, end: 2 },
+            metadata: {}
+          }
+        }
+      })
+    )
+
+    expect(completed.some((e) => e.type === 'item.completed')).toBe(true)
+    expect(completed.filter((e) => e.type === 'request.resolved')).toHaveLength(0)
+  })
+
+  it('deduplicates duplicate open permission asks while still pending', () => {
+    const fsm = makeFsm()
+    fsm.beginTurn('turn-1')
+    const first = fsm.dispatch(
+      sdkEvent('permission.asked', {
+        id: 'perm-1',
+        permission: 'bash',
+        patterns: ['ls'],
+        metadata: {}
+      })
+    )
+    const duplicate = fsm.dispatch(
+      sdkEvent('permission.asked', {
+        id: 'perm-1',
+        permission: 'bash',
+        patterns: ['pwd'],
+        metadata: {}
+      })
+    )
+
+    expect(first.filter((e) => e.type === 'request.opened')).toHaveLength(1)
+    expect(duplicate.filter((e) => e.type === 'request.opened')).toHaveLength(0)
   })
 })
 

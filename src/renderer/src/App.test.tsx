@@ -28,8 +28,23 @@ function mockThreadSnapshotWithActivities(activities: OrchestrationThreadActivit
           messages: [],
           activities,
           proposedPlans: [],
-          session: null,
-          latestTurn: null,
+          session: {
+            threadId: _input.threadId,
+            status: 'running',
+            providerName: 'codex',
+            runtimeMode: 'auto-accept-edits',
+            interactionMode: 'default',
+            activeTurnId: 'turn-1',
+            activePlanId: null,
+            lastError: null,
+            updatedAt: '2026-04-19T00:00:00.000Z'
+          },
+          latestTurn: {
+            id: 'turn-1',
+            status: 'running',
+            startedAt: '2026-04-19T00:00:00.000Z',
+            completedAt: null
+          },
           checkpoints: [],
           createdAt: '2026-04-19T00:00:00.000Z',
           updatedAt: '2026-04-19T00:00:00.000Z',
@@ -1167,8 +1182,23 @@ describe('renderer app', () => {
             messages: [],
             activities: [],
             proposedPlans: [],
-            session: null,
-            latestTurn: null,
+            session: {
+              threadId: _input.threadId,
+              status: 'running',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: 'turn-1',
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:00.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'running',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: null
+            },
             checkpoints: [],
             createdAt: '2026-04-19T00:00:00.000Z',
             updatedAt: '2026-04-19T00:00:00.000Z',
@@ -1734,8 +1764,23 @@ describe('renderer app', () => {
             messages: [],
             activities: [],
             proposedPlans: [],
-            session: null,
-            latestTurn: null,
+            session: {
+              threadId: _input.threadId,
+              status: 'running',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: 'turn-1',
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:00.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'running',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: null
+            },
             checkpoints: [],
             createdAt: '2026-04-19T00:00:00.000Z',
             updatedAt: '2026-04-19T00:00:00.000Z',
@@ -1894,7 +1939,7 @@ describe('renderer app', () => {
     expect(screen.queryByText('thinking…')).not.toBeInTheDocument()
   })
 
-  it('renders file-change approvals as embedded diffs and shows a spinner on the chosen action', async () => {
+  it('renders file-change approvals as embedded diffs and closes optimistically after approval', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
     window.agentApi.respondToApproval = vi.fn(() => new Promise<void>(() => {}))
@@ -1940,10 +1985,10 @@ describe('renderer app', () => {
     expect(window.agentApi.respondToApproval).toHaveBeenCalledWith(
       expect.objectContaining({ requestId: 'approval-1', decision: 'accept' })
     )
-    expect(approve).toBeDisabled()
-    expect(screen.getByRole('button', { name: /allow for session/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /decline/i })).toBeDisabled()
-    expect(container.querySelector('.button-spinner')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+    expect(container.querySelector('.pending-request-dock')).not.toBeInTheDocument()
   })
 
   it('does not render a separate transcript row for resolved approvals', async () => {
@@ -2010,6 +2055,51 @@ describe('renderer app', () => {
     expect(screen.getAllByText(/command approval/i).length).toBeGreaterThan(0)
     expect(container.querySelector('.pending-request-dock')).toBeInTheDocument()
     expect(container.querySelector('.embedded-diff-card')).not.toBeInTheDocument()
+  })
+
+  it('deduplicates equivalent command approvals and hides all copies after approval', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ['/'] }))
+    window.agentApi.respondToApproval = vi.fn(() => new Promise<void>(() => {}))
+    mockThreadSnapshotWithActivities([
+      {
+        id: 'approval:approval-1',
+        kind: 'approval.requested',
+        tone: 'approval',
+        summary: 'bun run test',
+        payload: { requestType: 'command_execution_approval' },
+        turnId: 'turn-1',
+        sequence: 1,
+        resolved: false,
+        createdAt: '2026-04-19T00:00:00.000Z'
+      },
+      {
+        id: 'approval:approval-duplicate',
+        kind: 'approval.requested',
+        tone: 'approval',
+        summary: 'bun run test',
+        payload: { requestType: 'command_execution_approval' },
+        turnId: 'turn-1',
+        sequence: 2,
+        resolved: false,
+        createdAt: '2026-04-19T00:00:01.000Z'
+      }
+    ])
+
+    const { container } = render(<RouterProvider router={router} />)
+    await user.click((await screen.findAllByRole('button', { name: /add project/i }))[0])
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.queryByText(/1 of 2/i)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /approve/i }))
+
+    expect(window.agentApi.respondToApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: 'approval-1', decision: 'accept' })
+    )
+    await waitFor(() => {
+      expect(container.querySelector('.pending-request-dock')).not.toBeInTheDocument()
+    })
   })
 
   it('renders full question options and submits the active selection from keyboard shortcuts', async () => {
@@ -2153,6 +2243,23 @@ describe('renderer app', () => {
           snapshotSequence: 1,
           thread: createTestThread({
             id: _input.threadId,
+            session: {
+              threadId: _input.threadId,
+              status: 'running',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: 'turn-1',
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:00.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'running',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: null
+            },
             activities: [
               {
                 id: 'approval:approval-1',
@@ -2204,6 +2311,23 @@ describe('renderer app', () => {
           snapshotSequence: 2,
           thread: createTestThread({
             id: 'local:main',
+            session: {
+              threadId: 'local:main',
+              status: 'running',
+              providerName: 'codex',
+              runtimeMode: 'auto-accept-edits',
+              interactionMode: 'default',
+              activeTurnId: 'turn-1',
+              activePlanId: null,
+              lastError: null,
+              updatedAt: '2026-04-19T00:00:01.000Z'
+            },
+            latestTurn: {
+              id: 'turn-1',
+              status: 'running',
+              startedAt: '2026-04-19T00:00:00.000Z',
+              completedAt: null
+            },
             activities: [
               {
                 id: 'approval:approval-1',

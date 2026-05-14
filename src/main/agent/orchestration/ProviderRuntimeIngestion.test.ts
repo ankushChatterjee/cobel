@@ -1376,7 +1376,7 @@ describe('ProviderRuntimeIngestion', () => {
     )
   })
 
-  it('marks newly seen late item updates for an already completed turn as completed', async () => {
+  it('drops newly seen late item updates for an already completed turn', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
 
@@ -1401,15 +1401,10 @@ describe('ProviderRuntimeIngestion', () => {
 
     expect(
       engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:late-call')
-    ).toEqual(
-      expect.objectContaining({
-        kind: 'tool.completed',
-        payload: expect.objectContaining({ status: 'completed' })
-      })
-    )
+    ).toBeUndefined()
   })
 
-  it('marks newly seen late output for an already completed turn as completed', async () => {
+  it('drops newly seen late output for an already completed turn', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
 
@@ -1429,17 +1424,7 @@ describe('ProviderRuntimeIngestion', () => {
 
     expect(
       engine.getThread('thread-1').activities.find((activity) => activity.id === 'tool:late-call')
-    ).toEqual(
-      expect.objectContaining({
-        kind: 'tool.completed',
-        payload: expect.objectContaining({
-          itemType: 'command_execution',
-          status: 'completed',
-          title: 'terminal',
-          output: 'done\n'
-        })
-      })
-    )
+    ).toBeUndefined()
   })
 
   it('keeps resolved thinking resolved when late reasoning updates arrive', async () => {
@@ -1483,7 +1468,7 @@ describe('ProviderRuntimeIngestion', () => {
     )
   })
 
-  it('marks newly seen late reasoning updates for an already completed turn as resolved', async () => {
+  it('drops newly seen late reasoning updates for an already completed turn', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
 
@@ -1508,16 +1493,10 @@ describe('ProviderRuntimeIngestion', () => {
       engine
         .getThread('thread-1')
         .activities.find((activity) => activity.id === 'thinking:late-reasoning')
-    ).toEqual(
-      expect.objectContaining({
-        kind: 'task.completed',
-        resolved: true,
-        payload: expect.objectContaining({ status: 'completed' })
-      })
-    )
+    ).toBeUndefined()
   })
 
-  it('marks newly seen late reasoning text deltas for an already completed turn as resolved', async () => {
+  it('drops newly seen late reasoning text deltas for an already completed turn', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
 
@@ -1539,16 +1518,7 @@ describe('ProviderRuntimeIngestion', () => {
       engine
         .getThread('thread-1')
         .activities.find((activity) => activity.id === 'thinking:late-reasoning-delta')
-    ).toEqual(
-      expect.objectContaining({
-        kind: 'task.completed',
-        resolved: true,
-        payload: expect.objectContaining({
-          status: 'completed',
-          reasoningText: 'post-complete reasoning'
-        })
-      })
-    )
+    ).toBeUndefined()
   })
 
   it('resolves thinking when the turn completes without a reasoning item completion', async () => {
@@ -2109,10 +2079,27 @@ function openCodeEvent<T extends ProviderRuntimeEvent['type']>(
   } as unknown as ProviderRuntimeEvent
 }
 
+function createProviderAwareIngestion(engine: OrchestrationEngine): ProviderRuntimeIngestion {
+  return new ProviderRuntimeIngestion(engine, (provider) => {
+    if (provider === 'opencode') {
+      return {
+        completesOnReadySession: true,
+        closesOnApprovalDecline: false,
+        promotesRuntimeErrorsToTurnFailure: 'fatal-only'
+      }
+    }
+    return {
+      completesOnReadySession: false,
+      closesOnApprovalDecline: true,
+      promotesRuntimeErrorsToTurnFailure: 'fatal-only'
+    }
+  })
+}
+
 describe('ProviderRuntimeIngestion — OpenCode provider-aware branches', () => {
   it('(B1) request.opened does NOT downgrade session.status to ready for OpenCode', async () => {
     const engine = new OrchestrationEngine()
-    const ingestion = new ProviderRuntimeIngestion(engine)
+    const ingestion = createProviderAwareIngestion(engine)
 
     ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
     ingestion.enqueue(
@@ -2130,9 +2117,9 @@ describe('ProviderRuntimeIngestion — OpenCode provider-aware branches', () => 
     expect(thread.session?.status).toBe('running')
   })
 
-  it('(B1-codex) request.opened DOES downgrade session.status to ready for Codex', async () => {
+  it('(lifecycle) request.opened keeps Codex session running until a terminal lifecycle event', async () => {
     const engine = new OrchestrationEngine()
-    const ingestion = new ProviderRuntimeIngestion(engine)
+    const ingestion = createProviderAwareIngestion(engine)
 
     ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
     ingestion.enqueue(
@@ -2145,14 +2132,13 @@ describe('ProviderRuntimeIngestion — OpenCode provider-aware branches', () => 
     )
     await ingestion.drain()
 
-    // Codex: status is set to 'ready' (legacy Codex behavior)
     const thread = engine.getThread('thread-1')
-    expect(thread.session?.status).toBe('ready')
+    expect(thread.session?.status).toBe('running')
   })
 
   it('(B1) decline does NOT close OpenCode turn — turn stays running', async () => {
     const engine = new OrchestrationEngine()
-    const ingestion = new ProviderRuntimeIngestion(engine)
+    const ingestion = createProviderAwareIngestion(engine)
 
     ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
     ingestion.enqueue(
@@ -2180,7 +2166,7 @@ describe('ProviderRuntimeIngestion — OpenCode provider-aware branches', () => 
 
   it('(B1-codex) decline DOES close Codex turn', async () => {
     const engine = new OrchestrationEngine()
-    const ingestion = new ProviderRuntimeIngestion(engine)
+    const ingestion = createProviderAwareIngestion(engine)
 
     ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
     ingestion.enqueue(
@@ -2208,7 +2194,7 @@ describe('ProviderRuntimeIngestion — OpenCode provider-aware branches', () => 
 
   it('(B6) session.state.changed:ready does NOT synthesize turn.completed for OpenCode', async () => {
     const engine = new OrchestrationEngine()
-    const ingestion = new ProviderRuntimeIngestion(engine)
+    const ingestion = createProviderAwareIngestion(engine)
 
     ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
     ingestion.enqueue(
@@ -2221,21 +2207,223 @@ describe('ProviderRuntimeIngestion — OpenCode provider-aware branches', () => 
     expect(thread.latestTurn?.status).toBe('running')
   })
 
-  it('(B6-codex) session.state.changed:ready DOES synthesize turn.completed for Codex', async () => {
+  it('closes an OpenCode running turn when ready comes from session.idle', async () => {
     const engine = new OrchestrationEngine()
-    const ingestion = new ProviderRuntimeIngestion(engine)
+    const ingestion = createProviderAwareIngestion(engine)
+
+    ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'item.updated',
+        turnId: 'turn-1',
+        itemId: 'glob',
+        payload: { itemType: 'dynamic_tool_call', status: 'inProgress', title: 'glob' }
+      })
+    )
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'user-input.requested',
+        turnId: 'turn-1',
+        requestId: 'question-1',
+        payload: { questions: [{ id: 'q-0', question: 'Continue?', options: [] }] }
+      })
+    )
+    await ingestion.drain()
+
+    ingestion.enqueue({
+      eventId: 'event:session-idle-ready',
+      provider: 'opencode',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      type: 'session.state.changed',
+      payload: { state: 'ready' },
+      createdAt,
+      raw: {
+        source: 'opencode.sdk',
+        payload: { type: 'session.idle', properties: { sessionID: 'ses-1' } }
+      }
+    })
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.session?.status).toBe('ready')
+    expect(thread.session?.activeTurnId).toBeNull()
+    expect(thread.activeTurn).toBeNull()
+    expect(thread.latestTurn?.status).toBe('completed')
+    expect(thread.activities.find((activity) => activity.id === 'tool:glob')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+    expect(thread.activities.find((activity) => activity.id === 'user-input:question-1')).toEqual(
+      expect.objectContaining({
+        kind: 'user-input.resolved',
+        resolved: true
+      })
+    )
+  })
+
+  it('clears stale OpenCode active-turn UI when a resumed idle session reports ready', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = createProviderAwareIngestion(engine)
+
+    engine.setSession({
+      threadId: 'thread-1',
+      status: 'ready',
+      providerName: 'opencode',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      activeTurnId: null,
+      activePlanId: null,
+      lastError: null,
+      createdAt: '2026-01-01T00:00:00.000Z'
+    })
+    engine.setActiveTurn({
+      threadId: 'thread-1',
+      activeTurn: {
+        turnId: 'turn-stale',
+        phase: 'waiting_for_input',
+        activeItemIds: ['tool-1', 'approval:req-1'],
+        visibleIndicator: 'approval',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      },
+      createdAt: '2026-01-01T00:00:00.000Z'
+    })
+    engine.upsertActivity(
+      {
+        id: 'tool:tool-1',
+        kind: 'tool.started',
+        tone: 'tool',
+        summary: 'bash',
+        payload: { itemType: 'command_execution', status: 'inProgress' },
+        turnId: 'turn-stale',
+        createdAt: '2026-01-01T00:00:00.000Z'
+      },
+      'thread-1'
+    )
+    engine.upsertActivity(
+      {
+        id: 'approval:req-1',
+        kind: 'approval.requested',
+        tone: 'approval',
+        summary: 'bash',
+        payload: { requestType: 'command_execution_approval', toolCallId: 'tool-1' },
+        turnId: 'turn-stale',
+        resolved: false,
+        createdAt: '2026-01-01T00:00:00.000Z'
+      },
+      'thread-1'
+    )
+
+    ingestion.enqueue(
+      openCodeEvent({ type: 'session.state.changed', payload: { state: 'ready' } })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.activeTurn).toBeNull()
+    expect(thread.activities.find((activity) => activity.id === 'tool:tool-1')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+    expect(thread.activities.find((activity) => activity.id === 'approval:req-1')).toEqual(
+      expect.objectContaining({ kind: 'approval.resolved', resolved: true })
+    )
+  })
+
+  it('(B6-codex) session.state.changed:ready does NOT synthesize turn.completed for Codex', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = createProviderAwareIngestion(engine)
 
     ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
     ingestion.enqueue(event({ type: 'session.state.changed', payload: { state: 'ready' } }))
     await ingestion.drain()
 
     const thread = engine.getThread('thread-1')
-    expect(thread.latestTurn?.status).toBe('completed')
+    expect(thread.latestTurn?.status).toBe('running')
+    expect(thread.session?.status).toBe('running')
+  })
+
+  it('Codex session.ready before turn.started does not complete the pending turn', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = createProviderAwareIngestion(engine)
+
+    ingestion.enqueueDomain({
+      type: 'turn-start-requested',
+      threadId: 'thread-1',
+      provider: 'codex',
+      commandId: 'cmd-1',
+      pendingTurnId: 'pending:cmd-1',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      createdAt
+    })
+    ingestion.enqueue(event({ type: 'session.state.changed', payload: { state: 'ready' } }))
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.activeTurn?.turnId).toBe('pending:cmd-1')
+    expect(thread.latestTurn?.status).not.toBe('completed')
+    expect(thread.session?.status).toBe('starting')
+  })
+
+  it('recoverable Codex runtime errors render but do not finalize an active turn', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = createProviderAwareIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'runtime.error',
+        turnId: 'turn-1',
+        payload: {
+          message: 'temporary tool transport failed',
+          severity: 'recoverable',
+          fatal: false
+        }
+      })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn?.status).toBe('running')
+    expect(thread.session?.status).toBe('running')
+    expect(thread.activities.find((activity) => activity.kind === 'runtime.error')).toEqual(
+      expect.objectContaining({ summary: 'temporary tool transport failed' })
+    )
+  })
+
+  it('fatal Codex runtime errors finalize an active turn as failed', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = createProviderAwareIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'runtime.error',
+        turnId: 'turn-1',
+        payload: {
+          message: 'app-server exited',
+          severity: 'fatal',
+          fatal: true
+        }
+      })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.latestTurn?.status).toBe('failed')
+    expect(thread.session?.status).toBe('error')
+    expect(thread.session?.lastError).toBe('app-server exited')
   })
 
   it('(B6) OpenCode turn.completed from adapter IS processed correctly', async () => {
     const engine = new OrchestrationEngine()
-    const ingestion = new ProviderRuntimeIngestion(engine)
+    const ingestion = createProviderAwareIngestion(engine)
 
     ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
     // FSM emits session.state.changed:ready before turn.completed
@@ -2254,7 +2442,7 @@ describe('ProviderRuntimeIngestion — OpenCode provider-aware branches', () => 
 
   it('two simultaneous approvals: resolving the first keeps the second approval visible', async () => {
     const engine = new OrchestrationEngine()
-    const ingestion = new ProviderRuntimeIngestion(engine)
+    const ingestion = createProviderAwareIngestion(engine)
 
     // Turn starts
     ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
@@ -2323,5 +2511,100 @@ describe('ProviderRuntimeIngestion — OpenCode provider-aware branches', () => 
     const req2 = activities.find((a) => a.id === 'approval:req-2')
     expect(req1?.resolved).toBe(true)
     expect(req2?.resolved).not.toBe(true)
+  })
+
+  it('clears the associated active tool slot when a stale restarted approval is cancelled', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = createProviderAwareIngestion(engine)
+
+    ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'item.started',
+        turnId: 'turn-1',
+        itemId: 'tool-1',
+        payload: { itemType: 'command_execution', title: 'bash 1' }
+      })
+    )
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: {
+          requestType: 'command_execution_approval',
+          detail: 'bash 1',
+          toolCallId: 'tool-1'
+        }
+      })
+    )
+    await ingestion.drain()
+
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.resolved',
+        requestId: 'req-1',
+        payload: {
+          requestType: 'unknown',
+          decision: 'cancel',
+          resolution: { reason: 'stale_after_restart' }
+        }
+      })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.activeTurn?.activeItemIds).toEqual([])
+    expect(thread.activeTurn?.phase).not.toBe('tool_running')
+    expect(thread.activities.find((a) => a.id === 'approval:req-1')).toEqual(
+      expect.objectContaining({
+        kind: 'approval.resolved',
+        resolved: true,
+        payload: expect.objectContaining({ decision: 'cancel' })
+      })
+    )
+  })
+
+  it('does not reopen an approval after the same request id has resolved', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = createProviderAwareIngestion(engine)
+
+    ingestion.enqueue(openCodeEvent({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', detail: 'bun test' }
+      })
+    )
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.resolved',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', decision: 'accept' }
+      })
+    )
+    ingestion.enqueue(
+      openCodeEvent({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        payload: { requestType: 'command_execution_approval', detail: 'bun test' }
+      })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.activities.filter((a) => a.id === 'approval:req-1')).toHaveLength(1)
+    expect(thread.activities.find((a) => a.id === 'approval:req-1')).toEqual(
+      expect.objectContaining({
+        kind: 'approval.resolved',
+        resolved: true,
+        payload: expect.objectContaining({ decision: 'accept' })
+      })
+    )
+    expect(thread.activeTurn?.activeItemIds).not.toContain('approval:req-1')
   })
 })

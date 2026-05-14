@@ -50,7 +50,9 @@ import { SessionErrorBanner } from '../components/home/transcript'
 import {
   isDiffUpdateActivity,
   isPendingPrompt,
-  listPendingRequests
+  listPendingRequests,
+  normalizePendingRequest,
+  pendingRequestIdentity
 } from '../components/home/activityUtils'
 import { errorMessageForDisplay } from '../components/home/formatUtils'
 import {
@@ -215,9 +217,25 @@ export function HomePage(): React.JSX.Element {
     ? threadSidebarState[activeSidebarScopeKey]
     : undefined
   const transcriptItems = useMemo(() => buildTranscriptItems(thread), [thread])
+  const submittingApprovalIdentities = useMemo(() => {
+    if (submittingApprovals.size === 0) return new Set<string>()
+    const identities = new Set<string>()
+    for (const activity of thread?.activities ?? []) {
+      if (!submittingApprovals.has(activity.id)) continue
+      const request = normalizePendingRequest(activity)
+      if (request?.kind === 'approval') identities.add(pendingRequestIdentity(request))
+    }
+    return identities
+  }, [submittingApprovals, thread?.activities])
   const pendingRequests = useMemo(
-    () => listPendingRequests(thread?.activities ?? [], activeTurnId ?? null),
-    [activeTurnId, thread?.activities]
+    () =>
+      listPendingRequests(thread?.activities ?? [], activeTurnId ?? null).filter(
+        (request) =>
+          request.kind !== 'approval' ||
+          (!submittingApprovals.has(request.activity.id) &&
+            !submittingApprovalIdentities.has(pendingRequestIdentity(request)))
+      ),
+    [activeTurnId, submittingApprovalIdentities, submittingApprovals, thread?.activities]
   )
   const activePendingRequest = pendingRequests[0] ?? null
   const filteredTranscriptItems = useMemo(
@@ -1382,6 +1400,7 @@ export function HomePage(): React.JSX.Element {
                 transcriptTailLabel={transcriptTailLabel}
                 transcriptTailSpinner={transcriptTailSpinner}
                 turnInProgress={turnInProgress}
+                activeTurnId={activeTurnId ?? null}
                 providerName={thread?.session?.providerName ?? null}
                 expandedToolIds={expandedToolIds}
                 checkpointByAssistantMessageId={checkpointByAssistantMessageId}
