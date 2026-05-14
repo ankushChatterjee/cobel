@@ -611,7 +611,13 @@ export class CodexAppServerManager {
         this.contexts.delete(context.session.threadId)
       }
     })
-    context.child.on('error', (error) => this.emitError(context.session.threadId, error.message))
+    context.child.on('error', (error) =>
+      this.emitError(context.session.threadId, error.message, {
+        class: 'app_server_exit',
+        severity: 'fatal',
+        fatal: true
+      })
+    )
   }
 
   private handleStdoutLine(context: CodexSessionContext, line: string): void {
@@ -620,7 +626,12 @@ export class CodexAppServerManager {
     try {
       message = JSON.parse(line)
     } catch {
-      this.emitError(context.session.threadId, 'Invalid JSON from Codex app-server', { line })
+      this.emitError(context.session.threadId, 'Invalid JSON from Codex app-server', {
+        line,
+        class: 'protocol_error',
+        severity: 'fatal',
+        fatal: true
+      })
       return
     }
 
@@ -655,7 +666,12 @@ export class CodexAppServerManager {
       return
     }
 
-    this.emitError(context.session.threadId, 'Unknown JSON-RPC message from Codex', message)
+    this.emitError(context.session.threadId, 'Unknown JSON-RPC message from Codex', {
+      message,
+      class: 'protocol_error',
+      severity: 'fatal',
+      fatal: true
+    })
   }
 
   private handleResponse(context: CodexSessionContext, response: JsonRpcResponse): void {

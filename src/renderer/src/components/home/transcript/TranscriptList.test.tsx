@@ -151,6 +151,7 @@ function renderTranscript(
       transcriptTailLabel={{ aria: '', text: '' }}
       transcriptTailSpinner={false}
       turnInProgress={turnInProgress}
+      activeTurnId={turnInProgress ? 'turn-1' : null}
       providerName="codex"
       expandedToolIds={new Set()}
       checkpointByAssistantMessageId={checkpointByAssistantMessageId}
@@ -210,6 +211,38 @@ describe('TranscriptList tool groups', () => {
     expect(diffToggle).toHaveAttribute('aria-disabled', 'true')
     expect(container.querySelector('.tool-line-spinner')).toBeInTheDocument()
     expect(screen.queryByText('+new')).not.toBeInTheDocument()
+  })
+
+  it('does not keep stale running tool rows spinning after the turn is no longer running', () => {
+    const { container } = renderTranscript(
+      [
+        {
+          id: 'activity:tool:glob',
+          kind: 'activity',
+          sequence: 1,
+          createdAt: t0,
+          activity: {
+            id: 'tool:glob',
+            kind: 'tool.updated',
+            tone: 'tool',
+            summary: 'glob',
+            payload: {
+              itemType: 'dynamic_tool_call',
+              status: 'running',
+              title: 'glob'
+            },
+            turnId: 'turn-1',
+            sequence: 1,
+            resolved: false,
+            createdAt: t0
+          }
+        }
+      ],
+      false
+    )
+
+    expect(container.querySelector('.tool-line-spinner')).not.toBeInTheDocument()
+    expect(screen.getByText('completed')).toBeInTheDocument()
   })
 
   it('shows a running OpenCode edit without a diff as a file tile', () => {

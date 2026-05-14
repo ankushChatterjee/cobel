@@ -124,6 +124,7 @@ export function workDurationForMessage(message: OrchestrationMessage): number | 
 export function selectTailIndicator(
   thread: OrchestrationThread | null
 ): ActiveTurnVisibleIndicator {
+  if (!isOrchestrationModelTurnInProgress(thread)) return 'none'
   if (!thread?.activeTurn) return 'none'
   const phase = thread.activeTurn.phase
   if (phase === 'completed' || phase === 'failed' || phase === 'interrupted' || phase === 'idle' || phase === 'finalizing') {
@@ -144,12 +145,14 @@ export function selectTranscriptTailRowVisible(thread: OrchestrationThread | nul
 
 /** Open tool item ids (excludes approval slots in {@link ActiveTurnProjection.activeItemIds}). */
 export function selectRunningToolItemIds(thread: OrchestrationThread | null): string[] {
+  if (!isOrchestrationModelTurnInProgress(thread)) return []
   const slots = thread?.activeTurn?.activeItemIds ?? []
   return slots.filter((id) => !id.startsWith('approval:'))
 }
 
 /** Pending approval request ids derived from active-turn slots (`approval:<requestId>`). */
 export function selectPendingRequestIds(thread: OrchestrationThread | null): string[] {
+  if (!isOrchestrationModelTurnInProgress(thread)) return []
   const prefix = 'approval:'
   const slots = thread?.activeTurn?.activeItemIds ?? []
   return slots.filter((id) => id.startsWith(prefix)).map((id) => id.slice(prefix.length))
@@ -370,10 +373,12 @@ export function threadHasTranscriptVisibleProgress(thread: OrchestrationThread):
  */
 export function threadHasInFlightWorkIndicator(thread: OrchestrationThread | null): boolean {
   if (!thread) return false
+  const turnInProgress = isOrchestrationModelTurnInProgress(thread)
+  const activeTurnId = currentInFlightTurnId(thread)
   for (const activity of thread.activities) {
     if (activity.resolved === true) continue
     if (activity.kind.startsWith('tool.') || activity.kind.startsWith('task.')) {
-      const s = statusFromActivity(activity)
+      const s = statusFromActivity(activity, { turnInProgress, activeTurnId })
       if (s === 'running' || s === 'inProgress') {
         return true
       }
@@ -384,6 +389,7 @@ export function threadHasInFlightWorkIndicator(thread: OrchestrationThread | nul
 
 function currentInFlightTurnId(thread: OrchestrationThread | null): string | null {
   if (!thread) return null
+  if (!isOrchestrationModelTurnInProgress(thread)) return null
   return (
     thread.session?.activeTurnId ??
     (thread.latestTurn?.status === 'running' ? thread.latestTurn.id : null)
@@ -448,7 +454,23 @@ function latestTurnStatusIsTerminalForActiveTurn(thread: OrchestrationThread): b
 export function isOrchestrationModelTurnInProgress(thread: OrchestrationThread | null): boolean {
   if (!thread) return false
   const s = thread.session?.status
-  if (s === 'starting' || s === 'running') return true
+  if (s === 'starting') return true
+  if (thread.activeTurn?.phase === 'queued') return true
+  if (s === 'running') {
+    const activeTurnId = thread.session?.activeTurnId
+    if (!activeTurnId) return false
+    const latestTurn = thread.latestTurn
+    return !latestTurn || latestTurn.id !== activeTurnId || latestTurn.status === 'running'
+  }
+  if (s && s !== 'idle') {
+    const activeTurnId = thread.session?.activeTurnId
+    const latestTurn = thread.latestTurn
+    return Boolean(activeTurnId && latestTurn?.id === activeTurnId && latestTurn.status === 'running')
+  }
+  if (!thread.session && thread.activeTurn) {
+    const phase = thread.activeTurn.phase
+    return phase !== 'completed' && phase !== 'failed' && phase !== 'interrupted' && phase !== 'idle'
+  }
   const turnSt = thread.latestTurn?.status
   if (turnSt === 'running') return true
   if (latestTurnStatusIsTerminalForActiveTurn(thread)) return false

@@ -27,6 +27,21 @@ type PartPhase = 'pending' | 'running' | 'terminal'
 type PermissionPhase = 'open' | 'replying' | 'resolved'
 type QuestionPhase = 'open' | 'resolved'
 
+interface PermissionLifecycleRecord {
+  phase: PermissionPhase
+  requestType: CanonicalRequestType
+  request: PermissionRequest
+  toolCallId?: string
+  detail: string
+  args: unknown
+  finalDecision?: ProviderApprovalDecision
+}
+
+export interface PermissionReplyTransition {
+  effects: ProviderRuntimeEvent[]
+  shouldReplyToSdk: boolean
+}
+
 // ─── SDK event shape ─────────────────────────────────────────────────────────
 
 export type SdkEventRaw = {
@@ -393,6 +408,7 @@ export class OpenCodeSessionFsm {
   private readonly partPhaseById = new Map<string, PartPhase>()
   private readonly permissionPhaseById = new Map<string, PermissionPhase>()
   private readonly permissionTypeById = new Map<string, CanonicalRequestType>()
+  private readonly permissionById = new Map<string, PermissionLifecycleRecord>()
   private readonly toolKeyToRequestId = new Map<string, string>()
   private readonly questionPhaseById = new Map<string, QuestionPhase>()
   private readonly completedReasoningPartIds = new Set<string>()
@@ -437,6 +453,14 @@ export class OpenCodeSessionFsm {
 
   get partById(): ReadonlyMap<string, Part> {
     return this._partById
+  }
+
+  hasPermissionRequest(requestId: string): boolean {
+    return this.permissionPhaseById.has(requestId)
+  }
+
+  hasQuestionRequest(requestId: string): boolean {
+    return this.questionPhaseById.has(requestId)
   }
 
   setInteractionMode(mode: string): void {
@@ -617,12 +641,15 @@ export class OpenCodeSessionFsm {
     requestId: string,
     decision: ProviderApprovalDecision,
     raw: unknown
-  ): ProviderRuntimeEvent[] {
-    const phase = this.permissionPhaseById.get(requestId)
-    if (!phase || phase === 'resolved') return []
+  ): PermissionReplyTransition {
+    const record = this.permissionById.get(requestId)
+    if (!record || record.phase !== 'open') {
+      return { effects: [], shouldReplyToSdk: false }
+    }
+    record.phase = 'replying'
     this.permissionPhaseById.set(requestId, 'replying')
-    // Optimistic resolution
-    return this.resolvePermission(requestId, decision, raw)
+    const effects = this.resolvePermission(requestId, decision, raw)
+    return { effects, shouldReplyToSdk: effects.length > 0 }
   }
 
   /**
@@ -642,8 +669,13 @@ export class OpenCodeSessionFsm {
     const phase = this.permissionPhaseById.get(requestId)
     if (!phase || phase === 'resolved') return []
     this.permissionPhaseById.set(requestId, 'resolved')
+    const record = this.permissionById.get(requestId)
+    if (record) {
+      record.phase = 'resolved'
+      record.finalDecision = decision
+    }
     this._pendingPermissions.delete(requestId)
-    const requestType = this.permissionTypeById.get(requestId) ?? 'unknown'
+    const requestType = record?.requestType ?? this.permissionTypeById.get(requestId) ?? 'unknown'
     const turnId = this._activeTurnId ?? this._lastTurnId
     return [
       this.buildEvent({
@@ -925,11 +957,35 @@ export class OpenCodeSessionFsm {
     const patterns = Array.isArray(event.properties.patterns)
       ? (event.properties.patterns as string[])
       : []
+    const existing = this.permissionById.get(id)
+    if (existing) {
+      if (existing.phase !== 'open') return []
+      existing.requestType = requestType
+      existing.request = event.properties as unknown as PermissionRequest
+      existing.toolCallId = tool?.callID
+      existing.detail =
+        patterns.length > 0 ? patterns.join('\n') : String(event.properties.permission ?? '')
+      existing.args = event.properties.metadata
+      this.permissionTypeById.set(id, requestType)
+      if (tool?.callID) this.toolKeyToRequestId.set(tool.callID, id)
+      this._pendingPermissions.set(id, existing.request)
+      return []
+    }
 
     this.permissionPhaseById.set(id, 'open')
     this.permissionTypeById.set(id, requestType)
     if (tool?.callID) this.toolKeyToRequestId.set(tool.callID, id)
     this._pendingPermissions.set(id, event.properties as unknown as PermissionRequest)
+    const detail =
+      patterns.length > 0 ? patterns.join('\n') : String(event.properties.permission ?? '')
+    this.permissionById.set(id, {
+      phase: 'open',
+      requestType,
+      request: event.properties as unknown as PermissionRequest,
+      toolCallId: tool?.callID,
+      detail,
+      args: event.properties.metadata
+    })
 
     const permissionFileEdit =
       requestType === 'file_change_approval'
@@ -946,8 +1002,7 @@ export class OpenCodeSessionFsm {
         payload: {
           requestType,
           ...(tool?.callID ? { toolCallId: tool.callID } : {}),
-          detail:
-            patterns.length > 0 ? patterns.join('\n') : String(event.properties.permission ?? ''),
+          detail,
           args: event.properties.metadata,
           ...(permissionFileEdit ? { fileEditChanges: permissionFileEdit } : {})
         }

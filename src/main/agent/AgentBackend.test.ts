@@ -396,6 +396,147 @@ describe('AgentBackend', () => {
     )
   })
 
+  it('marks running sessions stopped before app quit even when provider disposal emits no state', async () => {
+    const db = openInMemoryDatabase()
+    const threadId = 'thread:quit-running'
+    const projectId = 'project:quit-running'
+    const createdAt = '2026-04-19T00:00:00.000Z'
+    const backend = new AgentBackend({ db })
+    const stopSpy = vi.spyOn(backend.providers, 'stopSession').mockResolvedValue(undefined)
+
+    await backend.dispatchCommand({
+      type: 'project.create',
+      commandId: 'cmd-project',
+      projectId,
+      name: 'Quit Project',
+      path: '/tmp/project',
+      createdAt
+    })
+    await backend.dispatchCommand({
+      type: 'thread.create',
+      commandId: 'cmd-thread',
+      threadId,
+      projectId,
+      title: 'Quit running',
+      cwd: '/tmp/project',
+      createdAt
+    })
+    backend.engine.setSession({
+      threadId,
+      status: 'running',
+      providerName: 'opencode',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'opencode/free',
+      effort: 'low',
+      activeTurnId: 'turn-quit',
+      activePlanId: null,
+      lastError: null,
+      createdAt
+    })
+    backend.engine.setLatestTurn(threadId, {
+      id: 'turn-quit',
+      status: 'running',
+      startedAt: createdAt,
+      completedAt: null
+    })
+    backend.engine.setActiveTurn({
+      threadId,
+      activeTurn: {
+        turnId: 'turn-quit',
+        phase: 'tool_running',
+        activeItemIds: ['tool:read'],
+        visibleIndicator: 'tool',
+        startedAt: createdAt,
+        updatedAt: createdAt
+      },
+      createdAt
+    })
+    backend.engine.upsertActivity(
+      {
+        id: 'tool:read',
+        kind: 'tool.updated',
+        tone: 'tool',
+        summary: 'read',
+        payload: { status: 'running', title: 'read' },
+        turnId: 'turn-quit',
+        createdAt
+      },
+      threadId
+    )
+
+    await backend.prepareQuit()
+    const thread = backend.engine.getThread(threadId)
+
+    expect(stopSpy).toHaveBeenCalledWith('opencode', { threadId })
+    expect(thread.session?.status).toBe('stopped')
+    expect(thread.session?.activeTurnId).toBeNull()
+    expect(thread.activeTurn).toBeNull()
+    expect(thread.latestTurn?.status).toBe('interrupted')
+    expect(thread.activities.find((activity) => activity.id === 'tool:read')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        summary: 'read (interrupted on app quit)',
+        payload: expect.objectContaining({ status: 'failed' }),
+        resolved: true
+      })
+    )
+  })
+
+  it('marks running sessions stopped when the last app window closes', async () => {
+    const db = openInMemoryDatabase()
+    const threadId = 'thread:window-close-running'
+    const projectId = 'project:window-close-running'
+    const backend = new AgentBackend({ useFakeProvider: true, db })
+    const stopSpy = vi.spyOn(backend.providers, 'stopSession').mockResolvedValue(undefined)
+    const createdAt = '2026-04-19T00:00:00.000Z'
+
+    await backend.dispatchCommand({
+      type: 'project.create',
+      commandId: 'cmd-project',
+      projectId,
+      name: 'Window Close Project',
+      path: '/tmp/project',
+      createdAt
+    })
+    await backend.dispatchCommand({
+      type: 'thread.create',
+      commandId: 'cmd-thread',
+      threadId,
+      projectId,
+      title: 'Window close running',
+      cwd: '/tmp/project',
+      createdAt
+    })
+    backend.engine.setSession({
+      threadId,
+      status: 'starting',
+      providerName: 'codex',
+      runtimeMode: 'auto-accept-edits',
+      interactionMode: 'default',
+      model: 'gpt-5.4',
+      effort: undefined,
+      activeTurnId: 'turn-close',
+      activePlanId: null,
+      lastError: null,
+      createdAt
+    })
+    backend.engine.setLatestTurn(threadId, {
+      id: 'turn-close',
+      status: 'running',
+      startedAt: createdAt,
+      completedAt: null
+    })
+
+    await backend.prepareWindowClose()
+    const thread = backend.engine.getThread(threadId)
+
+    expect(stopSpy).toHaveBeenCalledWith('codex', { threadId })
+    expect(thread.session?.status).toBe('stopped')
+    expect(thread.session?.activeTurnId).toBeNull()
+    expect(thread.latestTurn?.status).toBe('interrupted')
+  })
+
   it('re-establishes a persisted provider session before responding to user input after restart', async () => {
     const db = openInMemoryDatabase()
     const threadId = 'thread:resume-before-user-input'

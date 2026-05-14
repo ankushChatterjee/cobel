@@ -23,6 +23,7 @@ import {
   type StartSessionInput,
   ProviderEventBus
 } from '../types'
+import type { ProviderLifecycleCapabilities } from '../types'
 import {
   buildOpenCodePermissionRules,
   connectToOpenCodeServer,
@@ -68,6 +69,10 @@ interface OpenCodeSessionContext {
   readonly fsm: OpenCodeSessionFsm
   stopped: boolean
   readonly eventsAbortController: AbortController
+  readonly reconciledMessageIds: Set<string>
+  readonly reconciledPartSnapshots: Map<string, string>
+  reconciledIdle: boolean
+  reconciliationTimer: NodeJS.Timeout | null
 }
 
 interface OpenCodeProbeResult {
@@ -121,6 +126,11 @@ function resolveOpenCodePromptVariant(
 export class OpenCodeAdapter implements ProviderAdapter {
   readonly id = PROVIDER
   readonly supportsStructuredOutput = false
+  readonly lifecycleCapabilities: ProviderLifecycleCapabilities = {
+    completesOnReadySession: true,
+    closesOnApprovalDecline: false,
+    promotesRuntimeErrorsToTurnFailure: 'fatal-only'
+  }
   private readonly bus = new ProviderEventBus()
   private readonly sessions = new Map<string, OpenCodeSessionContext>()
   private probeCache: { at: number; result: OpenCodeProbeResult } | null = null
@@ -285,6 +295,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     let createdSessionViaApi = false
     if (!openCodeSessionId) {
       const created = await client.session.create({
+        directory,
         title: `Thread ${input.threadId}`,
         permission: buildOpenCodePermissionRules(input.runtimeMode)
       })
@@ -339,18 +350,23 @@ export class OpenCodeAdapter implements ProviderAdapter {
       variantByEffort,
       fsm,
       stopped: false,
-      eventsAbortController: new AbortController()
+      eventsAbortController: new AbortController(),
+      reconciledMessageIds: new Set(),
+      reconciledPartSnapshots: new Map(),
+      reconciledIdle: false,
+      reconciliationTimer: null
     }
     const race = this.sessions.get(input.threadId)
     if (race && !race.stopped) {
       if (race.openCodeSessionId !== openCodeSessionId) {
-        await client.session.abort({ sessionID: openCodeSessionId }).catch(() => undefined)
+        await client.session.abort({ sessionID: openCodeSessionId, directory }).catch(() => undefined)
       }
       server.close()
       return race.session
     }
     this.sessions.set(input.threadId, context)
     this.startEventPump(context)
+    this.startMessageReconciliation(context)
     this.emit({
       ...buildEventBase({ threadId: input.threadId }),
       type: 'session.state.changed',
@@ -401,11 +417,13 @@ export class OpenCodeAdapter implements ProviderAdapter {
     try {
       await ctx.client.session.promptAsync({
         sessionID: ctx.openCodeSessionId,
+        directory: ctx.directory,
         model: { providerID: parsed.providerID, modelID: parsed.modelID },
         ...(agent ? { agent } : {}),
         ...(variant ? { variant } : {}),
         parts: [...(text ? [{ type: 'text' as const, text }] : []), ...fileParts]
       })
+      void this.reconcileSessionMessages(ctx)
     } catch (e) {
       // If we queued this turn but promptAsync failed, unqueue it
       ctx.fsm.resetForNewTurn()
@@ -444,6 +462,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       const parsed = parseOpenCodeModelSlug(slug)
       if (!parsed) return null
       const titleSession = await client.session.create({
+        directory,
         title: 'title-gen',
         permission: buildOpenCodePermissionRules('approval-required')
       })
@@ -452,6 +471,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       const prompt = buildThreadTitlePrompt(input.input)
       const result = await client.session.prompt({
         sessionID: sid,
+        directory,
         model: { providerID: parsed.providerID, modelID: parsed.modelID },
         parts: [{ type: 'text', text: prompt }],
         ...(input.useStructuredOutput
@@ -464,7 +484,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
             }
           : {})
       })
-      await client.session.delete({ sessionID: sid }).catch(() => undefined)
+      await client.session.delete({ sessionID: sid, directory }).catch(() => undefined)
       const structured = (result.data?.info as { structured?: unknown })?.structured
       if (
         structured &&
@@ -491,7 +511,9 @@ export class OpenCodeAdapter implements ProviderAdapter {
   async interruptTurn(input: { threadId: string; turnId?: string }): Promise<void> {
     const ctx = this.sessions.get(input.threadId)
     if (!ctx) return
-    await ctx.client.session.abort({ sessionID: ctx.openCodeSessionId }).catch(() => undefined)
+    await ctx.client.session
+      .abort({ sessionID: ctx.openCodeSessionId, directory: ctx.directory })
+      .catch(() => undefined)
     const tid = input.turnId ?? ctx.fsm.activeTurnId
     const effects = ctx.fsm.doInterrupt(tid)
     for (const e of effects) this.emit(e)
@@ -499,7 +521,10 @@ export class OpenCodeAdapter implements ProviderAdapter {
 
   async rollbackConversation(input: { threadId: string; numTurns: number }): Promise<void> {
     const ctx = this.requireSession(input.threadId)
-    const messages = await ctx.client.session.messages({ sessionID: ctx.openCodeSessionId })
+    const messages = await ctx.client.session.messages({
+      sessionID: ctx.openCodeSessionId,
+      directory: ctx.directory
+    })
     const data = messages.data as Array<{ info?: { role?: string; id?: string } }> | undefined
     const list = data ?? []
     const assistantMessages = list.filter((m) => m.info?.role === 'assistant')
@@ -518,16 +543,30 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }): Promise<void> {
     const ctx = this.requireSession(input.threadId)
     const perm = ctx.fsm.pendingPermissions.get(input.requestId)
-    if (!perm) return
-    // Mark as replying so duplicate calls are no-ops
-    ctx.fsm.markPermissionReplying(input.requestId)
+    if (!perm) {
+      if (ctx.fsm.hasPermissionRequest(input.requestId)) return
+      this.emit({
+        ...buildEventBase({ threadId: input.threadId, requestId: input.requestId }),
+        type: 'request.resolved',
+        payload: {
+          requestType: 'unknown',
+          decision: 'cancel',
+          resolution: { reason: 'stale_after_restart' }
+        }
+      })
+      return
+    }
+    const { effects, shouldReplyToSdk } = ctx.fsm.replyToPermission(
+      input.requestId,
+      input.decision,
+      undefined
+    )
+    for (const e of effects) this.emit(e)
+    if (!shouldReplyToSdk) return
     await ctx.client.permission.reply({
       requestID: input.requestId,
       reply: toOpenCodePermissionReply(input.decision)
     })
-    // Optimistic local resolution
-    const effects = ctx.fsm.replyToPermission(input.requestId, input.decision, undefined)
-    for (const e of effects) this.emit(e)
   }
 
   async respondToUserInput(input: {
@@ -537,15 +576,23 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }): Promise<void> {
     const ctx = this.requireSession(input.threadId)
     const request = ctx.fsm.pendingQuestions.get(input.requestId)
-    if (!request) throw new Error(`Unknown pending question request: ${input.requestId}`)
+    if (!request) {
+      if (ctx.fsm.hasQuestionRequest(input.requestId)) return
+      this.emit({
+        ...buildEventBase({ threadId: input.threadId, requestId: input.requestId }),
+        type: 'user-input.resolved',
+        payload: { answers: input.answers }
+      })
+      return
+    }
     const answers = toOpenCodeQuestionAnswers(request, input.answers)
+    // B8: Optimistic local resolution — close even if SDK reply or echo is delayed.
+    const effects = ctx.fsm.replyToQuestion(input.requestId, input.answers, request, undefined)
+    for (const e of effects) this.emit(e)
     await ctx.client.question.reply({
       requestID: input.requestId,
       answers
     })
-    // B8: Optimistic local resolution — close even if echo is delayed
-    const effects = ctx.fsm.replyToQuestion(input.requestId, input.answers, request, undefined)
-    for (const e of effects) this.emit(e)
   }
 
   async stopSession(input: { threadId: string }): Promise<void> {
@@ -563,7 +610,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
   async readThread(input: { threadId: string }): Promise<unknown> {
     const ctx = this.sessions.get(input.threadId)
     if (!ctx) return null
-    return ctx.client.session.messages({ sessionID: ctx.openCodeSessionId })
+    return ctx.client.session.messages({ sessionID: ctx.openCodeSessionId, directory: ctx.directory })
   }
 
   private emit(event: ProviderRuntimeEvent): void {
@@ -611,9 +658,10 @@ export class OpenCodeAdapter implements ProviderAdapter {
   private startEventPump(context: OpenCodeSessionContext): void {
     void (async () => {
       try {
-        const subscription = await context.client.event.subscribe(undefined, {
-          signal: context.eventsAbortController.signal
-        })
+        const subscription = await context.client.event.subscribe(
+          { directory: context.directory },
+          { signal: context.eventsAbortController.signal }
+        )
         for await (const rawEvent of subscription.stream) {
           dumpOpenCodeSubscribeRawMessage(rawEvent, { threadId: context.session.threadId })
           const event = rawEvent as SdkEvent
@@ -637,6 +685,106 @@ export class OpenCodeAdapter implements ProviderAdapter {
         `OpenCode server exited unexpectedly (${signal ?? code ?? 'unknown'}).`
       )
     })
+  }
+
+  private startMessageReconciliation(context: OpenCodeSessionContext): void {
+    if (context.reconciliationTimer) return
+    const tick = (): void => {
+      if (context.stopped) return
+      void this.reconcileSessionMessages(context)
+    }
+    context.reconciliationTimer = setInterval(tick, 750)
+    void this.reconcileSessionMessages(context)
+  }
+
+  private async reconcileSessionMessages(context: OpenCodeSessionContext): Promise<void> {
+    if (context.stopped) return
+    try {
+      const response = await context.client.session.messages({
+        sessionID: context.openCodeSessionId,
+        directory: context.directory
+      })
+      if (context.stopped) return
+      const messages = Array.isArray(response.data) ? response.data : []
+      for (const message of messages) {
+        const info = readObject(message, 'info')
+        const messageId = readString(info, 'id')
+        if (!messageId) continue
+        if (!context.reconciledMessageIds.has(messageId)) {
+          context.reconciledMessageIds.add(messageId)
+          this.dispatchOpenCodeRaw(context, {
+            type: 'message.updated',
+            properties: {
+              sessionID: context.openCodeSessionId,
+              info
+            }
+          })
+        }
+
+        const parts = readArray(message, 'parts')
+        for (const part of parts) {
+          const partId = readString(part, 'id')
+          if (!partId) continue
+          const snapshot = stableSnapshot(part)
+          if (context.reconciledPartSnapshots.get(partId) === snapshot) continue
+          context.reconciledPartSnapshots.set(partId, snapshot)
+          this.dispatchOpenCodeRaw(context, {
+            type: 'message.part.updated',
+            properties: {
+              sessionID: context.openCodeSessionId,
+              part
+            }
+          })
+        }
+
+        if (context.reconciledMessageIds.has(messageId)) {
+          this.dispatchOpenCodeRaw(context, {
+            type: 'message.updated',
+            properties: {
+              sessionID: context.openCodeSessionId,
+              info
+            }
+          })
+        }
+      }
+      this.dispatchReconciledIdleIfComplete(context, messages)
+    } catch (error) {
+      if (context.stopped) return
+      const msg = error instanceof Error ? error.message : String(error)
+      traceCommandEvent('provider.runtime', {
+        provider: 'opencode',
+        threadId: context.session.threadId,
+        method: 'opencode.reconcile',
+        runtimeType: 'reconcile.error',
+        error: msg
+      })
+    }
+  }
+
+  private dispatchReconciledIdleIfComplete(
+    context: OpenCodeSessionContext,
+    messages: unknown[]
+  ): void {
+    if (context.reconciledIdle) return
+    const latestAssistant = latestAssistantMessageInfo(messages)
+    if (!latestAssistant) return
+    const finish = readString(latestAssistant, 'finish')
+    if (!finish || finish === 'tool-calls') return
+    const time = readObject(latestAssistant, 'time')
+    if (!readPositiveNumber(time, 'completed')) return
+    context.reconciledIdle = true
+    this.dispatchOpenCodeRaw(context, {
+      type: 'session.idle',
+      properties: {
+        sessionID: context.openCodeSessionId
+      }
+    })
+  }
+
+  private dispatchOpenCodeRaw(context: OpenCodeSessionContext, event: SdkEvent): void {
+    if (context.stopped) return
+    const effects = context.fsm.dispatch(event)
+    for (const e of effects) this.emit(e)
   }
 
   private emitUnexpectedExit(context: OpenCodeSessionContext, message: string): void {
@@ -667,14 +815,58 @@ export class OpenCodeAdapter implements ProviderAdapter {
 async function stopOpenCodeContext(context: OpenCodeSessionContext): Promise<void> {
   context.stopped = true
   context.eventsAbortController.abort()
+  if (context.reconciliationTimer) {
+    clearInterval(context.reconciliationTimer)
+    context.reconciliationTimer = null
+  }
   try {
     await context.client.session
-      .abort({ sessionID: context.openCodeSessionId })
+      .abort({ sessionID: context.openCodeSessionId, directory: context.directory })
       .catch(() => undefined)
   } catch {
     // ignore
   }
   context.server.close()
+}
+
+function readObject(value: unknown, key: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object') return {}
+  const child = (value as Record<string, unknown>)[key]
+  return child && typeof child === 'object' ? (child as Record<string, unknown>) : {}
+}
+
+function readArray(value: unknown, key: string): unknown[] {
+  if (!value || typeof value !== 'object') return []
+  const child = (value as Record<string, unknown>)[key]
+  return Array.isArray(child) ? child : []
+}
+
+function readString(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const child = (value as Record<string, unknown>)[key]
+  return typeof child === 'string' ? child : undefined
+}
+
+function readPositiveNumber(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const child = (value as Record<string, unknown>)[key]
+  return typeof child === 'number' && Number.isFinite(child) && child > 0 ? child : undefined
+}
+
+function latestAssistantMessageInfo(messages: unknown[]): Record<string, unknown> | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const info = readObject(messages[i], 'info')
+    if (readString(info, 'role') === 'assistant') return info
+  }
+  return undefined
+}
+
+function stableSnapshot(value: unknown): string {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
 }
 
 function resolveBinarySafe(binaryPath: string): string | null {

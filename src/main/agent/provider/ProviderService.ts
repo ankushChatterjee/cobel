@@ -11,10 +11,12 @@ import type {
 } from '../../../shared/agent'
 import type {
   GenerateThreadTitleInput,
+  ProviderLifecycleCapabilities,
   ProviderAdapter,
   SendTurnInput,
   StartSessionInput
 } from './types'
+import { DEFAULT_PROVIDER_LIFECYCLE_CAPABILITIES } from './types'
 
 export class ProviderService {
   private readonly adapters = new Map<ProviderId, ProviderAdapter>()
@@ -121,6 +123,10 @@ export class ProviderService {
 
   async stopSession(provider: ProviderId, input: StopSessionInput): Promise<void> {
     await this.getAdapter(provider).stopSession(input)
+  }
+
+  getLifecycleCapabilities(provider: ProviderId): ProviderLifecycleCapabilities {
+    return this.adapters.get(provider)?.lifecycleCapabilities ?? DEFAULT_PROVIDER_LIFECYCLE_CAPABILITIES
   }
 
   /** Closes all OpenCode child processes (used on app quit). */

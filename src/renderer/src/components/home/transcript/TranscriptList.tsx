@@ -18,6 +18,7 @@ export const TranscriptList = memo(function TranscriptList({
   transcriptTailLabel,
   transcriptTailSpinner,
   turnInProgress,
+  activeTurnId,
   providerName,
   expandedToolIds,
   checkpointByAssistantMessageId,
@@ -33,6 +34,7 @@ export const TranscriptList = memo(function TranscriptList({
   /** Spinner on the tail row for non-streaming waits (Exploring, Thinking…, etc.). */
   transcriptTailSpinner: boolean
   turnInProgress: boolean
+  activeTurnId: string | null
   providerName: ProviderId | null
   expandedToolIds: Set<string>
   checkpointByAssistantMessageId: Map<string, OrchestrationCheckpointSummary>
@@ -78,6 +80,8 @@ export const TranscriptList = memo(function TranscriptList({
               key={single.id}
               activity={single.activity}
               expanded={expandedToolIds.has(single.activity.id)}
+              turnInProgress={turnInProgress}
+              activeTurnId={activeTurnId}
               onToggle={() => onToggleTool(single.activity.id)}
             />
           )
@@ -87,6 +91,7 @@ export const TranscriptList = memo(function TranscriptList({
             key={id}
             activities={activities}
             turnInProgress={turnInProgress}
+            activeTurnId={activeTurnId}
             isLatestGroup={isLatestGroup}
             expandedToolIds={expandedToolIds}
             onToggleTool={onToggleTool}

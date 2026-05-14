@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mapProviderEvent } from './CodexAdapter'
+import { CodexAdapter, mapProviderEvent } from './CodexAdapter'
 import type { ProviderEvent } from './CodexAppServerManager'
 
 const baseEvent: Omit<ProviderEvent, 'id' | 'method' | 'payload'> = {
@@ -10,6 +10,14 @@ const baseEvent: Omit<ProviderEvent, 'id' | 'method' | 'payload'> = {
 }
 
 describe('mapProviderEvent', () => {
+  it('exposes Codex lifecycle capabilities from the adapter', () => {
+    expect(new CodexAdapter().lifecycleCapabilities).toEqual({
+      completesOnReadySession: false,
+      closesOnApprovalDecline: true,
+      promotesRuntimeErrorsToTurnFailure: 'fatal-only'
+    })
+  })
+
   it('maps provider warning events to runtime warnings', () => {
     expect(
       mapProviderEvent({
@@ -23,10 +31,10 @@ describe('mapProviderEvent', () => {
     ).toEqual(
       expect.objectContaining({
         type: 'runtime.warning',
-        payload: {
+        payload: expect.objectContaining({
           message: 'MCP transport unavailable: local MCP server connection was refused.',
           detail: { raw: 'rmcp transport closed' }
-        }
+        })
       })
     )
   })

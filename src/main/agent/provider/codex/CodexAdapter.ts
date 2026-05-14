@@ -11,12 +11,17 @@ import { fileEditChangesFromUnknownPayload } from '../../../../shared/fileEditCh
 import { traceCommandEvent } from '../../debug/commandEventTrace'
 import { CodexAppServerManager, type ProviderEvent } from './CodexAppServerManager'
 import { ProviderEventBus } from '../types'
-import type { ProviderAdapter, SendTurnInput, StartSessionInput } from '../types'
+import type { ProviderAdapter, ProviderLifecycleCapabilities, SendTurnInput, StartSessionInput } from '../types'
 import type { ModelInfo } from './codex-api-types'
 
 export class CodexAdapter implements ProviderAdapter {
   readonly id = 'codex' as const
   readonly supportsStructuredOutput = true
+  readonly lifecycleCapabilities: ProviderLifecycleCapabilities = {
+    completesOnReadySession: false,
+    closesOnApprovalDecline: true,
+    promotesRuntimeErrorsToTurnFailure: 'fatal-only'
+  }
   private readonly bus = new ProviderEventBus()
 
   constructor(private readonly manager = new CodexAppServerManager()) {
@@ -161,7 +166,8 @@ export function mapProviderEvent(event: ProviderEvent): ProviderRuntimeEvent | n
       type: event.kind === 'error' ? 'runtime.error' : 'runtime.warning',
       payload: {
         message: event.message ?? (event.kind === 'error' ? 'Codex error' : 'Codex warning'),
-        detail: event.payload
+        detail: event.payload,
+        ...runtimeDiagnosticSeverity(event)
       }
     }
   }
@@ -683,6 +689,22 @@ function readCompletionState(value: unknown): 'completed' | 'failed' | 'cancelle
     readString(turnRecord, 'status') ?? readString(record, 'state') ?? readString(record, 'status')
   if (state === 'failed' || state === 'cancelled' || state === 'interrupted') return state
   return 'completed'
+}
+
+function runtimeDiagnosticSeverity(event: ProviderEvent): {
+  severity?: 'warning' | 'recoverable' | 'fatal'
+  fatal?: boolean
+} {
+  if (event.kind === 'warning') return { severity: 'warning', fatal: false }
+  const payload = readRecord(event.payload)
+  const severity = readString(payload, 'severity')
+  const fatal = payload['fatal']
+  return {
+    ...(severity === 'warning' || severity === 'recoverable' || severity === 'fatal'
+      ? { severity }
+      : {}),
+    ...(typeof fatal === 'boolean' ? { fatal } : {})
+  }
 }
 
 function readQuestions(value: unknown): Array<{

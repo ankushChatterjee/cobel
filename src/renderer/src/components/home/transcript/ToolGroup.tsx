@@ -11,12 +11,14 @@ function isEditActivity(item: ActivityTranscriptItem): boolean {
 export const ToolGroup = memo(function ToolGroup({
   activities,
   turnInProgress,
+  activeTurnId,
   isLatestGroup,
   expandedToolIds,
   onToggleTool
 }: {
   activities: ActivityTranscriptItem[]
   turnInProgress: boolean
+  activeTurnId: string | null
   isLatestGroup: boolean
   expandedToolIds: Set<string>
   onToggleTool: (activityId: string) => void
@@ -24,12 +26,14 @@ export const ToolGroup = memo(function ToolGroup({
   const activityList = activities.map((a) => a.activity)
   const summary = summarizeToolRun(activityList)
   const allComplete = activityList.every(
-    (a) => statusToneForTool(statusFromActivity(a)) === 'is-complete'
+    (a) => statusToneForTool(statusFromActivity(a, { turnInProgress, activeTurnId })) === 'is-complete'
   )
   const anyRunning = activityList.some(
-    (a) => statusToneForTool(statusFromActivity(a)) === 'is-running'
+    (a) => statusToneForTool(statusFromActivity(a, { turnInProgress, activeTurnId })) === 'is-running'
   )
-  const anyError = activityList.some((a) => statusToneForTool(statusFromActivity(a)) === 'is-error')
+  const anyError = activityList.some(
+    (a) => statusToneForTool(statusFromActivity(a, { turnInProgress, activeTurnId })) === 'is-error'
+  )
   const groupTone = anyError
     ? 'is-error'
     : anyRunning
@@ -105,6 +109,8 @@ export const ToolGroup = memo(function ToolGroup({
               key={item.id}
               activity={item.activity}
               expanded={expandedToolIds.has(item.activity.id)}
+              turnInProgress={turnInProgress}
+              activeTurnId={activeTurnId}
               onToggle={() => onToggleTool(item.activity.id)}
             />
           ))}
@@ -115,6 +121,8 @@ export const ToolGroup = memo(function ToolGroup({
           key={item.id}
           activity={item.activity}
           expanded={expandedToolIds.has(item.activity.id)}
+          turnInProgress={turnInProgress}
+          activeTurnId={activeTurnId}
           onToggle={() => onToggleTool(item.activity.id)}
         />
       ))}

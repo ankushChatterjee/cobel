@@ -199,7 +199,12 @@ export type ProviderRuntimeEvent =
     })
   | (RuntimeEventBase & {
       type: 'runtime.error' | 'runtime.warning'
-      payload: { message: string; detail?: unknown }
+      payload: {
+        message: string
+        detail?: unknown
+        severity?: 'warning' | 'recoverable' | 'fatal'
+        fatal?: boolean
+      }
     })
   | (RuntimeEventBase & {
       type: 'runtime.info'
