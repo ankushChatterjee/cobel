@@ -192,6 +192,7 @@ const agentApiMock: AgentApi = {
       )
     })
   }),
+  replayThreadEvents: vi.fn(async () => []),
   subscribeShell: vi.fn((listener) => {
     listener({ kind: 'snapshot', snapshot: shellSnapshot })
     shellListeners.push(listener)

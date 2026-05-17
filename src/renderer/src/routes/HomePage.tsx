@@ -28,7 +28,6 @@ import type {
   RuntimeMode,
   ThreadShellSummary
 } from '../../../shared/agent'
-import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
 import { DEFAULT_THREAD_TITLE } from '../../../shared/threadTitle'
 import {
   DiffPreviewPopover,
@@ -48,7 +47,6 @@ import { ThreadSidebar, PlanSidebarPanel } from '../components/home/ThreadSideba
 import { TranscriptList } from '../components/home/transcript'
 import { SessionErrorBanner } from '../components/home/transcript'
 import {
-  isDiffUpdateActivity,
   isPendingPrompt,
   listPendingRequests,
   normalizePendingRequest,
@@ -81,13 +79,11 @@ import {
   buildCheckpointByAssistantMessageId,
   buildPlanImplementationPrompt,
   buildTranscriptItems,
-  createEmptyThread,
   createId,
   derivePlanTitle,
   findLatestProposedPlan,
   isOrchestrationModelTurnInProgress,
   labelForTranscriptTailIndicator,
-  mergePendingUserMessages,
   projectIdForPath,
   readSessionErrorForDisplay,
   runLegacyMigration,
@@ -107,6 +103,7 @@ import type {
   ThreadSidebarState
 } from '../components/home/types'
 import { deriveTitleSeed } from '../../../shared/threadTitle'
+import { useThreadStream } from '../hooks/useThreadStream'
 
 export function HomePage(): React.JSX.Element {
   const [shell, setShell] = useState<OrchestrationShellSnapshot>({ projects: [], threads: [] })
@@ -116,7 +113,6 @@ export function HomePage(): React.JSX.Element {
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [diffPanelWidth, setDiffPanelWidth] = useState(loadDiffPanelWidth)
   const [openProjectIds, setOpenProjectIds] = useState<Set<string>>(() => new Set())
-  const [thread, setThread] = useState<OrchestrationThread | null>(null)
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null)
   const [providerProbe, setProviderProbe] = useState<ProviderSummary[] | null>(null)
   const [providerProbeError, setProviderProbeError] = useState<string | null>(null)
@@ -126,8 +122,7 @@ export function HomePage(): React.JSX.Element {
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(defaultInteractionMode)
   const [model, setModel] = useState<string>('')
   const [effort, setEffort] = useState<ReasoningEffort>('medium')
-  const lastSequenceRef = useRef(0)
-  const lastCommittedCommandSequenceRef = useRef(0)
+  const renderedToolTraceSignaturesRef = useRef(new Map<string, string>())
   const threadRef = useRef<OrchestrationThread | null>(null)
   const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const diffPanelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
@@ -177,6 +172,18 @@ export function HomePage(): React.JSX.Element {
     [shell.threads, selection.activeProjectId, selection.activeChatId]
   )
   const activeThreadId = activeChat?.id ?? null
+
+  // Thread stream — drives the thread detail state via useThreadStream connector hook.
+  // handleBatchEffects derives side effects from event batches (e.g. workspace diff refresh).
+  const handleBatchEffects = useCallback(
+    (effects: import('../store/orchestrationEventEffects').BatchEventEffects) => {
+      if (effects.refreshWorkspaceDiff) setWorkspaceDiffVersion((v) => v + 1)
+      if (effects.clearComposerDraftForThreadId) setComposerResetToken((t) => t + 1)
+    },
+    [setWorkspaceDiffVersion, setComposerResetToken]
+  )
+  const { thread, updateThread, lastAppliedSequence } = useThreadStream(activeThreadId, handleBatchEffects)
+
   const activeSidebarScopeKey =
     activeThreadId ?? (activeProject ? `project:${activeProject.id}` : null)
 
@@ -269,8 +276,10 @@ export function HomePage(): React.JSX.Element {
     [thread?.updatedAt, workspaceDiffVersion]
   )
   const visibleTodoLists = useMemo(() => visibleTodoListsForThread(thread), [thread])
+  // Keep threadRef in sync for imperative code that needs the current thread
+  // without a state dependency (e.g. send-turn handlers that run on user action).
   useEffect(() => {
-    threadRef.current = thread
+    if (thread) threadRef.current = thread
   }, [thread])
 
   useEffect(() => {
@@ -552,73 +561,7 @@ export function HomePage(): React.JSX.Element {
     [activeThreadId]
   )
 
-  // Thread subscription for active chat
-  useEffect(() => {
-    if (!activeThreadId) return undefined
-
-    lastSequenceRef.current = 0
-    pendingUserMessagesRef.current.clear()
-    const unsubscribe = window.agentApi.subscribeThread({ threadId: activeThreadId }, (item) => {
-      if (item.kind === 'snapshot') {
-        if (item.snapshot.snapshotSequence < lastSequenceRef.current) return
-        lastSequenceRef.current = item.snapshot.snapshotSequence
-        const mergedThread = mergePendingUserMessages(
-          item.snapshot.thread,
-          pendingUserMessagesRef.current
-        )
-        threadRef.current = mergedThread
-        setThread(mergedThread)
-        return
-      }
-
-      if (item.event.sequence <= lastSequenceRef.current) return
-      lastSequenceRef.current = item.event.sequence
-      if (isCommandActivityEvent(item.event)) {
-        void window.agentApi
-          .appendDebugTrace({
-            stage: 'renderer.thread-event.received',
-            payload: {
-              threadId: item.event.threadId,
-              turnId: item.event.activity.turnId ?? null,
-              activityId: item.event.activity.id,
-              itemId: readCommandItemId(item.event.activity.id),
-              itemType:
-                typeof item.event.activity.payload?.itemType === 'string'
-                  ? item.event.activity.payload.itemType
-                  : null,
-              title:
-                typeof item.event.activity.payload?.title === 'string'
-                  ? item.event.activity.payload.title
-                  : null,
-              summary: item.event.activity.summary,
-              status:
-                typeof item.event.activity.payload?.status === 'string'
-                  ? item.event.activity.payload.status
-                  : null,
-              activityKind: item.event.activity.kind,
-              sequence: item.event.sequence
-            }
-          })
-          .catch(() => {})
-      }
-      if (item.event.type === 'thread.message-upserted') {
-        pendingUserMessagesRef.current.delete(item.event.message.id)
-      }
-      if (
-        item.event.type === 'thread.activity-upserted' &&
-        isDiffUpdateActivity(item.event.activity)
-      ) {
-        setWorkspaceDiffVersion((version) => version + 1)
-      }
-      const currentThread =
-        threadRef.current ?? createEmptyThread(item.event.threadId, item.event.createdAt)
-      const nextThread = applyOrchestrationEvent(currentThread, item.event)
-      threadRef.current = nextThread
-      setThread(nextThread)
-    })
-
-    return unsubscribe
-  }, [activeThreadId])
+  // Thread subscription is now managed by useThreadStream (see declaration above).
 
   const scrollConversationToBottomIfStuck = useCallback((): void => {
     if (!shouldStickToBottomRef.current) return
@@ -647,43 +590,24 @@ export function HomePage(): React.JSX.Element {
   }, [thread, scrollConversationToBottomIfStuck])
 
   useEffect(() => {
-    if (!thread) return
-    const latestCommandActivity = [...thread.activities]
-      .filter(
-        (activity) =>
-          activity.payload?.itemType === 'command_execution' &&
-          typeof activity.sequence === 'number'
-      )
-      .sort((left, right) => (right.sequence ?? 0) - (left.sequence ?? 0))[0]
-    if (!latestCommandActivity || typeof latestCommandActivity.sequence !== 'number') return
-    if (latestCommandActivity.sequence <= lastCommittedCommandSequenceRef.current) return
-    lastCommittedCommandSequenceRef.current = latestCommandActivity.sequence
-    void window.agentApi
-      .appendDebugTrace({
-        stage: 'renderer.thread-state.committed',
-        payload: {
-          threadId: thread.id,
-          turnId: latestCommandActivity.turnId ?? null,
-          activityId: latestCommandActivity.id,
-          itemId: readCommandItemId(latestCommandActivity.id),
-          itemType:
-            typeof latestCommandActivity.payload?.itemType === 'string'
-              ? latestCommandActivity.payload.itemType
-              : null,
-          title:
-            typeof latestCommandActivity.payload?.title === 'string'
-              ? latestCommandActivity.payload.title
-              : null,
-          summary: latestCommandActivity.summary,
-          status:
-            typeof latestCommandActivity.payload?.status === 'string'
-              ? latestCommandActivity.payload.status
-              : null,
-          activityKind: latestCommandActivity.kind,
-          sequence: latestCommandActivity.sequence
-        }
-      })
-      .catch(() => {})
+    if (!thread || !window.agentDebug?.traceToolRendering) return
+    const nextIds = new Set<string>()
+    for (const activity of thread.activities) {
+      if (!isTracedToolItemType(activity.payload?.itemType)) continue
+      nextIds.add(activity.id)
+      const signature = toolRenderingTraceSignature(activity)
+      if (renderedToolTraceSignaturesRef.current.get(activity.id) === signature) continue
+      renderedToolTraceSignaturesRef.current.set(activity.id, signature)
+      void window.agentApi
+        .appendDebugTrace({
+          stage: 'renderer.tool-render.activity-state',
+          payload: toolRenderingTracePayload(thread.id, activity)
+        })
+        .catch(() => {})
+    }
+    for (const activityId of renderedToolTraceSignaturesRef.current.keys()) {
+      if (!nextIds.has(activityId)) renderedToolTraceSignaturesRef.current.delete(activityId)
+    }
   }, [thread])
 
   useEffect(() => {
@@ -759,7 +683,7 @@ export function HomePage(): React.JSX.Element {
         attachments: attachments.length > 0 ? attachments : undefined,
         turnId: null,
         streaming: false,
-        sequence: lastSequenceRef.current + 0.5,
+        sequence: lastAppliedSequence + 0.5,
         createdAt,
         updatedAt: createdAt
       }
@@ -769,7 +693,7 @@ export function HomePage(): React.JSX.Element {
         interactionMode === 'plan' && activeSidebarState?.activeTabId?.startsWith('plan:')
           ? activeSidebarState.activeTabId.slice('plan:'.length)
           : undefined
-      setThread((current) =>
+      updateThread((current) =>
         upsertOptimisticUserMessage({
           thread: current,
           threadId: activeThreadId,
@@ -864,7 +788,7 @@ export function HomePage(): React.JSX.Element {
     })
     setSelection({ activeProjectId: targetProject.id, activeChatId: chatId })
     setComposerResetToken((token) => token + 1)
-    setThread(null)
+    updateThread(() => null)
     setError(null)
   }
 
@@ -907,7 +831,7 @@ export function HomePage(): React.JSX.Element {
         activeProjectId: chat.projectId,
         activeChatId: fallbackThread?.id ?? null
       })
-      setThread(null)
+      updateThread(() => null)
       setComposerResetToken((token) => token + 1)
     }
 
@@ -1590,16 +1514,58 @@ function readOpenProjectError(error: unknown): string {
   return message
 }
 
-function isCommandActivityEvent(
-  event: Parameters<typeof applyOrchestrationEvent>[1]
-): event is Extract<
-  Parameters<typeof applyOrchestrationEvent>[1],
-  { type: 'thread.activity-upserted' }
-> {
-  if (event.type !== 'thread.activity-upserted') return false
-  return event.activity.payload?.itemType === 'command_execution'
+function isTracedToolItemType(itemType: unknown): boolean {
+  return itemType === 'command_execution' || itemType === 'file_change'
 }
 
-function readCommandItemId(activityId: string): string | null {
+function toolRenderingTraceSignature(activity: OrchestrationThreadActivity): string {
+  const payload = activity.payload ?? {}
+  return JSON.stringify({
+    kind: activity.kind,
+    sequence: activity.sequence ?? null,
+    summary: activity.summary,
+    status: readPayloadString(payload, 'status'),
+    title: readPayloadString(payload, 'title'),
+    detailLength: readPayloadString(payload, 'detail')?.length ?? 0,
+    outputLength: readPayloadString(payload, 'output')?.length ?? 0,
+    fileEditChangesCount: Array.isArray(payload.fileEditChanges)
+      ? payload.fileEditChanges.length
+      : null,
+    commandActionsCount: Array.isArray(payload.commandActions) ? payload.commandActions.length : null
+  })
+}
+
+function toolRenderingTracePayload(
+  threadId: string,
+  activity: OrchestrationThreadActivity
+): Record<string, unknown> {
+  const payload = activity.payload ?? {}
+  return {
+    threadId,
+    turnId: activity.turnId ?? null,
+    activityId: activity.id,
+    itemId: readToolItemId(activity.id),
+    itemType: readPayloadString(payload, 'itemType'),
+    title: readPayloadString(payload, 'title'),
+    summary: activity.summary,
+    status: readPayloadString(payload, 'status'),
+    activityKind: activity.kind,
+    sequence: activity.sequence ?? null,
+    detailLength: readPayloadString(payload, 'detail')?.length ?? 0,
+    outputLength: readPayloadString(payload, 'output')?.length ?? 0,
+    fileEditChangesCount: Array.isArray(payload.fileEditChanges)
+      ? payload.fileEditChanges.length
+      : null,
+    commandActionsCount: Array.isArray(payload.commandActions) ? payload.commandActions.length : null,
+    payloadKeys: Object.keys(payload).sort()
+  }
+}
+
+function readPayloadString(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key]
+  return typeof value === 'string' ? value : null
+}
+
+function readToolItemId(activityId: string): string | null {
   return activityId.startsWith('tool:') ? activityId.slice('tool:'.length) : null
 }

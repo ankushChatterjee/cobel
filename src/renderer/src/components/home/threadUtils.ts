@@ -237,6 +237,7 @@ export function threadsForProject(
 
 export function buildTranscriptItems(thread: OrchestrationThread | null): TranscriptItem[] {
   if (!thread) return []
+  const syntheticToolActivities = syntheticRunningToolActivities(thread)
   // Merge by time then sequence. Activity `createdAt` is first-seen time (see OrchestrationEngine.upsertActivity);
   // later lifecycle upserts must not advance it or tools render after later assistant text.
   return [
@@ -248,7 +249,7 @@ export function buildTranscriptItems(thread: OrchestrationThread | null): Transc
       workDurationMs: workDurationForMessage(message),
       message
     })),
-    ...thread.activities
+    ...[...thread.activities, ...syntheticToolActivities]
       .filter((activity) => !isHiddenActivity(activity))
       .map((activity): ActivityTranscriptItem => ({
         id: `activity:${activity.id}`,
@@ -263,6 +264,34 @@ export function buildTranscriptItems(thread: OrchestrationThread | null): Transc
     if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt
     return left.sequence - right.sequence
   })
+}
+
+function syntheticRunningToolActivities(
+  thread: OrchestrationThread
+): OrchestrationThread['activities'] {
+  if (!isOrchestrationModelTurnInProgress(thread)) return []
+  const activeTurn = thread.activeTurn
+  if (!activeTurn) return []
+  const existingIds = new Set(thread.activities.map((activity) => activity.id))
+  return activeTurn.activeItemIds
+    .filter((id) => !id.startsWith('approval:'))
+    .map((id) => (id.startsWith('tool:') ? id : `tool:${id}`))
+    .filter((activityId) => !existingIds.has(activityId))
+    .map((activityId, index) => ({
+      id: activityId,
+      kind: 'tool.started' as const,
+      tone: 'tool' as const,
+      summary: 'Running tool',
+      payload: {
+        itemType: 'dynamic_tool_call',
+        status: 'inProgress',
+        title: 'Running tool'
+      },
+      turnId: activeTurn.turnId,
+      sequence: Number.MAX_SAFE_INTEGER - 1_000 + index,
+      resolved: false,
+      createdAt: activeTurn.updatedAt
+    }))
 }
 
 function isEmptyAssistantMessage(item: TranscriptItem): boolean {
@@ -375,6 +404,12 @@ export function threadHasInFlightWorkIndicator(thread: OrchestrationThread | nul
   if (!thread) return false
   const turnInProgress = isOrchestrationModelTurnInProgress(thread)
   const activeTurnId = currentInFlightTurnId(thread)
+  if (
+    turnInProgress &&
+    thread.activeTurn?.activeItemIds.some((id) => !id.startsWith('approval:'))
+  ) {
+    return true
+  }
   for (const activity of thread.activities) {
     if (activity.resolved === true) continue
     if (activity.kind.startsWith('tool.') || activity.kind.startsWith('task.')) {

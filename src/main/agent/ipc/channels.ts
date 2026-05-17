@@ -1,6 +1,7 @@
 export const AGENT_CHANNELS = {
   dispatchCommand: 'agent:dispatch-command',
   subscribeThread: 'agent:subscribe-thread',
+  replayThreadEvents: 'agent:replay-thread-events',
   unsubscribeThread: 'agent:unsubscribe-thread',
   subscribeShell: 'agent:subscribe-shell',
   unsubscribeShell: 'agent:unsubscribe-shell',

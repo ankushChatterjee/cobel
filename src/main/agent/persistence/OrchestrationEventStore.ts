@@ -40,6 +40,9 @@ export class OrchestrationEventStore {
   private readonly insertEvent: ReturnType<Database['prepare']>
   private readonly selectStreamVersion: ReturnType<Database['prepare']>
   private readonly selectAfter: ReturnType<Database['prepare']>
+  private readonly selectLatestSequence: ReturnType<Database['prepare']>
+  private readonly selectLatestThreadSequence: ReturnType<Database['prepare']>
+  private readonly updatePayload: ReturnType<Database['prepare']>
   private readonly insertReceipt: ReturnType<Database['prepare']>
   private readonly selectReceipt: ReturnType<Database['prepare']>
 
@@ -57,6 +60,18 @@ export class OrchestrationEventStore {
     `)
     this.selectAfter = db.prepare(`
       SELECT * FROM orchestration_events WHERE sequence > ? ORDER BY sequence ASC
+    `)
+    this.selectLatestSequence = db.prepare(`
+      SELECT COALESCE(MAX(sequence), 0) AS sequence
+      FROM orchestration_events
+    `)
+    this.selectLatestThreadSequence = db.prepare(`
+      SELECT COALESCE(MAX(sequence), 0) AS sequence
+      FROM orchestration_events
+      WHERE aggregate_kind = 'thread' AND stream_id = ?
+    `)
+    this.updatePayload = db.prepare(`
+      UPDATE orchestration_events SET payload_json = @payload_json WHERE sequence = @sequence
     `)
     this.insertReceipt = db.prepare(`
       INSERT OR IGNORE INTO command_receipts(command_id, accepted_sequence, created_at)
@@ -103,6 +118,25 @@ export class OrchestrationEventStore {
   readAfter(sequence: number): StoredOrchestrationEvent[] {
     const rows = this.selectAfter.all(sequence) as EventRow[]
     return rows.map(rowToEvent)
+  }
+
+  getLatestSequence(): number {
+    const row = (this.selectLatestSequence.get as () => unknown)() as
+      | { sequence: number }
+      | undefined
+    return row?.sequence ?? 0
+  }
+
+  getLatestThreadSequence(threadId: string): number {
+    const row = this.selectLatestThreadSequence.get(threadId) as { sequence: number } | undefined
+    return row?.sequence ?? 0
+  }
+
+  updateEventPayload(sequence: number, payload: unknown): void {
+    this.updatePayload.run({
+      sequence,
+      payload_json: JSON.stringify(payload)
+    })
   }
 
   getCommandReceipt(commandId: string): { acceptedSequence: number; createdAt: string } | null {

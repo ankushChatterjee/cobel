@@ -4,6 +4,9 @@ import { join } from 'node:path'
 
 let dumpWriteQueue = Promise.resolve()
 
+/** Only the live subscribe path remains; adapter.dispatch was removed. */
+export type OpenCodeRawDumpSource = 'sdk.subscribe'
+
 function dumpOpenCodeMessagesEnabled(): boolean {
   const v = process.env.DUMP_OPENCODE_MESSAGES?.trim()
   if (!v) return false
@@ -19,23 +22,28 @@ function resolveDumpFilePath(): string {
 }
 
 /**
- * Appends one line of JSON per raw OpenCode SDK event from `client.event.subscribe()`.
+ * Appends one line of JSON per OpenCode subscribe event.
  * Enabled when `DUMP_OPENCODE_MESSAGES` is set to a truthy value (e.g. `1`, `true`);
  * disabled for `0`, `false`, `no`, `off`. Optional `DUMP_OPENCODE_MESSAGES_PATH` overrides the output file.
  */
-export function dumpOpenCodeSubscribeRawMessage(raw: unknown, context: { threadId: string }): void {
+export function dumpOpenCodeRawMessage(
+  raw: unknown,
+  context: { threadId: string; source: OpenCodeRawDumpSource }
+): void {
   if (!dumpOpenCodeMessagesEnabled()) return
   let serialized: string
   try {
     serialized = JSON.stringify({
       ts: new Date().toISOString(),
       threadId: context.threadId,
+      source: context.source,
       raw
     })
   } catch {
     serialized = JSON.stringify({
       ts: new Date().toISOString(),
       threadId: context.threadId,
+      source: context.source,
       raw: '[unserializable OpenCode event]'
     })
   }

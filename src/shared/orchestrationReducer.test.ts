@@ -164,4 +164,131 @@ describe('applyOrchestrationEvent', () => {
       })
     )
   })
+
+  it('lets a simpler completed file-change activity close a richer running activity', () => {
+    const thread = {
+      ...emptyThread('th1'),
+      activities: [
+        {
+          id: 'tool:call-1',
+          kind: 'tool.updated' as const,
+          tone: 'tool' as const,
+          summary: 'Editing file',
+          payload: {
+            itemType: 'file_change',
+            status: 'inProgress',
+            title: 'src/app.ts',
+            detail: 'large streamed diff',
+            fileEditChanges: [{ path: 'src/app.ts', additions: 1, deletions: 0 }]
+          },
+          turnId: 'turn-1',
+          sequence: 10,
+          createdAt: t0
+        }
+      ]
+    }
+
+    const next = applyOrchestrationEvent(thread, {
+      sequence: 11,
+      type: 'thread.activity-upserted',
+      threadId: 'th1',
+      activity: {
+        id: 'tool:call-1',
+        kind: 'tool.completed',
+        tone: 'tool',
+        summary: 'Edited file',
+        payload: {
+          itemType: 'file_change',
+          status: 'completed',
+          title: 'src/app.ts'
+        },
+        turnId: 'turn-1',
+        sequence: 11,
+        createdAt: t0
+      },
+      createdAt: t0
+    })
+
+    expect(next.activities[0]).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        summary: 'Edited file',
+        payload: expect.objectContaining({
+          status: 'completed',
+          title: 'src/app.ts'
+        })
+      })
+    )
+  })
+
+  it('applies a completed activity after an unrelated higher sequence activity', () => {
+    const withRunningActivity = applyOrchestrationEvent(emptyThread('th1'), {
+      sequence: 10,
+      type: 'thread.activity-upserted',
+      threadId: 'th1',
+      activity: {
+        id: 'tool:call-1',
+        kind: 'tool.started',
+        tone: 'tool',
+        summary: 'Editing file',
+        payload: {
+          itemType: 'file_change',
+          status: 'inProgress',
+          title: 'src/app.ts'
+        },
+        turnId: 'turn-1',
+        sequence: 10,
+        createdAt: t0
+      },
+      createdAt: t0
+    })
+    const withUnrelatedLaterActivity = applyOrchestrationEvent(withRunningActivity, {
+      sequence: 12,
+      type: 'thread.activity-upserted',
+      threadId: 'th1',
+      activity: {
+        id: 'tool:call-2',
+        kind: 'tool.completed',
+        tone: 'tool',
+        summary: 'Ran command',
+        payload: {
+          itemType: 'command_execution',
+          status: 'completed',
+          title: 'npm test'
+        },
+        turnId: 'turn-1',
+        sequence: 12,
+        createdAt: t0
+      },
+      createdAt: t0
+    })
+
+    const next = applyOrchestrationEvent(withUnrelatedLaterActivity, {
+      sequence: 11,
+      type: 'thread.activity-upserted',
+      threadId: 'th1',
+      activity: {
+        id: 'tool:call-1',
+        kind: 'tool.completed',
+        tone: 'tool',
+        summary: 'Edited file',
+        payload: {
+          itemType: 'file_change',
+          status: 'completed',
+          title: 'src/app.ts'
+        },
+        turnId: 'turn-1',
+        sequence: 11,
+        createdAt: t0
+      },
+      createdAt: t0
+    })
+
+    expect(next.activities.find((activity) => activity.id === 'tool:call-1')).toEqual(
+      expect.objectContaining({
+        kind: 'tool.completed',
+        payload: expect.objectContaining({ status: 'completed' })
+      })
+    )
+  })
 })

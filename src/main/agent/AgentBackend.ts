@@ -5,6 +5,7 @@ import type {
   CheckpointWorktreeDiffRequest,
   CheckpointWorktreeDiffResult,
   DispatchResult,
+  OrchestrationEvent,
   OrchestrationShellSnapshot,
   OrchestrationShellStreamItem,
   OrchestrationSession,
@@ -24,6 +25,7 @@ import {
 } from '../../shared/threadTitle'
 import type { Database } from './persistence/Sqlite'
 import { OrchestrationEngine } from './orchestration/OrchestrationEngine'
+import { OrchestrationEventReplay } from './orchestration/OrchestrationEventReplay'
 import { ProviderRuntimeIngestion } from './orchestration/ProviderRuntimeIngestion'
 import { CodexAdapter } from './provider/codex/CodexAdapter'
 import { OpenCodeAdapter } from './provider/opencode/OpenCodeAdapter'
@@ -41,6 +43,7 @@ export class AgentBackend {
   readonly providers: ProviderService
   readonly ingestion: ProviderRuntimeIngestion
   readonly checkpointReactor: CheckpointReactor
+  private readonly eventReplay: OrchestrationEventReplay
   private readonly directory: ProviderSessionDirectory
   private readonly snapshots: SnapshotQuery
   private readonly checkpointStore: CheckpointStore
@@ -56,11 +59,13 @@ export class AgentBackend {
       this.directory = new ProviderSessionDirectory(options.db)
       this.snapshots = snapshots
       this.engine = new OrchestrationEngine({ eventStore, projections, snapshots })
+      this.eventReplay = new OrchestrationEventReplay(eventStore)
     } else {
       // In-memory fallback (tests without DB, legacy mode)
       this.snapshots = createNullSnapshotQuery()
       this.directory = createNullDirectory()
       this.engine = new OrchestrationEngine()
+      this.eventReplay = new OrchestrationEventReplay(null)
     }
 
     this.clearRestartStaleOpenCodeTurns()
@@ -121,6 +126,13 @@ export class AgentBackend {
 
   getThreadSnapshot(threadId: string): OrchestrationThreadStreamItem {
     return { kind: 'snapshot', snapshot: this.engine.getSnapshot(threadId) }
+  }
+
+  replayThreadEvents(input: {
+    threadId: string
+    fromSequenceExclusive: number
+  }): OrchestrationEvent[] {
+    return this.eventReplay.replayThreadEvents(input)
   }
 
   async dispatchCommand(input: ClientOrchestrationCommand): Promise<DispatchResult> {

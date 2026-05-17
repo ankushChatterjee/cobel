@@ -137,6 +137,49 @@ describe('ProviderRuntimeIngestion', () => {
     )
   })
 
+  it('creates a streaming tool tile as soon as a tool approval request opens', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'request.opened',
+        turnId: 'turn-1',
+        requestId: 'approval-1',
+        payload: {
+          requestType: 'command_execution_approval',
+          detail: 'pwd',
+          toolCallId: 'call-1'
+        }
+      })
+    )
+    await ingestion.drain()
+
+    const thread = engine.getThread('thread-1')
+    expect(thread.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'tool:call-1',
+          kind: 'tool.started',
+          tone: 'tool',
+          summary: 'pwd',
+          payload: expect.objectContaining({
+            itemType: 'command_execution',
+            status: 'inProgress',
+            title: 'pwd'
+          })
+        }),
+        expect.objectContaining({
+          id: 'approval:approval-1',
+          kind: 'approval.requested',
+          resolved: false
+        })
+      ])
+    )
+    expect(thread.activeTurn?.visibleIndicator).toBe('approval')
+  })
+
   it('keeps unrelated command approvals open when a different tool completes', async () => {
     const engine = new OrchestrationEngine()
     const ingestion = new ProviderRuntimeIngestion(engine)
@@ -2046,6 +2089,55 @@ describe('ProviderRuntimeIngestion', () => {
     await ingestion.drain()
 
     expect(engine.getThread('thread-1').todoLists).toEqual([])
+  })
+
+  it('tracks structured user input as an active turn wait slot until it resolves', async () => {
+    const engine = new OrchestrationEngine()
+    const ingestion = new ProviderRuntimeIngestion(engine)
+
+    ingestion.enqueue(event({ type: 'turn.started', turnId: 'turn-1', payload: {} }))
+    ingestion.enqueue(
+      event({
+        type: 'user-input.requested',
+        turnId: 'turn-1',
+        requestId: 'input-1',
+        payload: {
+          questions: [
+            {
+              id: 'scope',
+              header: 'Scope',
+              question: 'What should I inspect?',
+              options: [{ label: 'Server', description: 'Inspect server code.' }]
+            }
+          ]
+        }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activeTurn).toEqual(
+      expect.objectContaining({
+        phase: 'waiting_for_input',
+        activeItemIds: ['user-input:input-1']
+      })
+    )
+
+    ingestion.enqueue(
+      event({
+        type: 'user-input.resolved',
+        turnId: 'turn-1',
+        requestId: 'input-1',
+        payload: { answers: { scope: 'Server' } }
+      })
+    )
+    await ingestion.drain()
+
+    expect(engine.getThread('thread-1').activeTurn).toEqual(
+      expect.objectContaining({
+        phase: 'streaming',
+        activeItemIds: []
+      })
+    )
   })
 })
 

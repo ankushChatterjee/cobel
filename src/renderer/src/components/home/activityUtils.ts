@@ -152,7 +152,8 @@ export function statusFromActivity(
     options.activeTurnId !== null &&
     activity.turnId === options.activeTurnId
   const staleNonTerminal =
-    (options.turnInProgress === false || (options.activeTurnId !== undefined && !belongsToActiveTurn)) &&
+    (options.turnInProgress === false ||
+      (activity.turnId !== null && options.activeTurnId !== undefined && !belongsToActiveTurn)) &&
     activity.resolved !== true
   if (staleNonTerminal && (activity.kind === 'tool.updated' || activity.kind === 'task.progress')) {
     return 'completed'

@@ -273,6 +273,55 @@ describe('buildTranscriptItems', () => {
 
     expect(activitySummaries).toEqual(['Running command'])
   })
+
+  it('adds a live placeholder tile for an active tool slot before the activity arrives', () => {
+    const thread = {
+      ...createEmptyThread('th', t0),
+      session: {
+        threadId: 'th',
+        status: 'running' as const,
+        providerName: 'codex' as const,
+        runtimeMode: 'auto-accept-edits' as const,
+        interactionMode: 'default' as const,
+        activeTurnId: 'turn-1',
+        activePlanId: null,
+        lastError: null,
+        updatedAt: t0
+      },
+      latestTurn: {
+        id: 'turn-1',
+        status: 'running' as const,
+        startedAt: t0,
+        completedAt: null
+      },
+      activeTurn: {
+        turnId: 'turn-1',
+        phase: 'tool_running' as const,
+        activeItemIds: ['call-live-1'],
+        visibleIndicator: 'tool' as const,
+        startedAt: t0,
+        updatedAt: t0
+      }
+    }
+
+    const activity = buildTranscriptItems(thread).find(
+      (item) => item.kind === 'activity' && item.activity.id === 'tool:call-live-1'
+    )
+
+    expect(activity).toEqual(
+      expect.objectContaining({
+        kind: 'activity',
+        activity: expect.objectContaining({
+          kind: 'tool.started',
+          summary: 'Running tool',
+          payload: expect.objectContaining({
+            itemType: 'dynamic_tool_call',
+            status: 'inProgress'
+          })
+        })
+      })
+    )
+  })
 })
 
 describe('shouldShowTranscriptEndThinkingRow', () => {
@@ -1008,6 +1057,38 @@ describe('activeTurn selectors', () => {
             createdAt: t0
           }
         ]
+      })
+    ).toBe(false)
+  })
+
+  it('does not show the tool tail row when an active tool slot will synthesize a live tile', () => {
+    expect(
+      selectTranscriptTailRowVisible({
+        ...threadWithActiveTurn({
+          turnId: 't1',
+          phase: 'tool_running',
+          activeItemIds: ['call-live-1'],
+          visibleIndicator: 'tool',
+          startedAt: t0,
+          updatedAt: t0
+        }),
+        session: {
+          threadId: 'th',
+          status: 'running',
+          providerName: 'codex',
+          runtimeMode: 'auto-accept-edits',
+          interactionMode: 'default',
+          activeTurnId: 't1',
+          activePlanId: null,
+          lastError: null,
+          updatedAt: t0
+        },
+        latestTurn: {
+          id: 't1',
+          status: 'running',
+          startedAt: t0,
+          completedAt: null
+        }
       })
     ).toBe(false)
   })
