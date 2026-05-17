@@ -938,69 +938,6 @@ describe('OpenCodeAdapter event mapping', () => {
     stream.close()
   })
 
-  it('reconciles completed OpenCode snapshots into canonical idle when subscribe omits lifecycle events', async () => {
-    const stream = createEventStream()
-    eventSubscribeMock.mockResolvedValue({ stream: stream.stream })
-    messagesMock.mockResolvedValueOnce({ data: [] }).mockResolvedValue({
-      data: [
-        {
-          info: {
-            id: 'message-final',
-            sessionID: 'session:events',
-            role: 'assistant',
-            finish: 'stop',
-            time: { created: 1, completed: 2 }
-          },
-          parts: [
-            {
-              id: 'text-final',
-              sessionID: 'session:events',
-              messageID: 'message-final',
-              type: 'text',
-              text: 'Done.',
-              time: { start: 1, end: 2 }
-            }
-          ]
-        }
-      ]
-    })
-    const adapter = new OpenCodeAdapter()
-    const events: Array<Parameters<Parameters<typeof adapter.streamEvents>[0]>[0]> = []
-    adapter.streamEvents((event) => events.push(event))
-
-    await adapter.startSession({
-      threadId: 'thread-1',
-      cwd: '/tmp/project',
-      runtimeMode: 'auto-accept-edits',
-      interactionMode: 'default',
-      model: 'anthropic/claude-sonnet-4'
-    })
-    await adapter.sendTurn({
-      threadId: 'thread-1',
-      input: 'finish',
-      model: 'anthropic/claude-sonnet-4',
-      interactionMode: 'default'
-    })
-
-    await vi.waitFor(() =>
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          type: 'turn.completed',
-          payload: expect.objectContaining({ state: 'completed' })
-        })
-      )
-    )
-    expect(events.filter((event) => event.type === 'turn.completed')).toHaveLength(1)
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: 'content.delta',
-        payload: expect.objectContaining({ delta: 'Done.' })
-      })
-    )
-
-    stream.close()
-  })
-
   it('ignores stale running tool snapshots after OpenCode reports the same tool completed', async () => {
     const stream = createEventStream()
     eventSubscribeMock.mockResolvedValue({ stream: stream.stream })

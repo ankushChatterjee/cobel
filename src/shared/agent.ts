@@ -32,6 +32,7 @@ export type CanonicalItemType =
   | 'plan'
   | 'command_execution'
   | 'file_change'
+  | 'file_read'
   | 'mcp_tool_call'
   | 'dynamic_tool_call'
   | 'collab_agent_tool_call'
@@ -639,6 +640,111 @@ export type ClientOrchestrationCommand =
       createdAt: string
     }
 
+/**
+ * Command receipt: records that a command with a given id has been processed,
+ * preventing duplicate effects from retried or duplicate provider events.
+ */
+export interface CommandReceipt {
+  commandId: string
+  processedAt: string
+}
+
+/**
+ * Provider-originated orchestration commands produced by the runtime compiler.
+ * Each command has a stable `commandId` (typically `provider:<eventId>:<purpose>`)
+ * so the engine can deduplicate retried or duplicate runtime events.
+ *
+ * Separate from `ClientOrchestrationCommand` (UI-originated commands) — these
+ * flow from provider adapters → compiler → engine dispatch → decider → events.
+ */
+export type OrchestrationCommand =
+  | {
+      type: 'provider.session.update'
+      commandId: string
+      threadId: string
+      status: OrchestrationSession['status']
+      providerName: ProviderId
+      runtimeMode: RuntimeMode
+      interactionMode: InteractionMode
+      model?: string
+      effort?: ReasoningEffort
+      activeTurnId: string | null
+      activePlanId: string | null
+      lastError: string | null
+      createdAt: string
+    }
+  | {
+      type: 'provider.turn.start'
+      commandId: string
+      threadId: string
+      turnId: string
+      provider?: ProviderId
+      model?: string
+      effort?: ReasoningEffort
+      createdAt: string
+    }
+  | {
+      type: 'provider.turn.complete'
+      commandId: string
+      threadId: string
+      turnId: string
+      provider?: ProviderId
+      /** Narrow finalization — see `finalizeTurn` for stale completions. */
+      shadow?: boolean
+      state: 'completed' | 'failed' | 'cancelled' | 'interrupted'
+      errorMessage?: string
+      createdAt: string
+    }
+  | {
+      type: 'provider.message.upsert'
+      commandId: string
+      threadId: string
+      message: OrchestrationMessage
+      createdAt: string
+    }
+  | {
+      type: 'provider.activity.upsert'
+      commandId: string
+      threadId: string
+      activity: OrchestrationThreadActivity
+      createdAt: string
+    }
+  | {
+      type: 'provider.active-turn.set'
+      commandId: string
+      threadId: string
+      activeTurn: ActiveTurnProjection | null
+      createdAt: string
+    }
+  | {
+      type: 'provider.latest-turn.set'
+      commandId: string
+      threadId: string
+      latestTurn: OrchestrationLatestTurn | null
+      createdAt: string
+    }
+  | {
+      type: 'provider.proposed-plan.upsert'
+      commandId: string
+      threadId: string
+      proposedPlan: OrchestrationProposedPlan
+      createdAt: string
+    }
+  | {
+      type: 'provider.todo-list.upsert'
+      commandId: string
+      threadId: string
+      todoList: OrchestrationTodoList
+      createdAt: string
+    }
+  | {
+      type: 'provider.todo-lists.clear'
+      commandId: string
+      threadId: string
+      turnId: string
+      createdAt: string
+    }
+
 export interface DispatchResult {
   accepted: boolean
   commandId: string
@@ -742,6 +848,10 @@ export interface AgentApi {
     input: { threadId: string },
     listener: (item: OrchestrationThreadStreamItem) => void
   ): () => void
+  replayThreadEvents(input: {
+    threadId: string
+    fromSequenceExclusive: number
+  }): Promise<OrchestrationEvent[]>
   subscribeShell(listener: (item: OrchestrationShellStreamItem) => void): () => void
   getShellSnapshot(): Promise<OrchestrationShellSnapshot>
   interruptTurn(input: InterruptTurnInput): Promise<void>

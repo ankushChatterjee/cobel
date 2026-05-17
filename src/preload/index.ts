@@ -8,6 +8,18 @@ import type {
 } from '../shared/agent'
 import { AGENT_CHANNELS } from '../main/agent/ipc/channels'
 
+function envFlagEnabled(value: string | undefined): boolean {
+  if (!value) return false
+  return /^(1|true|yes|on)$/i.test(value.trim())
+}
+
+const agentDebug = {
+  traceToolRendering:
+    envFlagEnabled(process.env.COBEL_TRACE_TOOL_RENDERING) ||
+    envFlagEnabled(process.env.COBEL_DEBUG_EVENTS) ||
+    Boolean(process.env.TRACE_COMMAND_EVENTS_PATH?.trim())
+}
+
 const agentApi: AgentApi = {
   dispatchCommand: (input) => ipcRenderer.invoke(AGENT_CHANNELS.dispatchCommand, input),
   interruptTurn: (input) => ipcRenderer.invoke(AGENT_CHANNELS.interruptTurn, input),
@@ -28,6 +40,7 @@ const agentApi: AgentApi = {
   appendDebugTrace: (input) => ipcRenderer.invoke(AGENT_CHANNELS.appendDebugTrace, input),
   getShellSnapshot: (): Promise<OrchestrationShellSnapshot> =>
     ipcRenderer.invoke(AGENT_CHANNELS.getShellSnapshot),
+  replayThreadEvents: (input) => ipcRenderer.invoke(AGENT_CHANNELS.replayThreadEvents, input),
 
   subscribeThread: (input, listener) => {
     let disposed = false
@@ -93,9 +106,11 @@ const agentApi: AgentApi = {
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('agentApi', agentApi)
+    contextBridge.exposeInMainWorld('agentDebug', agentDebug)
   } catch (error) {
     console.error(error)
   }
 } else {
   ;(window as unknown as { agentApi: AgentApi }).agentApi = agentApi
+  ;(window as unknown as { agentDebug: typeof agentDebug }).agentDebug = agentDebug
 }

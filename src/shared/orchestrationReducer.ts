@@ -1,4 +1,20 @@
+/**
+ * Projector / fold function for the orchestration read model.
+ *
+ * This is the single source of truth for how `OrchestrationEvent`s are applied
+ * to an `OrchestrationThread`. It is used in two places:
+ *
+ * 1. **Backend** — `OrchestrationEngine.apply()` calls it after the decider
+ *    produces events so that the in-memory read model stays in sync with the
+ *    persisted event log.
+ * 2. **Renderer** — `threadStreamReducer.ts` calls it to apply events received
+ *    over IPC so that the UI read model mirrors the backend projection.
+ *
+ * Both sides use exactly the same projection logic, so replay and live
+ * streaming produce identical results.
+ */
 import type { OrchestrationEvent, OrchestrationThread } from './agent'
+import { mergeThreadActivity, mergeThreadSnapshot } from './orchestrationThreadMerge'
 
 export function applyOrchestrationEvent(
   thread: OrchestrationThread,
@@ -8,7 +24,7 @@ export function applyOrchestrationEvent(
 
   switch (event.type) {
     case 'thread.snapshot.changed':
-      return event.thread
+      return mergeThreadSnapshot(thread, event.thread)
     case 'thread.session-set':
       return { ...thread, session: event.session, updatedAt: event.createdAt }
     case 'thread.message-upserted':
@@ -105,53 +121,15 @@ function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
   return next
 }
 
-function upsertActivityById<T extends { id: string; kind: string; payload?: Record<string, unknown> }>(
-  items: T[],
-  item: T
-): T[] {
+function upsertActivityById(
+  items: OrchestrationThread['activities'],
+  item: OrchestrationThread['activities'][number]
+): OrchestrationThread['activities'] {
   const index = items.findIndex((candidate) => candidate.id === item.id)
   if (index === -1) return [...items, item]
-  const existing = items[index]
   const next = [...items]
-  next[index] = preserveTerminalActivity(existing, item)
+  next[index] = mergeThreadActivity(items[index], item)
   return next
-}
-
-function preserveTerminalActivity<T extends { kind: string; payload?: Record<string, unknown> }>(
-  existing: T,
-  incoming: T
-): T {
-  if (!activityIsTerminal(existing) || activityIsTerminal(incoming)) return incoming
-  if (!activityIsNonTerminal(incoming)) return incoming
-  return {
-    ...existing,
-    payload: {
-      ...incoming.payload,
-      ...existing.payload,
-      status: readPayloadString(existing.payload, 'status') ?? 'completed'
-    }
-  }
-}
-
-function activityIsTerminal(activity: { kind: string; payload?: Record<string, unknown> }): boolean {
-  if (activity.kind === 'tool.completed' || activity.kind === 'task.completed') return true
-  const status = readPayloadString(activity.payload, 'status')
-  return status === 'completed' || status === 'success' || status === 'failed' || status === 'declined'
-}
-
-function activityIsNonTerminal(activity: {
-  kind: string
-  payload?: Record<string, unknown>
-}): boolean {
-  if (activity.kind === 'tool.started' || activity.kind === 'tool.updated') return true
-  if (activity.kind === 'task.started' || activity.kind === 'task.progress') return true
-  const status = readPayloadString(activity.payload, 'status')
-  return status === 'inProgress' || status === 'running'
-}
-
-function readPayloadString(payload: Record<string, unknown> | undefined, key: string): string | null {
-  const value = payload?.[key]
-  return typeof value === 'string' ? value : null
 }
 
 function upsertCheckpoint<

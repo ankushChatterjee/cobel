@@ -140,10 +140,10 @@ function toolPartItemId(part: Extract<Part, { type: 'tool' }>): string {
 function toolStateCreatedAt(part: Extract<Part, { type: 'tool' }>): string | undefined {
   switch (part.state.status) {
     case 'running':
-      return isoFromEpochMs(part.state.time.start)
+      return isoFromEpochMs(part.state.time?.start)
     case 'completed':
     case 'error':
-      return isoFromEpochMs(part.state.time.end)
+      return isoFromEpochMs(part.state.time?.end)
     default:
       return undefined
   }

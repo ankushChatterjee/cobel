@@ -171,18 +171,56 @@ export function registerAgentIpc(backend: AgentBackend): void {
       const { subscriptionId } = input
       const webContents = event.sender
       disposeSubscription(subscriptionId)
-      let skippedInitialSnapshot = false
+      let initialSnapshot: ReturnType<AgentBackend['getThreadSnapshot']> | null = null
       const unsubscribe = backend.subscribeThread({ threadId: input.threadId }, (item) => {
-        if (!skippedInitialSnapshot && item.kind === 'snapshot') {
-          skippedInitialSnapshot = true
+        if (!initialSnapshot && item.kind === 'snapshot') {
+          initialSnapshot = item
           return
+        }
+        if (
+          item.kind === 'event' &&
+          item.event.type === 'thread.activity-upserted' &&
+          item.event.activity.payload?.itemType === 'command_execution'
+        ) {
+          traceCommandEvent('ipc.thread.activity-send', {
+            subscriptionId,
+            threadId: item.event.threadId,
+            sequence: item.event.sequence,
+            activityId: item.event.activity.id,
+            itemType: 'command_execution',
+            activityKind: item.event.activity.kind,
+            activitySequence: item.event.activity.sequence ?? null,
+            status:
+              typeof item.event.activity.payload?.status === 'string'
+                ? item.event.activity.payload.status
+                : null,
+            title:
+              typeof item.event.activity.payload?.title === 'string'
+                ? item.event.activity.payload.title
+                : null
+          })
         }
         if (!webContents.isDestroyed())
           webContents.send(AGENT_CHANNELS.threadEvent(subscriptionId), item)
       })
       subscriptions.set(subscriptionId, unsubscribe)
       trackWebContentsSubscription(webContents, subscriptionId)
-      return { subscriptionId, snapshot: backend.getThreadSnapshot(input.threadId) }
+      return { subscriptionId, snapshot: initialSnapshot ?? backend.getThreadSnapshot(input.threadId) }
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_CHANNELS.replayThreadEvents,
+    async (event, input: { threadId?: unknown; fromSequenceExclusive?: unknown }) => {
+      validateSender(event)
+      assertThreadInput(input)
+      if (typeof input.fromSequenceExclusive !== 'number') {
+        throw new Error('fromSequenceExclusive is required.')
+      }
+      return backend.replayThreadEvents({
+        threadId: input.threadId,
+        fromSequenceExclusive: input.fromSequenceExclusive
+      })
     }
   )
 
@@ -302,6 +340,7 @@ export function removeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_CHANNELS.revealPath)
   ipcMain.removeHandler(AGENT_CHANNELS.appendDebugTrace)
   ipcMain.removeHandler(AGENT_CHANNELS.subscribeThread)
+  ipcMain.removeHandler(AGENT_CHANNELS.replayThreadEvents)
   ipcMain.removeHandler(AGENT_CHANNELS.unsubscribeThread)
   ipcMain.removeHandler(AGENT_CHANNELS.subscribeShell)
   ipcMain.removeHandler(AGENT_CHANNELS.unsubscribeShell)

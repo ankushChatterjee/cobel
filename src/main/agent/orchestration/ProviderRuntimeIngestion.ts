@@ -1,26 +1,32 @@
+import { randomUUID } from 'node:crypto'
 import type {
   ActiveTurnProjection,
   CanonicalItemType,
-  OrchestrationMessage,
-  OrchestrationProposedPlan,
-  OrchestrationTodo,
-  OrchestrationTodoList,
+  OrchestrationCommand,
+  OrchestrationSession,
   ReasoningEffort,
   OrchestrationThreadActivity,
   ProviderRuntimeEvent,
-  RuntimeContentStreamKind,
-  RuntimeSessionState
+  RuntimeContentStreamKind
 } from '../../../shared/agent'
-import { mergeFileEditChanges, readCanonicalFileEditChanges } from '../../../shared/fileEditChanges'
-import { mergeFileReadPreview, readCanonicalFileReadPreview } from '../../../shared/fileReadPreview'
 import {
   DEFAULT_PROVIDER_LIFECYCLE_CAPABILITIES,
   type ProviderLifecycleCapabilities
 } from '../provider/types'
+import { reconcileActiveTurnTail, activeTurnProjectionEquals } from './ActiveTurnSurface'
+import { compileResolveReasoningThinkingForTurn } from './compileResolveReasoningThinking'
+import { compilePlanArtifactCommand } from './planArtifactCommands'
+import { compileTodoEvent } from './RuntimeMiscCompiler'
+import { compileApprovalEvent, compileUserInputEvent } from './RuntimeApprovalCompiler'
 import { OrchestrationEngine } from './OrchestrationEngine'
-
-const MAX_BUFFERED_ASSISTANT_CHARS = 24_000
-const MAX_BUFFERED_REASONING_TEXT_CHARS = 16_000
+import {
+  compileRuntimeEvent,
+  type CompileRuntimeEventOptions,
+  type ThreadReader
+} from './RuntimeOperationCompiler'
+import { compileTurnLifecycleEvent } from './RuntimeTurnCompiler'
+import { compileItemEvent } from './RuntimeToolCompiler'
+import { RuntimeMessageCompiler } from './RuntimeMessageCompiler'
 
 export type OrchestrationDomainInput =
   | {
@@ -96,36 +102,9 @@ function openCodeReadyEventMeansTurnIdle(
   return (status as Record<string, unknown>)['type'] === 'idle'
 }
 
-interface AssistantSegmentState {
-  baseKey: string
-  nextSegmentIndex: number
-  activeMessageId: string | null
-  buffer: string
-}
-
-interface PlanBufferState {
-  text: string
-  createdAt: string
-}
-
-function isReasoningEffort(value: string | undefined): value is ReasoningEffort {
-  return (
-    value === undefined ||
-    value === 'none' ||
-    value === 'minimal' ||
-    value === 'low' ||
-    value === 'medium' ||
-    value === 'high' ||
-    value === 'max' ||
-    value === 'xhigh'
-  )
-}
-
 export class ProviderRuntimeIngestion {
   private readonly queue: RuntimeIngestionInput[] = []
-  private readonly assistantSegments = new Map<string, AssistantSegmentState>()
-  private readonly streamedAssistantItems = new Set<string>()
-  private readonly planBuffers = new Map<string, PlanBufferState>()
+  private readonly messageCompiler = new RuntimeMessageCompiler()
   private readonly completedTurns = new Map<string, 'completed' | 'failed'>()
   private draining = false
   private drainPromise: Promise<void> = Promise.resolve()
@@ -135,6 +114,13 @@ export class ProviderRuntimeIngestion {
     private readonly resolveLifecycleCapabilities: ProviderLifecycleResolver = () =>
       DEFAULT_PROVIDER_LIFECYCLE_CAPABILITIES
   ) {}
+
+  private runtimeCompileOptions(): CompileRuntimeEventOptions {
+    return {
+      messageCompiler: this.messageCompiler,
+      completedTurnLookup: (threadId, turnId) => this.completedTurnLookup(threadId, turnId)
+    }
+  }
 
   enqueue(event: ProviderRuntimeEvent): void {
     this.enqueueInput({ source: 'runtime', event })
@@ -203,10 +189,10 @@ export class ProviderRuntimeIngestion {
           }),
           event.createdAt
         )
-        this.engine.setSession({
+        this.dispatchProviderSessionUpdate({
           threadId: event.threadId,
           status: 'starting',
-          providerName: event.provider,
+          provider: event.provider,
           runtimeMode:
             event.runtimeMode ?? this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
           interactionMode:
@@ -247,11 +233,11 @@ export class ProviderRuntimeIngestion {
             createdAt: event.createdAt
           })
         } else {
-          this.engine.setActiveTurn({ threadId: event.threadId, activeTurn: null, createdAt: event.createdAt })
-          this.engine.setSession({
+          this.patchActiveTurn(event.threadId, () => null, event.createdAt)
+          this.dispatchProviderSessionUpdate({
             threadId: event.threadId,
             status: 'error',
-            providerName: event.provider,
+            provider: event.provider,
             runtimeMode:
               this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
             interactionMode:
@@ -297,10 +283,10 @@ export class ProviderRuntimeIngestion {
             createdAt: event.createdAt
           })
         }
-        this.engine.setSession({
+        this.dispatchProviderSessionUpdate({
           threadId: event.threadId,
           status: 'stopped',
-          providerName: event.provider,
+          provider: event.provider,
           runtimeMode:
             this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
           interactionMode:
@@ -312,7 +298,7 @@ export class ProviderRuntimeIngestion {
           lastError: null,
           createdAt: event.createdAt
         })
-        this.engine.setActiveTurn({ threadId: event.threadId, activeTurn: null, createdAt: event.createdAt })
+        this.patchActiveTurn(event.threadId, () => null, event.createdAt)
         return
       }
     }
@@ -326,7 +312,13 @@ export class ProviderRuntimeIngestion {
     const prev = this.engine.getThread(threadId).activeTurn ?? null
     const next = updater(prev)
     if (activeTurnProjectionEquals(prev, next)) return
-    this.engine.setActiveTurn({ threadId, activeTurn: next, createdAt })
+    this.engine.dispatch({
+      type: 'provider.active-turn.set',
+      commandId: `runtime:active-turn:${threadId}:${createdAt}:${randomUUID()}`,
+      threadId,
+      activeTurn: next,
+      createdAt
+    })
   }
 
   /** Re-derive tail phase/indicator from thread state (streaming assistant, tools, thinking, plan). */
@@ -335,123 +327,39 @@ export class ProviderRuntimeIngestion {
       threadId,
       (prev) => {
         if (!prev) return prev
-        return this.reconcileActiveTurnTail(threadId, prev, createdAt)
+        return reconcileActiveTurnTail(this.engine.getThread(threadId), prev, createdAt)
       },
       createdAt
     )
   }
 
-  private reconcileActiveTurnTail(
-    threadId: string,
-    base: ActiveTurnProjection,
+  private dispatchProviderSessionUpdate(input: {
+    threadId: string
+    status: OrchestrationSession['status']
+    provider: ProviderRuntimeEvent['provider']
+    runtimeMode: OrchestrationSession['runtimeMode']
+    interactionMode: OrchestrationSession['interactionMode']
+    model?: OrchestrationSession['model']
+    effort?: OrchestrationSession['effort']
+    activeTurnId: string | null
+    activePlanId: string | null
+    lastError: string | null
     createdAt: string
-  ): ActiveTurnProjection {
-    if (
-      base.phase === 'completed' ||
-      base.phase === 'failed' ||
-      base.phase === 'interrupted' ||
-      base.phase === 'idle' ||
-      base.phase === 'finalizing' ||
-      base.phase === 'queued'
-    ) {
-      return base
-    }
-    if (base.phase === 'waiting_for_input' && base.visibleIndicator === 'approval') {
-      return base
-    }
-    if (base.turnId.startsWith('pending:')) {
-      return { ...base, visibleIndicator: 'exploring', updatedAt: createdAt }
-    }
-
-    const thread = this.engine.getThread(threadId)
-    // Pending approvals take priority over running tools: the user must act
-    // before the session can continue, regardless of what else is in flight.
-    const approvalSlots = base.activeItemIds.filter((id) => id.startsWith('approval:'))
-    if (approvalSlots.length > 0) {
-      return {
-        ...base,
-        phase: 'waiting_for_input',
-        visibleIndicator: 'approval',
-        updatedAt: createdAt
-      }
-    }
-    const toolSlots = base.activeItemIds.filter((id) => !id.startsWith('approval:'))
-    if (toolSlots.length > 0) {
-      return { ...base, phase: 'tool_running', visibleIndicator: 'tool', updatedAt: createdAt }
-    }
-    if (this.turnHasUnresolvedReasoningThinking(thread, base.turnId)) {
-      return { ...base, phase: 'thinking', visibleIndicator: 'thinking', updatedAt: createdAt }
-    }
-    if (this.turnHasStreamingAssistant(thread, base.turnId)) {
-      return { ...base, phase: 'streaming', visibleIndicator: 'assistant_stream', updatedAt: createdAt }
-    }
-    if (this.turnHasStreamingPlan(thread, base.turnId)) {
-      return { ...base, phase: 'streaming', visibleIndicator: 'plan', updatedAt: createdAt }
-    }
-
-    const phase: ActiveTurnProjection['phase'] = base.phase === 'starting' ? 'starting' : 'streaming'
-    return { ...base, phase, visibleIndicator: 'exploring', updatedAt: createdAt }
-  }
-
-  private turnHasUnresolvedReasoningThinking(
-    thread: ReturnType<OrchestrationEngine['getThread']>,
-    turnId: string
-  ): boolean {
-    const sessionTurnId = thread.session?.activeTurnId
-    for (const activity of thread.activities) {
-      if (!activity.id.startsWith('thinking:')) continue
-      if (activity.resolved === true) continue
-      if (readPayloadString(activity.payload, 'itemType') !== 'reasoning') continue
-      const aTurn = activity.turnId
-      if (aTurn) {
-        if (aTurn !== turnId) continue
-      } else if (sessionTurnId !== turnId) {
-        continue
-      }
-      return true
-    }
-    return false
-  }
-
-  private turnHasStreamingAssistant(
-    thread: ReturnType<OrchestrationEngine['getThread']>,
-    turnId: string
-  ): boolean {
-    return thread.messages.some(
-      (m) => m.role === 'assistant' && m.turnId === turnId && m.streaming === true
-    )
-  }
-
-  private turnHasStreamingPlan(
-    thread: ReturnType<OrchestrationEngine['getThread']>,
-    turnId: string
-  ): boolean {
-    return thread.proposedPlans.some((p) => p.turnId === turnId && p.status === 'streaming')
-  }
-
-  private applyTurnCompletedUi(
-    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
-  ): void {
-    const threadId = event.threadId
-    const thread = this.engine.getThread(threadId)
-    const activeTurnId = thread.session?.activeTurnId
-    if (activeTurnId && event.turnId && activeTurnId !== event.turnId) return
-    const prev = thread.activeTurn
-    if (!prev) return
-
-    const mapped = mapTurnCompletedPhase(event.payload.state)
-    // Do not enter `finalizing` waiting on `item.completed`: providers often omit matching completions
-    // for every `item.started`, which left "Running tools…" stuck forever after the turn ended.
-    this.engine.setActiveTurn({
-      threadId,
-      activeTurn: {
-        ...prev,
-        phase: mapped,
-        visibleIndicator: 'none',
-        activeItemIds: [],
-        updatedAt: event.createdAt
-      },
-      createdAt: event.createdAt
+  }): void {
+    void this.engine.dispatch({
+      type: 'provider.session.update',
+      commandId: `runtime:session:${input.threadId}:${input.createdAt}:${randomUUID()}`,
+      threadId: input.threadId,
+      status: input.status,
+      providerName: input.provider,
+      runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
+      model: input.model,
+      effort: input.effort,
+      activeTurnId: input.activeTurnId,
+      activePlanId: input.activePlanId,
+      lastError: input.lastError,
+      createdAt: input.createdAt
     })
   }
 
@@ -491,10 +399,15 @@ export class ProviderRuntimeIngestion {
           const ids = prev.activeItemIds.filter((id) => id !== itemId)
           return this.advanceAfterToolItemChange(event.threadId, prev, ids, event.createdAt)
         }
-        // item.updated: re-derive tail state. OpenCode sometimes sends a stale `running` update
-        // after `completed`; blindly forcing tool_running leaves an empty activeItemIds stuck
-        // in a "tool running" UI phase.
-        return this.reconcileActiveTurnTail(event.threadId, { ...prev, updatedAt: event.createdAt }, event.createdAt)
+        // item.updated: if this is the first time we see the item (reconciliation fired after
+        // `pending` already passed), add it to activeItemIds so the phase advances to tool_running.
+        // Stale `running` updates after `completed` are already dropped by the FSM's partPhaseById
+        // guard before they reach here.
+        if (!prev.activeItemIds.includes(itemId)) {
+          const ids = [...prev.activeItemIds, itemId]
+          return this.advanceAfterToolItemChange(event.threadId, prev, ids, event.createdAt)
+        }
+        return reconcileActiveTurnTail(this.engine.getThread(event.threadId), { ...prev, updatedAt: event.createdAt }, event.createdAt)
       },
       event.createdAt
     )
@@ -511,23 +424,7 @@ export class ProviderRuntimeIngestion {
       activeItemIds: ids,
       updatedAt: createdAt
     }
-    return this.reconcileActiveTurnTail(threadId, draft, createdAt)
-  }
-
-  private toolOutputActivityId(
-    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
-  ): string {
-    if (event.itemId) return `tool:${event.itemId}`
-    const at = this.engine.getThread(event.threadId).activeTurn
-    if (at && at.activeItemIds.length > 0) {
-      for (let i = at.activeItemIds.length - 1; i >= 0; i -= 1) {
-        const slot = at.activeItemIds[i]!
-        if (!slot.startsWith('approval:')) {
-          return `tool:${slot}`
-        }
-      }
-    }
-    return `tool:${event.eventId}`
+    return reconcileActiveTurnTail(this.engine.getThread(threadId), draft, createdAt)
   }
 
   private shouldIgnoreNonTerminalRuntimeEvent(event: ProviderRuntimeEvent): boolean {
@@ -551,43 +448,8 @@ export class ProviderRuntimeIngestion {
     const thread = this.engine.getThread(event.threadId)
     const activeTurnId = thread.session?.activeTurnId
     if (activeTurnId && activeTurnId !== turnId && !activeTurnId.startsWith('pending:')) return
-    this.patchActiveTurn(
-      event.threadId,
-      (prev) => ({
-        turnId,
-        phase: 'starting',
-        activeItemIds: [],
-        visibleIndicator: 'exploring',
-        startedAt: prev?.startedAt ?? event.createdAt,
-        updatedAt: event.createdAt
-      }),
-      event.createdAt
-    )
-    const currentModel = thread.session?.model
-    const currentEffort = thread.session?.effort
-    const nextModel = typeof event.payload.model === 'string' ? event.payload.model : currentModel
-    const nextEffort = isReasoningEffort(event.payload.effort)
-      ? event.payload.effort
-      : currentEffort
-    this.engine.setLatestTurn(event.threadId, {
-      id: turnId,
-      status: 'running',
-      startedAt: event.createdAt,
-      completedAt: null
-    })
-    this.engine.setSession({
-      threadId: event.threadId,
-      status: 'running',
-      providerName: event.provider,
-      runtimeMode: thread.session?.runtimeMode ?? 'auto-accept-edits',
-      interactionMode: thread.session?.interactionMode ?? 'default',
-      model: nextModel,
-      effort: nextEffort,
-      activeTurnId: turnId,
-      activePlanId: thread.session?.activePlanId ?? null,
-      lastError: null,
-      createdAt: event.createdAt
-    })
+    const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
+    this.engine.dispatchBatch(compileTurnLifecycleEvent(event, readThread))
   }
 
   private finalizeTurn(input: {
@@ -598,62 +460,64 @@ export class ProviderRuntimeIngestion {
     errorMessage?: string
     createdAt: string
   }): void {
-    const normalizedState = mapTurnCompletedPhase(input.state)
-    const cleanupEvent: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }> = {
-      eventId: `finalize:${input.threadId}:${input.turnId}:${input.createdAt}`,
-      provider: input.provider,
-      threadId: input.threadId,
-      turnId: input.turnId,
-      createdAt: input.createdAt,
-      type: 'turn.completed',
-      payload: {
-        state: input.state,
-        errorMessage: input.errorMessage
-      }
-    }
+    const turnCompleteState =
+      input.state === 'cancelled' ? ('interrupted' as const) : input.state
+    const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
+
     this.completedTurns.set(
       this.turnCompletionKey(input.threadId, input.turnId),
       toolStatusForTurnCompletion(input.state)
     )
-    this.flushAssistant(cleanupEvent, { closeSegment: true, streaming: false })
-    this.finalizePlan(cleanupEvent)
-    this.applyTurnCompletedUi(cleanupEvent)
-    this.finalizeActivitiesForTurn(cleanupEvent)
-    this.engine.clearTodoListsForTurn(input.threadId, input.turnId, input.createdAt)
+
+    const prelude: OrchestrationCommand[] = []
+    prelude.push(
+      ...this.messageCompiler.flushAssistantForThread(
+        input.threadId,
+        input.turnId,
+        input.createdAt,
+        false
+      )
+    )
+    prelude.push(...this.messageCompiler.finalizePlan(input.threadId, input.turnId, input.createdAt, readThread))
+    if (prelude.length > 0) this.engine.dispatchBatch(prelude)
+
+    const nonce = `${input.threadId}:${input.turnId}:${input.createdAt}`
+    const planArtifact = compilePlanArtifactCommand({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      createdAt: input.createdAt,
+      nonce,
+      thread: this.engine.getThread(input.threadId)
+    })
+    if (planArtifact.length > 0) this.engine.dispatchBatch(planArtifact)
 
     const thread = this.engine.getThread(input.threadId)
     const activeTurnId = thread.session?.activeTurnId
     const shouldCloseLifecycle =
       !activeTurnId || activeTurnId === input.turnId || activeTurnId.startsWith('pending:')
-    if (!shouldCloseLifecycle && thread.latestTurn?.id !== input.turnId) return
+    if (!shouldCloseLifecycle && thread.latestTurn?.id !== input.turnId) {
+      void this.engine.dispatch({
+        type: 'provider.turn.complete',
+        commandId: `finalize-stale-turn:${randomUUID()}`,
+        threadId: input.threadId,
+        turnId: input.turnId,
+        provider: input.provider,
+        shadow: true,
+        state: turnCompleteState,
+        errorMessage: input.errorMessage,
+        createdAt: input.createdAt
+      })
+      return
+    }
 
-    this.engine.setLatestTurn(input.threadId, {
-      id: input.turnId,
-      status: input.state,
-      startedAt: thread.latestTurn?.id === input.turnId ? thread.latestTurn.startedAt : input.createdAt,
-      completedAt: input.createdAt
-    })
-    this.engine.setSession({
+    void this.engine.dispatch({
+      type: 'provider.turn.complete',
+      commandId: `finalize-turn:${input.threadId}:${input.turnId}:${input.createdAt}`,
       threadId: input.threadId,
-      status:
-        normalizedState === 'completed'
-          ? 'ready'
-          : normalizedState === 'interrupted'
-            ? 'interrupted'
-            : 'error',
-      providerName: input.provider,
-      runtimeMode: thread.session?.runtimeMode ?? 'auto-accept-edits',
-      interactionMode: thread.session?.interactionMode ?? 'default',
-      model: thread.session?.model,
-      effort: thread.session?.effort,
-      activeTurnId: null,
-      activePlanId: null,
-      lastError: normalizedState === 'completed' ? null : (input.errorMessage ?? null),
-      createdAt: input.createdAt
-    })
-    this.engine.setActiveTurn({
-      threadId: input.threadId,
-      activeTurn: null,
+      turnId: input.turnId,
+      provider: input.provider,
+      state: turnCompleteState,
+      errorMessage: input.errorMessage,
       createdAt: input.createdAt
     })
   }
@@ -673,30 +537,11 @@ export class ProviderRuntimeIngestion {
             event.turnId ?? this.engine.getThread(event.threadId).session?.activeTurnId ?? null
           if (!activeTurnId || this.isCompletedTurn(event.threadId, activeTurnId)) return
         }
-        this.engine.setSession({
-          threadId: event.threadId,
-          status: mapSessionStatus(event.payload.state),
-          providerName: event.provider,
-          runtimeMode:
-            this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
-          interactionMode:
-            this.engine.getThread(event.threadId).session?.interactionMode ?? 'default',
-          model: this.engine.getThread(event.threadId).session?.model,
-          effort: this.engine.getThread(event.threadId).session?.effort,
-          activeTurnId:
-            event.payload.state === 'running'
-              ? (event.turnId ??
-                this.engine.getThread(event.threadId).session?.activeTurnId ??
-                null)
-              : null,
-          activePlanId:
-            event.payload.state === 'running'
-              ? (this.engine.getThread(event.threadId).session?.activePlanId ?? null)
-              : null,
-          lastError:
-            event.payload.state === 'error' ? (event.payload.reason ?? 'Provider error') : null,
-          createdAt: event.createdAt
-        })
+        {
+          const readThread: ThreadReader = (tid) => this.engine.getThread(tid)
+          const cmds = compileTurnLifecycleEvent(event, readThread)
+          if (cmds.length > 0) this.engine.dispatchBatch(cmds)
+        }
         return
 
       case 'turn.started':
@@ -728,15 +573,18 @@ export class ProviderRuntimeIngestion {
         this.ingestItem(event)
         if (event.type === 'item.completed') this.resolvePendingApprovalForTool(event)
         if (event.type === 'item.completed' && event.payload.itemType !== 'reasoning')
-          this.flushAssistant(event, { closeSegment: true })
+          this.flushAssistantChunks(event, true, false)
         return
 
       case 'request.opened': {
+        const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
         const approvalSlotId = `approval:${event.requestId ?? event.eventId}`
-        const existingApproval = this.engine
-          .getThread(event.threadId)
-          .activities.find((activity) => activity.id === approvalSlotId)
+        const existingApproval = readThread(event.threadId).activities.find(
+          (activity) => activity.id === approvalSlotId
+        )
         if (existingApproval?.resolved === true) return
+        const cmds = compileApprovalEvent(event, readThread)
+        if (cmds.length > 0) this.engine.dispatchBatch(cmds)
         this.patchActiveTurn(
           event.threadId,
           (prev) => {
@@ -755,28 +603,7 @@ export class ProviderRuntimeIngestion {
           event.createdAt
         )
         this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
-        this.flushAssistant(event, { closeSegment: true })
-        {
-          const approvalFileEdit = readCanonicalFileEditChanges(event.payload)
-          this.engine.upsertActivity(
-            {
-              id: `approval:${event.requestId ?? event.eventId}`,
-              kind: 'approval.requested',
-              tone: 'approval',
-              summary: event.payload.detail ?? titleForRequest(event.payload.requestType),
-              payload: {
-                requestType: event.payload.requestType,
-                toolCallId: event.payload.toolCallId,
-                args: event.payload.args,
-                ...(approvalFileEdit.length > 0 ? { fileEditChanges: approvalFileEdit } : {})
-              },
-              turnId: event.turnId ?? null,
-              resolved: false,
-              createdAt: event.createdAt
-            },
-            event.threadId
-          )
-        }
+        this.flushAssistantChunks(event, true, false)
         return
       }
 
@@ -788,28 +615,9 @@ export class ProviderRuntimeIngestion {
         const staleToolCallId = staleAfterRestart
           ? readPayloadString(existing?.payload, 'toolCallId')
           : undefined
-        this.engine.upsertActivity(
-          {
-            id: resolvedApprovalId,
-            kind: 'approval.resolved',
-            tone: 'info',
-            summary: existing?.summary ?? `Approval ${event.payload.decision ?? 'resolved'}`,
-            payload: {
-              ...existing?.payload,
-              requestType:
-                event.payload.requestType && event.payload.requestType !== 'unknown'
-                  ? event.payload.requestType
-                  : (readPayloadString(existing?.payload, 'requestType') ??
-                    event.payload.requestType),
-              decision: event.payload.decision,
-              resolution: event.payload.resolution
-            },
-            turnId: resolvedTurnId,
-            resolved: true,
-            createdAt: event.createdAt
-          },
-          event.threadId
-        )
+        const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
+        const cmds = compileApprovalEvent(event, readThread)
+        if (cmds.length > 0) this.engine.dispatchBatch(cmds)
         if (event.payload.decision === 'decline') {
           if (this.lifecycleCapabilities(event.provider).closesOnApprovalDecline) {
             const interruptedTurnId =
@@ -842,7 +650,7 @@ export class ProviderRuntimeIngestion {
               phase: ids.length > 0 ? 'tool_running' : 'streaming',
               updatedAt: event.createdAt
             }
-            return this.reconcileActiveTurnTail(event.threadId, draft, event.createdAt)
+            return reconcileActiveTurnTail(this.engine.getThread(event.threadId), draft, event.createdAt)
           },
           event.createdAt
         )
@@ -850,96 +658,74 @@ export class ProviderRuntimeIngestion {
       }
 
       case 'user-input.requested':
-        this.patchActiveTurn(
-          event.threadId,
-          (prev) => {
-            if (!prev || !this.eventMatchesActiveTurn(event, prev)) return prev
-            return {
-              ...prev,
-              phase: 'waiting_for_input',
-              visibleIndicator: 'approval',
-              updatedAt: event.createdAt
-            }
-          },
-          event.createdAt
-        )
+        {
+          const userInputSlotId = `user-input:${event.requestId ?? event.eventId}`
+          this.patchActiveTurn(
+            event.threadId,
+            (prev) => {
+              if (!prev || !this.eventMatchesActiveTurn(event, prev)) return prev
+              const ids = prev.activeItemIds.includes(userInputSlotId)
+                ? prev.activeItemIds
+                : [...prev.activeItemIds, userInputSlotId]
+              return {
+                ...prev,
+                phase: 'waiting_for_input',
+                visibleIndicator: 'approval',
+                activeItemIds: ids,
+                updatedAt: event.createdAt
+              }
+            },
+            event.createdAt
+          )
+        }
         this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
-        this.flushAssistant(event, { closeSegment: true })
-        this.engine.upsertActivity(
-          {
-            id: `user-input:${event.requestId ?? event.eventId}`,
-            kind: 'user-input.requested',
-            tone: 'approval',
-            summary: event.payload.questions[0]?.question ?? 'Codex needs input',
-            payload: { questions: event.payload.questions },
-            turnId: event.turnId ?? null,
-            resolved: false,
-            createdAt: event.createdAt
-          },
-          event.threadId
-        )
+        this.flushAssistantChunks(event, true, false)
+        {
+          const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
+          const cmds = compileUserInputEvent(event, readThread)
+          if (cmds.length > 0) this.engine.dispatchBatch(cmds)
+        }
         return
 
-      case 'user-input.resolved':
-        this.engine.upsertActivity(
-          {
-            id: `user-input:${event.requestId ?? event.eventId}`,
-            kind: 'user-input.resolved',
-            tone: 'info',
-            summary: 'User input submitted',
-            payload: { answers: event.payload.answers },
-            turnId: event.turnId ?? null,
-            resolved: true,
-            createdAt: event.createdAt
-          },
-          event.threadId
-        )
+      case 'user-input.resolved': {
+        const userInputSlotId = `user-input:${event.requestId ?? event.eventId}`
+        const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
+        const cmds = compileUserInputEvent(event, readThread)
+        if (cmds.length > 0) this.engine.dispatchBatch(cmds)
         this.patchActiveTurn(
           event.threadId,
           (prev) => {
             if (!prev || !this.eventMatchesActiveTurn(event, prev)) return prev
             if (prev.phase !== 'waiting_for_input') return prev
-            const ids = prev.activeItemIds
+            const ids = prev.activeItemIds.filter((slot) => slot !== userInputSlotId)
             const draft: ActiveTurnProjection = {
               ...prev,
+              activeItemIds: ids,
               phase: ids.length > 0 ? 'tool_running' : 'streaming',
               updatedAt: event.createdAt
             }
-            return this.reconcileActiveTurnTail(event.threadId, draft, event.createdAt)
+            return reconcileActiveTurnTail(this.engine.getThread(event.threadId), draft, event.createdAt)
           },
           event.createdAt
         )
         return
+      }
 
       case 'runtime.info':
-        this.engine.upsertActivity(
-          {
-            id: `runtime-info:${event.eventId}`,
-            kind: 'task.progress',
-            tone: 'info',
-            summary: event.payload.message ?? event.payload.kind ?? 'Info',
-            payload: { detail: event.payload.detail, kind: event.payload.kind },
-            turnId: event.turnId ?? null,
-            createdAt: event.createdAt
-          },
-          event.threadId
-        )
+        {
+          const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
+          const cmds = compileRuntimeEvent(event, readThread, this.runtimeCompileOptions())
+          if (cmds.length > 0) this.engine.dispatchBatch(cmds)
+        }
         return
 
       case 'runtime.error':
       case 'runtime.warning':
-        this.engine.upsertActivity(
-          {
-            id: `${event.type}:${event.eventId}`,
-            kind: event.type === 'runtime.error' ? 'runtime.error' : 'runtime.warning',
-            tone: event.type === 'runtime.error' ? 'error' : 'info',
-            summary: event.payload.message,
-            payload: { detail: event.payload.detail },
-            turnId: event.turnId ?? null,
-            createdAt: event.createdAt
-          },
-          event.threadId
-        )
+        {
+          const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
+          const cmds = compileRuntimeEvent(event, readThread, this.runtimeCompileOptions())
+          if (cmds.length > 0) this.engine.dispatchBatch(cmds)
+        }
         if (event.type === 'runtime.error' && this.shouldPromoteRuntimeError(event)) {
           const turnId =
             event.turnId ??
@@ -956,11 +742,11 @@ export class ProviderRuntimeIngestion {
             })
             return
           }
-          this.engine.setActiveTurn({ threadId: event.threadId, activeTurn: null, createdAt: event.createdAt })
-          this.engine.setSession({
+          this.patchActiveTurn(event.threadId, () => null, event.createdAt)
+          this.dispatchProviderSessionUpdate({
             threadId: event.threadId,
             status: 'error',
-            providerName: event.provider,
+            provider: event.provider,
             runtimeMode:
               this.engine.getThread(event.threadId).session?.runtimeMode ?? 'auto-accept-edits',
             interactionMode:
@@ -997,11 +783,22 @@ export class ProviderRuntimeIngestion {
     return this.resolveLifecycleCapabilities(provider)
   }
 
-  private patchActiveTurnFromContentDelta(
-    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>,
-    phase: ActiveTurnProjection['phase'],
-    visibleIndicator: ActiveTurnProjection['visibleIndicator']
+  private ingestContentDelta(
+    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
   ): void {
+    const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
+    const streamKind = event.payload.streamKind
+
+    const preamble =
+      streamKind === 'assistant_text' || streamKind === 'plan_text' || isToolOutput(streamKind)
+        ? compileResolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt, readThread)
+        : []
+
+    const body = compileRuntimeEvent(event, readThread, this.runtimeCompileOptions())
+
+    const batch = [...preamble, ...body]
+    if (batch.length > 0) this.engine.dispatchBatch(batch)
+
     this.patchActiveTurn(
       event.threadId,
       (prev) => {
@@ -1014,67 +811,11 @@ export class ProviderRuntimeIngestion {
         ) {
           return prev
         }
-        return { ...prev, phase, visibleIndicator, updatedAt: event.createdAt }
+        const threadSnapshot = readThread(event.threadId)
+        return reconcileActiveTurnTail(threadSnapshot, prev, event.createdAt)
       },
       event.createdAt
     )
-  }
-
-  private ingestContentDelta(
-    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
-  ): void {
-    const streamKind = event.payload.streamKind
-    if (streamKind === 'assistant_text' || streamKind === 'plan_text' || isToolOutput(streamKind)) {
-      this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
-    }
-
-    if (event.payload.streamKind === 'assistant_text') {
-      this.patchActiveTurnFromContentDelta(event, 'streaming', 'assistant_stream')
-      const key = this.assistantStateKey(event)
-      const isFinalSnapshot = this.isFinalAssistantItemSnapshot(event)
-      if (isFinalSnapshot) {
-        if (this.streamedAssistantItems.has(key)) {
-          this.flushAssistant(event, { closeSegment: true, streaming: false })
-          return
-        }
-      } else {
-        this.streamedAssistantItems.add(key)
-      }
-      const state = this.getAssistantState(event)
-      state.buffer += event.payload.delta
-      this.flushAssistant(event, {
-        closeSegment: isFinalSnapshot,
-        streaming: !isFinalSnapshot
-      })
-      if (state.buffer.length >= MAX_BUFFERED_ASSISTANT_CHARS)
-        this.flushAssistant(event, { closeSegment: true, streaming: true })
-      return
-    }
-
-    if (event.payload.streamKind === 'plan_text') {
-      this.patchActiveTurnFromContentDelta(event, 'streaming', 'plan')
-      const key = this.planKey(event.threadId, event.turnId ?? event.eventId)
-      const existing = this.planBuffers.get(key)
-      if (existing) {
-        existing.text += event.payload.delta
-      } else {
-        this.planBuffers.set(key, { text: event.payload.delta, createdAt: event.createdAt })
-      }
-      this.upsertStreamingPlan(event)
-      return
-    }
-
-    if (event.payload.streamKind === 'reasoning_text') {
-      this.patchActiveTurnFromContentDelta(event, 'thinking', 'thinking')
-      this.appendReasoningTextDelta(event)
-      return
-    }
-
-    if (isToolOutput(event.payload.streamKind)) {
-      this.appendToolOutput(event)
-      this.patchActiveTurnFromContentDelta(event, 'tool_running', 'tool')
-      return
-    }
   }
 
   private ingestItem(
@@ -1084,181 +825,45 @@ export class ProviderRuntimeIngestion {
     >
   ): void {
     if (event.payload.itemType === 'user_message') return
+
+    const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
+    const preamble =
+      event.payload.itemType === 'reasoning'
+        ? []
+        : compileResolveReasoningThinkingForTurn(
+            event.threadId,
+            event.turnId,
+            event.createdAt,
+            readThread
+          )
+
+    const body = compileItemEvent(event, readThread, (threadId, turnId) =>
+      this.completedTurnLookup(threadId, turnId)
+    )
+
+    const batch = [...preamble, ...body]
+    if (batch.length > 0) this.engine.dispatchBatch(batch)
+
     if (event.payload.itemType === 'reasoning') {
-      this.ingestThinking(event)
-      return
-    }
-    this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
-    if (event.payload.itemType === 'assistant_message') {
-      this.ingestAssistantItem(event)
-      return
-    }
-    if (event.payload.itemType === 'plan') {
-      this.ingestPlanItem(event)
-      return
+      this.recomputeIdleTailSurface(event.threadId, event.createdAt)
     }
 
-    const id = toolActivityId(event)
-    const existing = this.engine
-      .getThread(event.threadId)
-      .activities.find((activity) => activity.id === id)
-    const existingStatus = readPayloadString(existing?.payload, 'status')
-    const completedTurnStatus = this.completedTurnToolStatus(event)
-    const nextStatus = nextToolStatus(existingStatus, completedTurnStatus ?? event.payload.status)
-    const kind =
-      existing?.kind === 'tool.completed' || isTerminalToolStatus(nextStatus)
-        ? 'tool.completed'
-        : event.type === 'item.started'
-          ? 'tool.started'
-          : 'tool.updated'
-    const mergedFileEdit = mergeFileEditChanges(
-      (() => {
-        const inc = readCanonicalFileEditChanges(event.payload)
-        return inc.length > 0 ? inc : undefined
-      })(),
-      (() => {
-        const prev = readCanonicalFileEditChanges(existing?.payload)
-        return prev.length > 0 ? prev : undefined
-      })()
-    )
-    const mergedReadPreview = mergeFileReadPreview(
-      readCanonicalFileReadPreview(event.payload),
-      readCanonicalFileReadPreview(existing?.payload)
-    )
-    const toolPayload: Record<string, unknown> = {
-      ...existing?.payload,
-      itemType: event.payload.itemType ?? readPayloadString(existing?.payload, 'itemType'),
-      status: nextStatus,
-      title: event.payload.title ?? readPayloadString(existing?.payload, 'title'),
-      detail: event.payload.detail ?? readPayloadString(existing?.payload, 'detail'),
-      data: event.payload.data ?? existing?.payload?.data
+    if (isTrackedToolItemType(event.payload.itemType) && event.itemId) {
+      this.onToolItemLifecycle(event)
     }
-    if (mergedFileEdit && mergedFileEdit.length > 0) {
-      toolPayload.fileEditChanges = mergedFileEdit
-    }
-    if (mergedReadPreview) {
-      toolPayload.fileReadPreview = mergedReadPreview
-    }
-    this.engine.upsertActivity(
-      {
-        id,
-        kind,
-        tone: toneForItem(event.payload.itemType),
-        summary:
-          event.payload.title ??
-          existing?.summary ??
-          event.payload.detail ??
-          titleForItem(event.payload.itemType),
-        payload: toolPayload,
-        turnId: event.turnId ?? null,
-        createdAt: event.createdAt
-      },
-      event.threadId
-    )
-    this.onToolItemLifecycle(event)
   }
 
-  private ingestPlanItem(
-    event: Extract<
-      ProviderRuntimeEvent,
-      { type: 'item.started' | 'item.updated' | 'item.completed' }
-    >
-  ): void {
-    if (event.type !== 'item.completed') return
-    const text = normalizeProposedPlanText(
-      readNestedPayloadString(event.payload.data, 'item', 'text') ??
-        readNestedPayloadString(event.payload.data, 'text')
-    )
-    if (!text) return
-    this.finalizePlan(event, text)
-  }
+
 
   private ingestTodoUpdate(
     event: Extract<ProviderRuntimeEvent, { type: 'todo.updated' }>
   ): void {
-    const turnId = event.turnId ?? event.eventId
-    const items = normalizeTodoItems(event.payload.items)
-    if (items.length === 0) return
-    const todoList: OrchestrationTodoList = {
-      id: todoListId(event.threadId, turnId, event.payload.source),
-      turnId,
-      source: event.payload.source,
-      title: event.payload.title,
-      explanation: event.payload.explanation,
-      items,
-      createdAt: event.createdAt,
-      updatedAt: event.createdAt
-    }
-    this.engine.upsertTodoList(todoList, event.threadId)
+    const readThread: ThreadReader = (threadId) => this.engine.getThread(threadId)
+    const cmds = compileTodoEvent(event, readThread)
+    if (cmds.length > 0) this.engine.dispatchBatch(cmds)
   }
 
-  private ingestAssistantItem(
-    event: Extract<
-      ProviderRuntimeEvent,
-      { type: 'item.started' | 'item.updated' | 'item.completed' }
-    >
-  ): void {
-    const text = readNestedPayloadString(
-      event.payload.data,
-      'text',
-      'content',
-      'message',
-      'markdown'
-    )
-    if (!text) return
-    this.resolveReasoningThinkingForTurn(event.threadId, event.turnId, event.createdAt)
-    const state = this.getAssistantState(event)
-    state.buffer += text
-    this.flushAssistant(event, {
-      closeSegment: true,
-      streaming: event.type !== 'item.completed'
-    })
-  }
 
-  private ingestThinking(
-    event: Extract<
-      ProviderRuntimeEvent,
-      { type: 'item.started' | 'item.updated' | 'item.completed' }
-    >
-  ): void {
-    const id = `thinking:${event.itemId ?? event.turnId ?? event.eventId}`
-    const existing = this.engine
-      .getThread(event.threadId)
-      .activities.find((activity) => activity.id === id)
-    const existingStatus = readPayloadString(existing?.payload, 'status')
-    const preservedReasoningText = readPayloadString(existing?.payload, 'reasoningText')
-    const completed =
-      existing?.resolved === true ||
-      isTerminalToolStatus(existingStatus) ||
-      this.completedTurnToolStatus(event) !== undefined ||
-      event.type === 'item.completed' ||
-      event.payload.status === 'completed'
-    this.engine.upsertActivity(
-      {
-        id,
-        kind: completed
-          ? 'task.completed'
-          : event.type === 'item.started'
-            ? 'task.started'
-            : 'task.progress',
-        tone: 'thinking',
-        summary: 'Thinking',
-        payload: {
-          itemType: event.payload.itemType,
-          status: completed ? 'completed' : (event.payload.status ?? 'inProgress'),
-          data: event.payload.data,
-          ...(preservedReasoningText !== undefined ? { reasoningText: preservedReasoningText } : {})
-        },
-        turnId: event.turnId ?? null,
-        resolved: completed,
-        createdAt: event.createdAt
-      },
-      event.threadId
-    )
-    if (completed) {
-      this.recomputeIdleTailSurface(event.threadId, event.createdAt)
-    }
-  }
 
   /**
    * Stops reasoning spinners once another stream or non-reasoning item begins. Some providers omit
@@ -1269,312 +874,25 @@ export class ProviderRuntimeIngestion {
     turnId: string | null | undefined,
     createdAt: string
   ): void {
-    const thread = this.engine.getThread(threadId)
-    const effectiveTurnId = turnId ?? thread.session?.activeTurnId ?? null
-    if (!effectiveTurnId) return
-
-    for (const activity of thread.activities) {
-      if (activity.turnId && activity.turnId !== effectiveTurnId) continue
-      if (!activity.id.startsWith('thinking:')) continue
-      if (activity.resolved === true) continue
-      if (readPayloadString(activity.payload, 'itemType') !== 'reasoning') continue
-
-      const basePayload =
-        typeof activity.payload === 'object' && activity.payload !== null
-          ? { ...(activity.payload as Record<string, unknown>) }
-          : {}
-
-      this.engine.upsertActivity(
-        {
-          ...activity,
-          kind: 'task.completed',
-          resolved: true,
-          payload: {
-            ...basePayload,
-            itemType: 'reasoning',
-            status: 'completed'
-          },
-          createdAt
-        },
-        threadId
-      )
-    }
+    const readThread: ThreadReader = (tid) => this.engine.getThread(tid)
+    const cmds = compileResolveReasoningThinkingForTurn(threadId, turnId, createdAt, readThread)
+    if (cmds.length > 0) this.engine.dispatchBatch(cmds)
     this.recomputeIdleTailSurface(threadId, createdAt)
   }
 
-  private appendReasoningTextDelta(
-    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
+  private flushAssistantChunks(
+    event: Pick<ProviderRuntimeEvent, 'threadId' | 'turnId' | 'createdAt' | 'type'>,
+    streaming: boolean,
+    reconcileIdleTail: boolean
   ): void {
-    const id = `thinking:${event.itemId ?? event.turnId ?? event.eventId}`
-    const existing = this.engine
-      .getThread(event.threadId)
-      .activities.find((activity) => activity.id === id)
-    if (existing?.resolved === true) return
-    const completedTurnStatus = this.completedTurnToolStatus(event)
-
-    const prevText = readPayloadString(existing?.payload, 'reasoningText') ?? ''
-    const merged = `${prevText}${event.payload.delta}`
-    const nextText =
-      merged.length > MAX_BUFFERED_REASONING_TEXT_CHARS
-        ? merged.slice(merged.length - MAX_BUFFERED_REASONING_TEXT_CHARS)
-        : merged
-
-    const existingKind = existing?.kind
-    const nextKind: OrchestrationThreadActivity['kind'] =
-      completedTurnStatus !== undefined
-        ? 'task.completed'
-        : existingKind === 'task.started' || existingKind === 'task.progress'
-          ? 'task.progress'
-          : 'task.started'
-
-    const itemType = readPayloadString(existing?.payload, 'itemType') ?? 'reasoning'
-    const status =
-      completedTurnStatus !== undefined
-        ? 'completed'
-        : (readPayloadString(existing?.payload, 'status') ?? 'inProgress')
-    const basePayload =
-      typeof existing?.payload === 'object' && existing.payload !== null
-        ? (existing.payload as Record<string, unknown>)
-        : {}
-
-    this.engine.upsertActivity(
-      {
-        id,
-        kind: nextKind,
-        tone: 'thinking',
-        summary: 'Thinking',
-        payload: {
-          ...basePayload,
-          itemType,
-          status,
-          reasoningText: nextText
-        },
-        turnId: event.turnId ?? existing?.turnId ?? null,
-        resolved: completedTurnStatus !== undefined,
-        createdAt: event.createdAt
-      },
-      event.threadId
+    const cmds = this.messageCompiler.flushAssistantForThread(
+      event.threadId,
+      event.turnId,
+      event.createdAt,
+      streaming
     )
-  }
-
-  private appendToolOutput(event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>): void {
-    const id = this.toolOutputActivityId(event)
-    const existing = this.engine
-      .getThread(event.threadId)
-      .activities.find((activity) => activity.id === id)
-    const output = `${readPayloadString(existing?.payload, 'output') ?? ''}${event.payload.delta}`
-    const existingStatus = readPayloadString(existing?.payload, 'status')
-    const completedTurnStatus = this.completedTurnToolStatus(event)
-    const completed =
-      completedTurnStatus === 'completed' ||
-      existing?.kind === 'tool.completed' ||
-      existingStatus === 'completed' ||
-      existingStatus === 'success'
-    const terminal = completed || completedTurnStatus === 'failed'
-    this.engine.upsertActivity(
-      {
-        id,
-        kind: terminal ? 'tool.completed' : 'tool.updated',
-        tone: 'tool',
-        summary: existing?.summary ?? titleForToolOutput(event.payload.streamKind),
-        payload: {
-          ...existing?.payload,
-          itemType: readPayloadString(existing?.payload, 'itemType') ?? itemTypeForToolOutput(event.payload.streamKind),
-          status: completed
-            ? 'completed'
-            : (completedTurnStatus ?? existing?.payload?.status ?? 'inProgress'),
-          title:
-            readPayloadString(existing?.payload, 'title') ?? titleForToolOutput(event.payload.streamKind),
-          output,
-          streamKind: event.payload.streamKind
-        },
-        turnId: event.turnId ?? existing?.turnId ?? null,
-        createdAt: event.createdAt
-      },
-      event.threadId
-    )
-  }
-
-  private assistantStateKey(event: ProviderRuntimeEvent): string {
-    return `${event.threadId}:${event.itemId ?? event.turnId ?? event.eventId}`
-  }
-
-  private isFinalAssistantItemSnapshot(
-    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
-  ): boolean {
-    return event.raw?.method === 'item/completed'
-  }
-
-  private getAssistantState(event: ProviderRuntimeEvent): AssistantSegmentState {
-    const key = this.assistantStateKey(event)
-    const existing = this.assistantSegments.get(key)
-    if (existing) return existing
-
-    const state: AssistantSegmentState = {
-      baseKey: String(event.itemId ?? event.turnId ?? event.eventId),
-      nextSegmentIndex: 0,
-      activeMessageId: null,
-      buffer: ''
-    }
-    this.assistantSegments.set(key, state)
-    return state
-  }
-
-  private flushAssistant(
-    event: ProviderRuntimeEvent,
-    options: { closeSegment: boolean; streaming?: boolean } = { closeSegment: true }
-  ): void {
-    const effectiveStreaming = options.streaming ?? event.type !== 'turn.completed'
-    for (const [key, state] of this.assistantSegments) {
-      if (!key.startsWith(`${event.threadId}:`)) continue
-      if (state.buffer.length === 0) {
-        if (options.closeSegment && state.activeMessageId) {
-          this.closeAssistantMessage(event, state.activeMessageId, effectiveStreaming)
-          state.activeMessageId = null
-          state.nextSegmentIndex += 1
-        }
-        continue
-      }
-      const messageId =
-        state.activeMessageId ?? assistantSegmentMessageId(state.baseKey, state.nextSegmentIndex)
-      const existing = this.engine
-        .getThread(event.threadId)
-        .messages.find((message) => message.id === messageId)
-      const now = event.createdAt
-      const message: OrchestrationMessage = {
-        id: messageId,
-        role: 'assistant',
-        text: `${existing?.text ?? ''}${state.buffer}`,
-        turnId: event.turnId ?? existing?.turnId ?? null,
-        streaming: effectiveStreaming,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now
-      }
-      this.engine.upsertMessage(message, event.threadId)
-      state.buffer = ''
-      state.activeMessageId = messageId
-      if (options.closeSegment) {
-        state.activeMessageId = null
-        state.nextSegmentIndex += 1
-      }
-    }
-    if (
-      options.closeSegment &&
-      effectiveStreaming === false &&
-      event.type !== 'turn.completed'
-    ) {
-      this.recomputeIdleTailSurface(event.threadId, event.createdAt)
-    }
-  }
-
-  private closeAssistantMessage(
-    event: ProviderRuntimeEvent,
-    messageId: string,
-    streaming = event.type !== 'turn.completed'
-  ): void {
-    const existing = this.engine
-      .getThread(event.threadId)
-      .messages.find((message) => message.id === messageId)
-    if (!existing || !existing.streaming) return
-    this.engine.upsertMessage(
-      {
-        ...existing,
-        streaming,
-        updatedAt: event.createdAt
-      },
-      event.threadId
-    )
-  }
-
-  private finalizePlan(event: ProviderRuntimeEvent, fallbackText?: string): void {
-    const turnId = event.turnId ?? event.eventId
-    const key = this.planKey(event.threadId, turnId)
-    const buffer = this.planBuffers.get(key)
-    const text = normalizeProposedPlanText(buffer?.text) ?? normalizeProposedPlanText(fallbackText)
-    if (!text) return
-    const proposedPlan = this.buildProposedPlan(event, {
-      text,
-      status: 'proposed',
-      createdAt: buffer?.createdAt ?? event.createdAt
-    })
-    this.engine.upsertProposedPlan(proposedPlan, event.threadId)
-    this.attachPlanArtifact(event, proposedPlan)
-    this.planBuffers.delete(key)
-  }
-
-  private upsertStreamingPlan(
-    event: Extract<ProviderRuntimeEvent, { type: 'content.delta' }>
-  ): void {
-    const turnId = event.turnId ?? event.eventId
-    const buffer = this.planBuffers.get(this.planKey(event.threadId, turnId))
-    const text = normalizeStreamingProposedPlanText(buffer?.text)
-    const proposedPlan = this.buildProposedPlan(event, {
-      text,
-      status: 'streaming',
-      createdAt: buffer?.createdAt ?? event.createdAt
-    })
-    this.engine.upsertProposedPlan(proposedPlan, event.threadId)
-  }
-
-  private buildProposedPlan(
-    event: Pick<ProviderRuntimeEvent, 'threadId' | 'turnId' | 'eventId' | 'createdAt'>,
-    input: {
-      text: string | undefined
-      status: OrchestrationProposedPlan['status']
-      createdAt: string
-    }
-  ): OrchestrationProposedPlan {
-    const turnId = event.turnId ?? event.eventId
-    const thread = this.engine.getThread(event.threadId)
-    const existingPlanId = thread.session?.activePlanId
-    const existingPlan = existingPlanId
-      ? thread.proposedPlans.find((plan) => plan.id === existingPlanId) ?? null
-      : null
-    return {
-      id: existingPlan?.id ?? `plan:${event.threadId}:turn:${turnId}`,
-      turnId,
-      text: input.text ?? existingPlan?.text ?? '',
-      status: input.status,
-      createdAt: existingPlan?.createdAt ?? input.createdAt,
-      updatedAt: event.createdAt
-    }
-  }
-
-  private attachPlanArtifact(
-    event: Pick<ProviderRuntimeEvent, 'threadId' | 'turnId' | 'eventId' | 'createdAt'>,
-    plan: OrchestrationProposedPlan
-  ): void {
-    const turnId = event.turnId ?? event.eventId
-    const thread = this.engine.getThread(event.threadId)
-    const existingMessage = [...thread.messages]
-      .reverse()
-      .find((message) => message.role === 'assistant' && message.turnId === turnId)
-    const attachments = upsertPlanAttachment(existingMessage?.attachments, plan)
-    if (existingMessage) {
-      this.engine.upsertMessage(
-        {
-          ...existingMessage,
-          attachments,
-          streaming: false,
-          updatedAt: event.createdAt
-        },
-        event.threadId
-      )
-      return
-    }
-    this.engine.upsertMessage(
-      {
-        id: `assistant:plan:${plan.id}`,
-        role: 'assistant',
-        text: '',
-        attachments,
-        turnId,
-        streaming: false,
-        createdAt: event.createdAt,
-        updatedAt: event.createdAt
-      },
-      event.threadId
-    )
+    if (cmds.length > 0) this.engine.dispatchBatch(cmds)
+    if (reconcileIdleTail) this.recomputeIdleTailSurface(event.threadId, event.createdAt)
   }
 
   private closeTurnForTerminalSession(
@@ -1638,102 +956,6 @@ export class ProviderRuntimeIngestion {
     return Boolean(activeTurnId && !this.isCompletedTurn(event.threadId, activeTurnId))
   }
 
-  private finalizeActivitiesForTurn(
-    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
-  ): void {
-    this.resolvePendingAssistantMessagesForTurn(event)
-    this.resolvePendingThinkingForTurn(event)
-    this.resolvePendingToolsForTurn(event)
-    this.resolvePendingPromptsForTurn(event)
-  }
-
-  private resolvePendingAssistantMessagesForTurn(
-    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
-  ): void {
-    const thread = this.engine.getThread(event.threadId)
-    for (const message of thread.messages) {
-      if (message.role !== 'assistant' || message.streaming !== true) continue
-      if (message.turnId !== event.turnId) continue
-      this.engine.upsertMessage(
-        {
-          ...message,
-          streaming: false,
-          updatedAt: event.createdAt
-        },
-        event.threadId
-      )
-    }
-  }
-
-  private resolvePendingThinkingForTurn(
-    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
-  ): void {
-    const thread = this.engine.getThread(event.threadId)
-    for (const activity of thread.activities) {
-      if (activity.resolved) continue
-      if (activity.tone !== 'thinking') continue
-      if (!activityBelongsToTurn(activity, event.turnId)) continue
-      this.engine.upsertActivity(
-        {
-          ...activity,
-          kind: 'task.completed',
-          resolved: true,
-          payload: { ...activity.payload, status: 'completed' },
-          createdAt: activity.createdAt
-        },
-        event.threadId
-      )
-    }
-  }
-
-  private resolvePendingToolsForTurn(
-    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
-  ): void {
-    const thread = this.engine.getThread(event.threadId)
-    const nextStatus = toolStatusForTurnCompletion(event.payload.state)
-    for (const activity of thread.activities) {
-      if (!activity.kind.startsWith('tool.')) continue
-      if (!activityBelongsToTurn(activity, event.turnId)) continue
-      const currentStatus = readPayloadString(activity.payload, 'status')
-      this.engine.upsertActivity(
-        {
-          ...activity,
-          kind: 'tool.completed',
-          payload: {
-            ...activity.payload,
-            status: isTerminalToolStatus(currentStatus) ? currentStatus : nextStatus
-          },
-          createdAt: activity.createdAt
-        },
-        event.threadId
-      )
-    }
-  }
-
-  private resolvePendingPromptsForTurn(
-    event: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>
-  ): void {
-    const thread = this.engine.getThread(event.threadId)
-    for (const activity of thread.activities) {
-      if (activity.resolved) continue
-      if (activity.kind !== 'approval.requested' && activity.kind !== 'user-input.requested')
-        continue
-      if (!activityBelongsToTurn(activity, event.turnId)) continue
-      this.engine.upsertActivity(
-        {
-          ...activity,
-          kind:
-            activity.kind === 'approval.requested' ? 'approval.resolved' : 'user-input.resolved',
-          tone: 'info',
-          summary: `${activity.summary} (cleared by turn end)`,
-          resolved: true,
-          createdAt: activity.createdAt
-        },
-        event.threadId
-      )
-    }
-  }
-
   private resolvePendingApprovalForTool(event: ProviderRuntimeEvent): void {
     if (event.type !== 'item.completed') return
     if (!event.itemId) return
@@ -1741,8 +963,11 @@ export class ProviderRuntimeIngestion {
     for (const activity of thread.activities) {
       if (activity.kind !== 'approval.requested' || activity.resolved === true) continue
       if (readPayloadString(activity.payload, 'toolCallId') !== event.itemId) continue
-      this.engine.upsertActivity(
-        {
+      void this.engine.dispatch({
+        type: 'provider.activity.upsert',
+        commandId: `provider:${event.eventId}:approval-clear:${activity.id}`,
+        threadId: event.threadId,
+        activity: {
           ...activity,
           kind: 'approval.resolved',
           tone: 'info',
@@ -1751,13 +976,9 @@ export class ProviderRuntimeIngestion {
           resolved: true,
           createdAt: event.createdAt
         },
-        event.threadId
-      )
+        createdAt: event.createdAt
+      })
     }
-  }
-
-  private planKey(threadId: string, turnId: string): string {
-    return `${threadId}:${turnId}`
   }
 
   private findApprovalForResolution(
@@ -1779,11 +1000,12 @@ export class ProviderRuntimeIngestion {
       .at(-1)
   }
 
-  private completedTurnToolStatus(
-    event: Pick<ProviderRuntimeEvent, 'threadId' | 'turnId'>
+  private completedTurnLookup(
+    threadId: string,
+    turnId: string | null | undefined
   ): 'completed' | 'failed' | undefined {
-    if (!event.turnId) return undefined
-    return this.completedTurns.get(this.turnCompletionKey(event.threadId, event.turnId))
+    if (!turnId) return undefined
+    return this.completedTurns.get(this.turnCompletionKey(threadId, turnId))
   }
 
   private isCompletedTurn(threadId: string, turnId: string): boolean {
@@ -1795,100 +1017,8 @@ export class ProviderRuntimeIngestion {
   }
 }
 
-function assistantSegmentMessageId(baseKey: string, segmentIndex: number): string {
-  return segmentIndex === 0
-    ? `assistant:${baseKey}`
-    : `assistant:${baseKey}:segment:${segmentIndex}`
-}
-
-function todoListId(
-  threadId: string,
-  turnId: string,
-  source: OrchestrationTodoList['source']
-): string {
-  return `todo:${threadId}:turn:${turnId}:${source}`
-}
-
-function normalizeTodoItems(
-  items: Array<{ id?: string; text: string; status: 'pending' | 'in_progress' | 'completed' }>
-): OrchestrationTodo[] {
-  return items
-    .map((item, index) => {
-      const text = item.text.trim()
-      if (!text) return null
-      return {
-        id: item.id?.trim() || `todo-item:${index}:${text.toLowerCase()}`,
-        text,
-        status: item.status,
-        order: index
-      }
-    })
-    .filter((item): item is OrchestrationTodo => item !== null)
-}
-
-function mapSessionStatus(
-  state: RuntimeSessionState
-): 'starting' | 'running' | 'ready' | 'stopped' | 'error' {
-  switch (state) {
-    case 'starting':
-      return 'starting'
-    case 'running':
-    case 'waiting':
-      return 'running'
-    case 'ready':
-      return 'ready'
-    case 'stopped':
-      return 'stopped'
-    case 'error':
-      return 'error'
-    default:
-      return 'ready'
-  }
-}
-
 function isToolOutput(kind: RuntimeContentStreamKind): boolean {
   return kind === 'command_output' || kind === 'file_change_output'
-}
-
-function itemTypeForToolOutput(kind: RuntimeContentStreamKind): CanonicalItemType | 'unknown' {
-  if (kind === 'command_output') return 'command_execution'
-  if (kind === 'file_change_output') return 'file_change'
-  return 'unknown'
-}
-
-function titleForToolOutput(kind: RuntimeContentStreamKind): string {
-  if (kind === 'command_output') return 'terminal'
-  if (kind === 'file_change_output') return 'file changes'
-  return 'Tool output'
-}
-
-function toolActivityId(event: Pick<ProviderRuntimeEvent, 'itemId' | 'eventId'>): string {
-  return `tool:${event.itemId ?? event.eventId}`
-}
-
-function activeTurnProjectionEquals(
-  a: ActiveTurnProjection | null,
-  b: ActiveTurnProjection | null
-): boolean {
-  if (a === null && b === null) return true
-  if (!a || !b) return false
-  if (a.turnId !== b.turnId || a.phase !== b.phase || a.visibleIndicator !== b.visibleIndicator) {
-    return false
-  }
-  if (a.startedAt !== b.startedAt) return false
-  if (a.activeItemIds.length !== b.activeItemIds.length) return false
-  for (let i = 0; i < a.activeItemIds.length; i += 1) {
-    if (a.activeItemIds[i] !== b.activeItemIds[i]) return false
-  }
-  return true
-}
-
-function mapTurnCompletedPhase(
-  state: 'completed' | 'failed' | 'cancelled' | 'interrupted'
-): 'completed' | 'failed' | 'interrupted' {
-  if (state === 'failed') return 'failed'
-  if (state === 'completed') return 'completed'
-  return 'interrupted'
 }
 
 function isTrackedToolItemType(itemType: CanonicalItemType | undefined): boolean {
@@ -1912,66 +1042,10 @@ function readPayloadString(
   return typeof value === 'string' ? value : undefined
 }
 
-function readNestedPayloadString(value: unknown, ...keys: string[]): string | undefined {
-  const record =
-    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
-  for (const key of keys) {
-    const candidate = record[key]
-    if (typeof candidate === 'string') return candidate
-  }
-  const item = record.item
-  if (typeof item === 'object' && item !== null) return readNestedPayloadString(item, ...keys)
-  return undefined
-}
-
 function resolutionReason(resolution: unknown): string | undefined {
   if (!resolution || typeof resolution !== 'object') return undefined
   const reason = (resolution as Record<string, unknown>).reason
   return typeof reason === 'string' ? reason : undefined
-}
-
-function normalizeProposedPlanText(value: string | undefined): string | undefined {
-  const trimmed = value?.trim()
-  if (!trimmed) return undefined
-  const unwrapped = trimmed.replace(
-    /^<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>$/i,
-    '$1'
-  )
-  return unwrapped.trim() || undefined
-}
-
-function normalizeStreamingProposedPlanText(value: string | undefined): string | undefined {
-  const trimmed = value?.trim()
-  if (!trimmed) return undefined
-  return trimmed
-    .replace(/^<proposed_plan>\s*/i, '')
-    .replace(/\s*<\/proposed_plan>$/i, '')
-    .trim()
-}
-
-function upsertPlanAttachment(
-  attachments: OrchestrationMessage['attachments'],
-  plan: OrchestrationProposedPlan
-): OrchestrationMessage['attachments'] {
-  const nextAttachment = {
-    type: 'plan' as const,
-    planId: plan.id,
-    title: derivePlanTitle(plan.text),
-    status: plan.status
-  }
-  const existing = attachments ?? []
-  const withoutPlan = existing.filter((attachment) => attachment.type !== 'plan')
-  return [...withoutPlan, nextAttachment]
-}
-
-function derivePlanTitle(markdown: string): string {
-  const lines = markdown
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-  const heading = lines.find((line) => /^#{1,6}\s+/u.test(line))
-  const title = heading ? heading.replace(/^#{1,6}\s+/u, '') : lines[0]
-  return title?.trim() || 'Plan'
 }
 
 function activityBelongsToTurn(
@@ -1985,34 +1059,6 @@ function toolStatusForTurnCompletion(
   state: Extract<ProviderRuntimeEvent, { type: 'turn.completed' }>['payload']['state']
 ): 'completed' | 'failed' {
   return state === 'completed' ? 'completed' : 'failed'
-}
-
-function isTerminalToolStatus(status: string | undefined): boolean {
-  return (
-    status === 'completed' || status === 'success' || status === 'failed' || status === 'declined'
-  )
-}
-
-function nextToolStatus(
-  existingStatus: string | undefined,
-  incomingStatus: string | undefined
-): string {
-  if (isTerminalToolStatus(existingStatus)) return existingStatus ?? 'completed'
-  return incomingStatus ?? existingStatus ?? 'inProgress'
-}
-
-function toneForItem(itemType: CanonicalItemType): OrchestrationThreadActivity['tone'] {
-  if (itemType === 'reasoning') return 'thinking'
-  if (itemType === 'error') return 'error'
-  return 'tool'
-}
-
-function titleForItem(itemType: CanonicalItemType): string {
-  return itemType.replaceAll('_', ' ')
-}
-
-function titleForRequest(requestType: string): string {
-  return requestType.replaceAll('_', ' ')
 }
 
 function runtimeErrorIsFatal(event: ProviderRuntimeEvent): boolean {

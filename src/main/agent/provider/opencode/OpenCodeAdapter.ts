@@ -41,7 +41,7 @@ import {
   type OpenCodeServerConnection
 } from './opencodeRuntime'
 import { traceCommandEvent } from '../../debug/commandEventTrace'
-import { dumpOpenCodeSubscribeRawMessage } from './openCodeRawMessageDump'
+import { dumpOpenCodeRawMessage } from './openCodeRawMessageDump'
 import {
   OpenCodeSessionFsm,
   fileEditChangesFromOpenCodeToolPart,
@@ -69,10 +69,6 @@ interface OpenCodeSessionContext {
   readonly fsm: OpenCodeSessionFsm
   stopped: boolean
   readonly eventsAbortController: AbortController
-  readonly reconciledMessageIds: Set<string>
-  readonly reconciledPartSnapshots: Map<string, string>
-  reconciledIdle: boolean
-  reconciliationTimer: NodeJS.Timeout | null
 }
 
 interface OpenCodeProbeResult {
@@ -350,11 +346,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       variantByEffort,
       fsm,
       stopped: false,
-      eventsAbortController: new AbortController(),
-      reconciledMessageIds: new Set(),
-      reconciledPartSnapshots: new Map(),
-      reconciledIdle: false,
-      reconciliationTimer: null
+      eventsAbortController: new AbortController()
     }
     const race = this.sessions.get(input.threadId)
     if (race && !race.stopped) {
@@ -366,7 +358,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
     }
     this.sessions.set(input.threadId, context)
     this.startEventPump(context)
-    this.startMessageReconciliation(context)
     this.emit({
       ...buildEventBase({ threadId: input.threadId }),
       type: 'session.state.changed',
@@ -423,7 +414,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
         ...(variant ? { variant } : {}),
         parts: [...(text ? [{ type: 'text' as const, text }] : []), ...fileParts]
       })
-      void this.reconcileSessionMessages(ctx)
     } catch (e) {
       // If we queued this turn but promptAsync failed, unqueue it
       ctx.fsm.resetForNewTurn()
@@ -663,7 +653,10 @@ export class OpenCodeAdapter implements ProviderAdapter {
           { signal: context.eventsAbortController.signal }
         )
         for await (const rawEvent of subscription.stream) {
-          dumpOpenCodeSubscribeRawMessage(rawEvent, { threadId: context.session.threadId })
+          dumpOpenCodeRawMessage(rawEvent, {
+            threadId: context.session.threadId,
+            source: 'sdk.subscribe'
+          })
           const event = rawEvent as SdkEvent
           if (context.stopped) break
           if (!context.fsm.eventBelongsToContext(event)) continue
@@ -685,106 +678,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
         `OpenCode server exited unexpectedly (${signal ?? code ?? 'unknown'}).`
       )
     })
-  }
-
-  private startMessageReconciliation(context: OpenCodeSessionContext): void {
-    if (context.reconciliationTimer) return
-    const tick = (): void => {
-      if (context.stopped) return
-      void this.reconcileSessionMessages(context)
-    }
-    context.reconciliationTimer = setInterval(tick, 750)
-    void this.reconcileSessionMessages(context)
-  }
-
-  private async reconcileSessionMessages(context: OpenCodeSessionContext): Promise<void> {
-    if (context.stopped) return
-    try {
-      const response = await context.client.session.messages({
-        sessionID: context.openCodeSessionId,
-        directory: context.directory
-      })
-      if (context.stopped) return
-      const messages = Array.isArray(response.data) ? response.data : []
-      for (const message of messages) {
-        const info = readObject(message, 'info')
-        const messageId = readString(info, 'id')
-        if (!messageId) continue
-        if (!context.reconciledMessageIds.has(messageId)) {
-          context.reconciledMessageIds.add(messageId)
-          this.dispatchOpenCodeRaw(context, {
-            type: 'message.updated',
-            properties: {
-              sessionID: context.openCodeSessionId,
-              info
-            }
-          })
-        }
-
-        const parts = readArray(message, 'parts')
-        for (const part of parts) {
-          const partId = readString(part, 'id')
-          if (!partId) continue
-          const snapshot = stableSnapshot(part)
-          if (context.reconciledPartSnapshots.get(partId) === snapshot) continue
-          context.reconciledPartSnapshots.set(partId, snapshot)
-          this.dispatchOpenCodeRaw(context, {
-            type: 'message.part.updated',
-            properties: {
-              sessionID: context.openCodeSessionId,
-              part
-            }
-          })
-        }
-
-        if (context.reconciledMessageIds.has(messageId)) {
-          this.dispatchOpenCodeRaw(context, {
-            type: 'message.updated',
-            properties: {
-              sessionID: context.openCodeSessionId,
-              info
-            }
-          })
-        }
-      }
-      this.dispatchReconciledIdleIfComplete(context, messages)
-    } catch (error) {
-      if (context.stopped) return
-      const msg = error instanceof Error ? error.message : String(error)
-      traceCommandEvent('provider.runtime', {
-        provider: 'opencode',
-        threadId: context.session.threadId,
-        method: 'opencode.reconcile',
-        runtimeType: 'reconcile.error',
-        error: msg
-      })
-    }
-  }
-
-  private dispatchReconciledIdleIfComplete(
-    context: OpenCodeSessionContext,
-    messages: unknown[]
-  ): void {
-    if (context.reconciledIdle) return
-    const latestAssistant = latestAssistantMessageInfo(messages)
-    if (!latestAssistant) return
-    const finish = readString(latestAssistant, 'finish')
-    if (!finish || finish === 'tool-calls') return
-    const time = readObject(latestAssistant, 'time')
-    if (!readPositiveNumber(time, 'completed')) return
-    context.reconciledIdle = true
-    this.dispatchOpenCodeRaw(context, {
-      type: 'session.idle',
-      properties: {
-        sessionID: context.openCodeSessionId
-      }
-    })
-  }
-
-  private dispatchOpenCodeRaw(context: OpenCodeSessionContext, event: SdkEvent): void {
-    if (context.stopped) return
-    const effects = context.fsm.dispatch(event)
-    for (const e of effects) this.emit(e)
   }
 
   private emitUnexpectedExit(context: OpenCodeSessionContext, message: string): void {
@@ -815,10 +708,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
 async function stopOpenCodeContext(context: OpenCodeSessionContext): Promise<void> {
   context.stopped = true
   context.eventsAbortController.abort()
-  if (context.reconciliationTimer) {
-    clearInterval(context.reconciliationTimer)
-    context.reconciliationTimer = null
-  }
   try {
     await context.client.session
       .abort({ sessionID: context.openCodeSessionId, directory: context.directory })
@@ -827,46 +716,6 @@ async function stopOpenCodeContext(context: OpenCodeSessionContext): Promise<voi
     // ignore
   }
   context.server.close()
-}
-
-function readObject(value: unknown, key: string): Record<string, unknown> {
-  if (!value || typeof value !== 'object') return {}
-  const child = (value as Record<string, unknown>)[key]
-  return child && typeof child === 'object' ? (child as Record<string, unknown>) : {}
-}
-
-function readArray(value: unknown, key: string): unknown[] {
-  if (!value || typeof value !== 'object') return []
-  const child = (value as Record<string, unknown>)[key]
-  return Array.isArray(child) ? child : []
-}
-
-function readString(value: unknown, key: string): string | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const child = (value as Record<string, unknown>)[key]
-  return typeof child === 'string' ? child : undefined
-}
-
-function readPositiveNumber(value: unknown, key: string): number | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const child = (value as Record<string, unknown>)[key]
-  return typeof child === 'number' && Number.isFinite(child) && child > 0 ? child : undefined
-}
-
-function latestAssistantMessageInfo(messages: unknown[]): Record<string, unknown> | undefined {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const info = readObject(messages[i], 'info')
-    if (readString(info, 'role') === 'assistant') return info
-  }
-  return undefined
-}
-
-function stableSnapshot(value: unknown): string {
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
 }
 
 function resolveBinarySafe(binaryPath: string): string | null {

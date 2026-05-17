@@ -42,7 +42,11 @@ export function shouldTraceCommandEvent(candidate: TraceCandidate): boolean {
 
   const looksLikeCommand =
     candidate.itemType === 'command_execution' ||
+    candidate.itemType === 'file_change' ||
+    candidate.itemType === 'fileChange' ||
     candidate.streamKind === 'command_output' ||
+    candidate.streamKind === 'file_change_output' ||
+    candidate.method?.includes('fileChange') === true ||
     candidate.method?.includes('commandExecution') === true
 
   if (!looksLikeCommand) return false

@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActiveTurnProjection,
   ChatAttachment,
+  CommandReceipt,
   InteractionMode,
+  OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationLatestTurn,
   OrchestrationMessage,
@@ -20,8 +22,10 @@ import type {
   ThreadShellSummary
 } from '../../../shared/agent'
 import { applyOrchestrationEvent } from '../../../shared/orchestrationReducer'
+import { mergeThreadActivity } from '../../../shared/orchestrationThreadMerge'
 import { DEFAULT_THREAD_TITLE, deriveTitleSeed } from '../../../shared/threadTitle'
 import { traceCommandEvent } from '../debug/commandEventTrace'
+import { decide } from './decider'
 import type { OrchestrationEventStore } from '../persistence/OrchestrationEventStore'
 import type { ProjectionPipeline } from '../persistence/ProjectionPipeline'
 import type { SnapshotQuery } from '../persistence/SnapshotQuery'
@@ -43,6 +47,14 @@ export class OrchestrationEngine {
   private readonly shellEmitter = new EventEmitter()
   private sequence = 0
 
+  /**
+   * Command receipts for idempotency. Provider-originated commands that carry
+   * stable `commandId` values (like `provider:<eventId>:<purpose>`) are stored
+   * here so that retried or duplicate runtime events do not produce duplicate
+   * domain effects.
+   */
+  private readonly commandReceipts = new Map<string, CommandReceipt>()
+
   private readonly eventStore?: OrchestrationEventStore
   private readonly projections?: ProjectionPipeline
   private readonly snapshots?: SnapshotQuery
@@ -51,6 +63,58 @@ export class OrchestrationEngine {
     this.eventStore = options.eventStore
     this.projections = options.projections
     this.snapshots = options.snapshots
+    this.sequence = options.eventStore?.getLatestSequence() ?? 0
+  }
+
+  /**
+   * Authoritative command dispatch path.
+   *
+   * 1. Check receipt — if this `commandId` was already processed, return without effect.
+   * 2. Call `decider` with the command + current thread read model.
+   * 3. Apply each produced event through `apply()` (projector + persist + broadcast).
+   * 4. Record the receipt so duplicate commands are silently deduplicated.
+   *
+   * Returns the list of events that were applied (empty for duplicates or
+   * no-op commands).
+   */
+  dispatch(command: OrchestrationCommand): OrchestrationEvent[] {
+    const now = command.createdAt
+    if (this.hasReceipt(command.commandId)) return []
+    this.ensureThread({ threadId: command.threadId })
+    const thread = this.getThread(command.threadId)
+    const pendingEvents = decide(command, thread)
+    const appliedEvents: OrchestrationEvent[] = []
+    for (const pending of pendingEvents) {
+      const event: OrchestrationEvent = { ...pending, sequence: this.nextSequence() } as OrchestrationEvent
+      const applied = this.apply(event)
+      appliedEvents.push(applied)
+    }
+    const acceptedSequence = appliedEvents.at(-1)?.sequence ?? this.sequence
+    this.recordReceipt(command.commandId, acceptedSequence, now)
+    return appliedEvents
+  }
+
+  /**
+   * Apply a batch of `OrchestrationCommand`s produced by the runtime compiler,
+   * in order. Each command goes through the full `dispatch` path (receipt check
+   * → decider → projector → persist → broadcast).
+   */
+  dispatchBatch(commands: OrchestrationCommand[]): OrchestrationEvent[] {
+    const allEvents: OrchestrationEvent[] = []
+    for (const command of commands) {
+      const events = this.dispatch(command)
+      allEvents.push(...events)
+    }
+    return allEvents
+  }
+
+  /**
+   * Returns true if a command with the given id has already been processed.
+   * Useful for callers that want to check before enqueuing.
+   */
+  hasReceipt(commandId: string): boolean {
+    if (this.eventStore?.getCommandReceipt(commandId)) return true
+    return this.commandReceipts.has(commandId)
   }
 
   ensureThread(input: {
@@ -71,7 +135,10 @@ export class OrchestrationEngine {
     if (this.snapshots) {
       const persisted = this.snapshots.getThreadDetail(input.threadId)
       if (persisted) {
-        this.threads.set(input.threadId, { thread: persisted, sequence: this.sequence })
+        this.threads.set(input.threadId, {
+          thread: persisted,
+          sequence: this.eventStore?.getLatestThreadSequence(input.threadId) ?? this.sequence
+        })
         return persisted
       }
     }
@@ -143,10 +210,13 @@ export class OrchestrationEngine {
     threadId: string,
     listener: (item: OrchestrationThreadStreamItem) => void
   ): () => void {
-    listener({ kind: 'snapshot', snapshot: this.getSnapshot(threadId) })
+    const snapshot = this.getSnapshot(threadId)
+    listener({ kind: 'snapshot', snapshot })
 
     const onEvent = (event: OrchestrationEvent): void => {
-      if (event.threadId === threadId) listener({ kind: 'event', event })
+      if (event.threadId === threadId && event.sequence > snapshot.snapshotSequence) {
+        listener({ kind: 'event', event })
+      }
     }
     this.emitter.on('event', onEvent)
     return () => this.emitter.off('event', onEvent)
@@ -252,7 +322,7 @@ export class OrchestrationEngine {
       ?.thread.activities.find((candidate) => candidate.id === activity.id)
     const eventSequence = this.nextSequence()
     const activitySequence = existing?.sequence ?? eventSequence
-    const nextActivity = preserveTerminalActivity(existing, activity)
+    const nextActivity = mergeThreadActivity(existing, activity)
     const merged: OrchestrationThreadActivity = {
       ...nextActivity,
       createdAt: existing?.createdAt ?? activity.createdAt,
@@ -541,34 +611,42 @@ export class OrchestrationEngine {
       streamId?: string
       payloadExtra?: Record<string, unknown>
     }
-  ): void {
+  ): OrchestrationEvent {
     const record = 'threadId' in event ? this.threads.get(event.threadId) : undefined
     logEvent('orchestration/event', event)
+    let committedEvent = record ? withMonotonicEntitySequences(record.thread, event) : event
 
-    if (record) {
-      record.thread = applyOrchestrationEvent(record.thread, event)
-      record.sequence = event.sequence
-    }
-
-    // Persist to event store + projection in a single transaction
     if (this.eventStore && this.projections) {
       const aggregateKind = storageHints?.aggregateKind ?? 'thread'
       const streamId = storageHints?.streamId ?? ('threadId' in event ? event.threadId : '')
       const streamVersion = this.eventStore.getStreamVersion(aggregateKind, streamId) + 1
       const eventId = randomUUID()
-      const payload = buildEventPayload(event, storageHints?.payloadExtra)
+      const initialPayload = buildEventPayload(committedEvent, storageHints?.payloadExtra)
 
       const storedSeq = this.eventStore.append({
         eventId,
         aggregateKind,
         streamId,
         streamVersion,
-        eventType: event.type,
-        occurredAt: event.createdAt,
-        commandId: event.commandId,
+        eventType: committedEvent.type,
+        occurredAt: committedEvent.createdAt,
+        commandId: committedEvent.commandId,
         actorKind: 'system',
-        payload
+        payload: initialPayload
       })
+
+      committedEvent = {
+        ...committedEvent,
+        sequence: storedSeq,
+        eventId,
+        streamVersion,
+        actorKind: 'system'
+      } as OrchestrationEvent
+      committedEvent = record
+        ? withMonotonicEntitySequences(record.thread, committedEvent)
+        : committedEvent
+      const payload = buildEventPayload(committedEvent, storageHints?.payloadExtra)
+      this.eventStore.updateEventPayload(storedSeq, payload)
 
       this.projections.apply({
         sequence: storedSeq,
@@ -576,20 +654,27 @@ export class OrchestrationEngine {
         aggregateKind,
         streamId,
         streamVersion,
-        eventType: event.type,
-        occurredAt: event.createdAt,
-        commandId: event.commandId,
+        eventType: committedEvent.type,
+        occurredAt: committedEvent.createdAt,
+        commandId: committedEvent.commandId,
         actorKind: 'system',
         payload
       })
     }
 
-    this.emitter.emit('event', event)
+    if (record) {
+      record.thread = applyOrchestrationEvent(record.thread, committedEvent)
+      record.sequence = committedEvent.sequence
+    }
+
+    this.sequence = Math.max(this.sequence, committedEvent.sequence)
+    this.emitter.emit('event', committedEvent)
 
     // Emit shell thread-upserted for relevant thread events
-    if ('threadId' in event) {
-      this.maybeEmitShellThreadUpserted(event)
+    if ('threadId' in committedEvent) {
+      this.maybeEmitShellThreadUpserted(committedEvent)
     }
+    return committedEvent
   }
 
   private maybeEmitShellThreadUpserted(event: OrchestrationEvent): void {
@@ -664,6 +749,39 @@ export class OrchestrationEngine {
     this.sequence += 1
     return this.sequence
   }
+
+  private recordReceipt(commandId: string, acceptedSequence: number, processedAt: string): void {
+    if (this.eventStore) {
+      this.eventStore.writeCommandReceipt(commandId, acceptedSequence)
+      return
+    }
+    this.commandReceipts.set(commandId, { commandId, processedAt })
+  }
+}
+
+function withMonotonicEntitySequences(
+  thread: OrchestrationThread,
+  event: OrchestrationEvent
+): OrchestrationEvent {
+  if (event.type === 'thread.message-upserted') {
+    const existing = thread.messages.find((m) => m.id === event.message.id)
+    const sequence = existing?.sequence ?? event.sequence
+    return { ...event, message: { ...event.message, sequence } }
+  }
+  if (event.type === 'thread.activity-upserted') {
+    const existing = thread.activities.find((a) => a.id === event.activity.id)
+    const merged = mergeThreadActivity(existing, event.activity)
+    const sequence = existing?.sequence ?? event.sequence
+    return {
+      ...event,
+      activity: {
+        ...merged,
+        createdAt: existing?.createdAt ?? event.activity.createdAt,
+        sequence
+      }
+    }
+  }
+  return event
 }
 
 function buildEventPayload(
@@ -706,36 +824,6 @@ function readPayloadString(payload: unknown, key: string): string | null {
   if (!payload || typeof payload !== 'object') return null
   const value = (payload as Record<string, unknown>)[key]
   return typeof value === 'string' ? value : null
-}
-
-function preserveTerminalActivity(
-  existing: OrchestrationThreadActivity | undefined,
-  incoming: OrchestrationThreadActivity
-): OrchestrationThreadActivity {
-  if (!existing) return incoming
-  if (!activityIsTerminal(existing) || activityIsTerminal(incoming)) return incoming
-  if (!activityIsNonTerminal(incoming)) return incoming
-  return {
-    ...existing,
-    payload: {
-      ...incoming.payload,
-      ...existing.payload,
-      status: readPayloadString(existing.payload, 'status') ?? 'completed'
-    }
-  }
-}
-
-function activityIsTerminal(activity: OrchestrationThreadActivity): boolean {
-  if (activity.kind === 'tool.completed' || activity.kind === 'task.completed') return true
-  const status = readPayloadString(activity.payload, 'status')
-  return status === 'completed' || status === 'success' || status === 'failed' || status === 'declined'
-}
-
-function activityIsNonTerminal(activity: OrchestrationThreadActivity): boolean {
-  if (activity.kind === 'tool.started' || activity.kind === 'tool.updated') return true
-  if (activity.kind === 'task.started' || activity.kind === 'task.progress') return true
-  const status = readPayloadString(activity.payload, 'status')
-  return status === 'inProgress' || status === 'running'
 }
 
 const COBEL_DEBUG_EVENTS_ENABLED = /^(1|true|yes|on)$/i.test(
